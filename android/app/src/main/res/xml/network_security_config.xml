@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 仅放行本地回环明文：just_audio 设置自定义请求头时会经 127.0.0.1 本地代理转发音频流。
+     外部域名仍强制 HTTPS，不降低整体安全水位。 -->
+<network-security-config>
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">127.0.0.1</domain>
+        <domain includeSubdomains="false">localhost</domain>
+    </domain-config>
+</network-security-config>

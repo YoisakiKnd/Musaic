@@ -98,7 +98,7 @@ class _LyricsViewState extends ConsumerState<LyricsView> {
 
     return ListView.builder(
       controller: _scrollController,
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 120),
+      padding: const EdgeInsets.fromLTRB(8, 120, 8, 300),
       itemCount: bundle.lines.length,
       itemBuilder: (context, index) {
         final line = bundle.lines[index];

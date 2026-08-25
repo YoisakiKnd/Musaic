@@ -1,4 +1,7 @@
+import 'dart:convert';
+
 import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart';
 
 import '../../core/error/source_exception.dart';
 import '../../core/model/track.dart';
@@ -106,14 +109,18 @@ class NeteaseSource extends MusicSource {
           'limit': limit,
         },
       );
-      final result = _asMap(response.data['result']);
+      final result = _asMap(_decoded(response)['result']);
       final songs = result?['songs'] as List<dynamic>?;
       if (songs == null) return const <Track>[];
       return songs
           .map(_trackFromSearchSong)
           .whereType<Track>()
           .toList(growable: false);
-    } on DioException {
+    } on DioException catch (e) {
+      debugPrint(
+        'MusaicNetease search 失败: type=${e.type} '
+        'status=${e.response?.statusCode} msg=${e.message}',
+      );
       throw NetworkSourceException('搜索失败：网络异常', sourceId: sourceId);
     }
   }
@@ -127,7 +134,7 @@ class NeteaseSource extends MusicSource {
         '/api/song/detail',
         queryParameters: <String, dynamic>{'ids': '[$songId]'},
       );
-      final songs = response.data?['songs'] as List<dynamic>?;
+      final songs = _decoded(response)?['songs'] as List<dynamic>?;
       if (songs == null || songs.isEmpty) return track;
       final detail = _asMap(songs.first);
       if (detail == null) return track;
@@ -159,7 +166,7 @@ class NeteaseSource extends MusicSource {
           'csrf_token': '',
         },
       );
-      final data = _asMap(response.data)?['data'] as List<dynamic>?;
+      final data = _asMap(_decoded(response))?['data'] as List<dynamic>?;
       if (data == null || data.isEmpty) {
         throw UnavailableStreamException('该曲目暂不可播放', sourceId: sourceId);
       }
@@ -204,7 +211,7 @@ class NeteaseSource extends MusicSource {
           'rv': -1,
         },
       );
-      final data = _asMap(response.data);
+      final data = _asMap(_decoded(response));
       if (data == null) return null;
 
       final yrcText = _lyricText(data, 'yrc');
@@ -291,6 +298,24 @@ class NeteaseSource extends MusicSource {
 
   // ---------- 工具 ----------
 
+  /// 统一解码响应体：老接口返回的 Content-Type 常不是 application/json，
+  /// Dio 会把 JSON 正文留成 String，这里手动解码兜底。
+  dynamic _decoded(Response<dynamic> response) {
+    final data = response.data;
+    if (data is String) {
+      final trimmed = data.trim();
+      if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+        try {
+          return jsonDecode(trimmed);
+        } catch (_) {
+          return null;
+        }
+      }
+      return null;
+    }
+    return data;
+  }
+
   String? _lyricText(Map<String, dynamic> data, String key) {
     final value = _asMap(data[key])?['lyric'] as String?;
     if (value == null || value.trim().isEmpty) return null;
@@ -304,7 +329,7 @@ class NeteaseSource extends MusicSource {
       '/api/nuser/account/get',
       options: Options(headers: <String, String>{'Cookie': cookie}),
     );
-    final data = _asMap(response.data);
+    final data = _asMap(_decoded(response));
     if (data == null || (data['code'] as int? ?? -1) != 200) return null;
     return _asMap(data['profile']);
   }

@@ -48,16 +48,21 @@ class _Bootstrap {
     });
   }
 
-  static Future<MusaicAudioHandler> _initAudioHandler() {
-    return AudioService.init(
-      builder: () => MusaicAudioHandler(player: AudioPlayer()),
-      config: const AudioServiceConfig(
-        androidNotificationChannelId: 'dev.musaic.audio.playback',
-        androidNotificationChannelName: 'Musaic 播放',
-        androidNotificationOngoing: true,
-        androidStopForegroundOnPause: true,
-      ),
-    );
+  static Future<MusaicAudioHandler> _initAudioHandler() async {
+    try {
+      return await AudioService.init(
+        builder: () => MusaicAudioHandler(player: AudioPlayer()),
+        config: const AudioServiceConfig(
+          androidNotificationChannelId: 'dev.musaic.audio.playback',
+          androidNotificationChannelName: 'Musaic 播放',
+          androidNotificationOngoing: true,
+          androidStopForegroundOnPause: true,
+        ),
+      );
+    } catch (_) {
+      // 兜底：系统媒体集成不可用时仍可正常播放（仅缺少通知栏/锁屏控制）
+      return MusaicAudioHandler(player: AudioPlayer());
+    }
   }
 }
 

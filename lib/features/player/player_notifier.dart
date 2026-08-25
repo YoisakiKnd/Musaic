@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:math';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:just_audio/just_audio.dart' as ja;
 
@@ -296,6 +297,10 @@ class PlayerNotifier extends Notifier<PlayerState> {
         );
       }
       final resolved = await source.resolveStream(track);
+      debugPrint(
+        'MusaicPlayer stream: ${resolved.url} '
+        '(local=${resolved.isLocalFile})',
+      );
 
       final player = _handler.player;
       if (resolved.isLocalFile) {
@@ -322,8 +327,11 @@ class PlayerNotifier extends Notifier<PlayerState> {
       // 记录最近播放（本地优先存储，失败静默）
       unawaited(_recordHistory(track));
     } on SourceException catch (e) {
+      debugPrint('MusaicPlayer SourceException: ${e.message}');
       state = state.copyWith(loading: false, playing: false, error: e.message);
-    } catch (_) {
+    } catch (e, st) {
+      debugPrint('MusaicPlayer 播放异常: $e');
+      debugPrint('MusaicPlayer 堆栈首行: ${st.toString().split('\n').take(4).join(' | ')}');
       state = state.copyWith(
         loading: false,
         playing: false,

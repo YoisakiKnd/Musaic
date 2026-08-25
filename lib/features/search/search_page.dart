@@ -54,7 +54,8 @@ class _SearchPageState extends ConsumerState<SearchPage> {
           setState(
             () => _results[source.sourceId]!.errorMessage = e.message,
           );
-        } catch (_) {
+        } catch (e) {
+          debugPrint('MusaicSearch[${source.sourceId}] 异常: $e');
           if (!mounted) return;
           setState(() => _results[source.sourceId]!.errorMessage = '搜索失败');
         }
