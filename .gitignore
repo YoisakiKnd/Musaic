@@ -1,0 +1,63 @@
+# Misc
+*.iml
+.idea/
+*.swp
+*.swo
+*.log
+
+# Flutter
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+.pub-cache/
+.pub/
+build/
+flutter_*.png
+google-services.json
+GoogleService-Info.plist
+keep.xml
+
+# Android
+android/.gradle/
+android/local.properties
+android/captures/
+android/app/release/
+android/app/debug/
+android/key.properties
+
+# iOS
+ios/.symlinks/
+ios/Flutter/.last_build_id
+ios/Flutter/flutter_export_environment.sh
+ios/Runner/GeneratedPluginRegistrant.*
+
+# macOS
+macos/Flutter/ephemeral/
+macos/Flutter/GeneratedPluginRegistrant.*
+
+# Windows
+windows/flutter/ephemeral/
+windows/CMakeSettings.json
+
+# Web (not a target but generated files can be ignored)
+web/_framework/
+web/assets/
+
+# Hive generated files
+lib/**/hive_registrant.dart
+lib/**/*.g.dart
+lib/**/*.freezed.dart
+
+# Secure storage / keys
+*.jks
+*.keystore
+key.properties
+
+# Test
+coverage/
+test_coverage.dart
+
+# OS
+.DS_Store
+Thumbs.db
