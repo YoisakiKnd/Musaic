@@ -1,10 +1,18 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 
-class LibraryPage extends StatelessWidget {
+import '../../core/di/app_providers.dart' show libraryRepositoryProvider;
+import '../../core/theme/app_tokens.dart';
+import '../shared/widgets/track_tile.dart';
+import 'data/library_providers.dart';
+
+/// 资料库：喜欢 / 最近播放 / 自建歌单（Master Plan P6）。
+class LibraryPage extends ConsumerWidget {
   const LibraryPage({super.key});
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     return DefaultTabController(
       length: 3,
       child: Scaffold(
@@ -12,17 +20,17 @@ class LibraryPage extends StatelessWidget {
           title: const Text('资料库'),
           bottom: const TabBar(
             tabs: [
-              Tab(text: '我喜欢'),
+              Tab(text: '喜欢'),
+              Tab(text: '最近播放'),
               Tab(text: '歌单'),
-              Tab(text: '历史'),
             ],
           ),
         ),
         body: const TabBarView(
           children: [
-            LikedSongsPage(),
-            PlaylistsPage(),
-            HistoryPage(),
+            _FavoritesTab(),
+            _HistoryTab(),
+            _PlaylistsTab(),
           ],
         ),
       ),
@@ -30,29 +38,191 @@ class LibraryPage extends StatelessWidget {
   }
 }
 
-class LikedSongsPage extends StatelessWidget {
-  const LikedSongsPage({super.key});
+class _FavoritesTab extends ConsumerWidget {
+  const _FavoritesTab();
 
   @override
-  Widget build(BuildContext context) {
-    return const Center(child: Text('我喜欢的音乐（P6 实现）'));
+  Widget build(BuildContext context, WidgetRef ref) {
+    final favoritesAsync = ref.watch(favoritesProvider);
+    return favoritesAsync.when(
+      loading: () => const Center(child: CircularProgressIndicator()),
+      error: (e, _) => Center(child: Text('加载失败：$e')),
+      data: (favorites) => favorites.isEmpty
+          ? const _EmptyHint(icon: Icons.favorite_border_rounded, text: '喜欢的歌曲会出现在这里')
+          : ListView.builder(
+              padding: AppTokens.pagePadding,
+              itemCount: favorites.length,
+              itemBuilder: (context, index) => TrackTile(
+                track: favorites[index],
+                queue: favorites,
+                dense: true,
+              ),
+            ),
+    );
   }
 }
 
-class PlaylistsPage extends StatelessWidget {
-  const PlaylistsPage({super.key});
+class _HistoryTab extends ConsumerWidget {
+  const _HistoryTab();
 
   @override
-  Widget build(BuildContext context) {
-    return const Center(child: Text('歌单列表（P6 实现）'));
+  Widget build(BuildContext context, WidgetRef ref) {
+    final historyAsync = ref.watch(recentHistoryProvider);
+    return historyAsync.when(
+      loading: () => const Center(child: CircularProgressIndicator()),
+      error: (e, _) => Center(child: Text('加载失败：$e')),
+      data: (history) {
+        if (history.isEmpty) {
+          return const _EmptyHint(
+              icon: Icons.history_rounded, text: '播放过的歌曲会出现在这里');
+        }
+        return ListView.builder(
+          padding: AppTokens.pagePadding,
+          itemCount: history.length,
+          itemBuilder: (context, index) => TrackTile(
+            track: history[index],
+            queue: history,
+            dense: true,
+          ),
+        );
+      },
+    );
   }
 }
 
-class HistoryPage extends StatelessWidget {
-  const HistoryPage({super.key});
+class _PlaylistsTab extends ConsumerWidget {
+  const _PlaylistsTab();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final playlistsAsync = ref.watch(playlistsProvider);
+    final repository = ref.watch(libraryRepositoryProvider);
+
+    return Stack(
+      children: [
+        playlistsAsync.when(
+          loading: () => const Center(child: CircularProgressIndicator()),
+          error: (e, _) => Center(child: Text('加载失败：$e')),
+          data: (names) => names.isEmpty
+              ? const _EmptyHint(icon: Icons.queue_music_rounded, text: '创建你的第一个歌单')
+              : ListView.builder(
+                  padding: AppTokens.pagePadding,
+                  itemCount: names.length,
+                  itemBuilder: (context, index) {
+                    final name = names[index];
+                    final count = repository.playlistTracks(name).length;
+                    return Card(
+                      margin: const EdgeInsets.only(bottom: 10),
+                      child: ListTile(
+                        shape: RoundedRectangleBorder(
+                          borderRadius:
+                              BorderRadius.circular(AppTokens.radiusCard - 4),
+                        ),
+                        leading: Container(
+                          width: 44,
+                          height: 44,
+                          decoration: BoxDecoration(
+                            gradient: LinearGradient(
+                              colors: [
+                                AppTokens.accentDeep.withValues(alpha: 0.3),
+                                AppTokens.accent.withValues(alpha: 0.3),
+                              ],
+                            ),
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: const Icon(Icons.queue_music_rounded,
+                              color: Colors.white70),
+                        ),
+                        title: Text(name),
+                        subtitle: Text('$count 首',
+                            style: const TextStyle(fontSize: 12)),
+                        trailing: IconButton(
+                          icon: Icon(Icons.delete_outline_rounded,
+                              size: 20,
+                              color: Theme.of(context)
+                                  .colorScheme
+                                  .onSurface
+                                  .withValues(alpha: 0.5)),
+                          onPressed: () =>
+                              repository.deletePlaylist(name),
+                        ),
+                        onTap: () => context.push('/playlist/$name'),
+                      ),
+                    );
+                  },
+                ),
+        ),
+        Positioned(
+          right: 24,
+          bottom: 24,
+          child: FloatingActionButton.extended(
+            backgroundColor: AppTokens.accent,
+            foregroundColor: Colors.white,
+            onPressed: () async {
+              final controller = TextEditingController();
+              final name = await showDialog<String>(
+                context: context,
+                builder: (dialogContext) => AlertDialog(
+                  title: const Text('新建歌单'),
+                  content: TextField(
+                    controller: controller,
+                    autofocus: true,
+                    decoration:
+                        const InputDecoration(hintText: '歌单名称'),
+                  ),
+                  actions: [
+                    TextButton(
+                      onPressed: () =>
+                          Navigator.of(dialogContext).pop(),
+                      child: const Text('取消'),
+                    ),
+                    FilledButton(
+                      style: FilledButton.styleFrom(
+                          backgroundColor: AppTokens.accent),
+                      onPressed: () => Navigator.of(dialogContext)
+                          .pop(controller.text.trim()),
+                      child: const Text('创建'),
+                    ),
+                  ],
+                ),
+              );
+              controller.dispose();
+              if (name != null && name.isNotEmpty) {
+                await repository.createPlaylist(name);
+              }
+            },
+            icon: const Icon(Icons.add_rounded),
+            label: const Text('新建歌单'),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _EmptyHint extends StatelessWidget {
+  const _EmptyHint({required this.icon, required this.text});
+
+  final IconData icon;
+  final String text;
 
   @override
   Widget build(BuildContext context) {
-    return const Center(child: Text('最近播放（P6 实现）'));
+    return Center(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(icon, size: 56, color: AppTokens.accent.withValues(alpha: 0.45)),
+          const SizedBox(height: 12),
+          Text(text,
+              style: TextStyle(
+                color: Theme.of(context)
+                    .colorScheme
+                    .onSurface
+                    .withValues(alpha: 0.55),
+              )),
+        ],
+      ),
+    );
   }
 }

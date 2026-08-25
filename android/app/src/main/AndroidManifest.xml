@@ -1,4 +1,11 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+        <!-- 播放与渠道网络访问 -->
+    <uses-permission android:name="android.permission.INTERNET"/>
+    <!-- audio_service 前台媒体通知 -->
+    <uses-permission android:name="android.permission.WAKE_LOCK"/>
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK"/>
+
     <application
         android:label="musaic"
         android:name="${applicationName}"

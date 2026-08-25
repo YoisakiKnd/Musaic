@@ -3,12 +3,11 @@ name: CI
 on:
   push:
     branches: [main]
+    tags: ['v*']
   pull_request:
-    branches: [main]
 
 jobs:
-  analyze:
-    name: Analyze
+  analyze-test:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -17,20 +16,11 @@ jobs:
           channel: stable
       - run: flutter pub get
       - run: flutter analyze
-
-  test:
-    name: Test
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: subosito/flutter-action@v2
-        with:
-          channel: stable
-      - run: flutter pub get
       - run: flutter test
 
   build-android:
-    name: Build Android (debug)
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: analyze-test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -38,21 +28,15 @@ jobs:
         with:
           channel: stable
       - run: flutter pub get
-      - run: flutter build apk --debug
-
-  build-macos:
-    name: Build macOS (debug)
-    runs-on: macos-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: subosito/flutter-action@v2
+      - run: flutter build apk --release
+      - uses: actions/upload-artifact@v4
         with:
-          channel: stable
-      - run: flutter pub get
-      - run: flutter build macos --debug
+          name: musaic-android-apk
+          path: build/app/outputs/flutter-apk/app-release.apk
 
   build-windows:
-    name: Build Windows (debug)
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: analyze-test
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -60,4 +44,24 @@ jobs:
         with:
           channel: stable
       - run: flutter pub get
-      - run: flutter build windows --debug
+      - run: flutter build windows --release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: musaic-windows-zip
+          path: build/windows/x64/runner/Release/
+
+  build-macos:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: analyze-test
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+      - run: flutter pub get
+      - run: flutter build macos --release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: musaic-macos-app
+          path: build/macos/Build/Products/Release/*.app

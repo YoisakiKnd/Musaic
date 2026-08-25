@@ -1,33 +1,93 @@
-import 'package:go_router/go_router.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 
-import 'package:musaic/features/home/home_page.dart';
-import 'package:musaic/features/search/search_page.dart';
-import 'package:musaic/features/library/library_page.dart';
-import 'package:musaic/features/library/playlist_detail_page.dart';
-import 'package:musaic/features/auth/account_page.dart';
-import 'package:musaic/app/app_shell.dart';
+import '../core/theme/app_tokens.dart';
+import '../features/auth/presentation/account_center.dart';
+import '../features/home/home_page.dart';
+import '../features/library/library_page.dart';
+import '../features/library/playlist_detail_page.dart';
+import '../features/player/player_page.dart';
+import '../features/search/search_page.dart';
+import 'app_shell.dart';
 
-final goRouterProvider = Provider<GoRouter>((ref) {
+final GlobalKey<NavigatorState> rootNavigatorKey =
+    GlobalKey<NavigatorState>(debugLabel: 'root');
+
+/// 路由表：四 Tab StatefulShell + 全屏播放器 + 歌单详情。
+final routerProvider = Provider<GoRouter>((ref) {
   return GoRouter(
-    initialLocation: '/',
-    debugLogDiagnostics: true,
+    navigatorKey: rootNavigatorKey,
+    initialLocation: '/home',
     routes: [
-      ShellRoute(
-        builder: (context, state, child) => AppShell(child: child),
-        routes: [
-          GoRoute(path: '/', builder: (context, state) => const HomePage()),
-          GoRoute(path: '/search', builder: (context, state) => const SearchPage()),
-          GoRoute(path: '/library', builder: (context, state) => const LibraryPage()),
-          GoRoute(
-            path: '/playlist/:playlistId',
-            builder: (context, state) {
-              final playlistId = state.pathParameters['playlistId']!;
-              return PlaylistDetailPage(playlistId: playlistId);
-            },
+      StatefulShellRoute.indexedStack(
+        builder: (context, state, navigationShell) =>
+            AppShell(navigationShell: navigationShell),
+        branches: [
+          StatefulShellBranch(
+            routes: [
+              GoRoute(
+                path: '/home',
+                builder: (_, _) => const HomePage(),
+              ),
+            ],
           ),
-          GoRoute(path: '/account', builder: (context, state) => const AccountPage()),
+          StatefulShellBranch(
+            routes: [
+              GoRoute(
+                path: '/search',
+                builder: (_, _) => const SearchPage(),
+              ),
+            ],
+          ),
+          StatefulShellBranch(
+            routes: [
+              GoRoute(
+                path: '/library',
+                builder: (_, _) => const LibraryPage(),
+              ),
+              GoRoute(
+                path: '/playlist/:name',
+                builder: (context, state) => PlaylistDetailPage(
+                  name: Uri.decodeComponent(
+                    state.pathParameters['name'] ?? '',
+                  ),
+                ),
+              ),
+            ],
+          ),
+          StatefulShellBranch(
+            routes: [
+              GoRoute(
+                path: '/account',
+                builder: (_, _) => const AccountCenterPage(),
+              ),
+            ],
+          ),
         ],
+      ),
+      GoRoute(
+        path: '/player',
+        parentNavigatorKey: rootNavigatorKey,
+        pageBuilder: (context, state) => CustomTransitionPage<void>(
+          key: state.pageKey,
+          child: const PlayerPage(),
+          transitionDuration: AppTokens.durationSlow,
+          reverseTransitionDuration: AppTokens.durationNormal,
+          transitionsBuilder: (context, animation, _, child) {
+            final curved = CurvedAnimation(
+              parent: animation,
+              curve: AppTokens.curveEmphasized,
+            );
+            return SlideTransition(
+              position: Tween<Offset>(
+                begin: const Offset(0, 0.06),
+                end: Offset.zero,
+              ).animate(curved),
+              child: FadeTransition(opacity: curved, child: child),
+            );
+          },
+        ),
       ),
     ],
   );

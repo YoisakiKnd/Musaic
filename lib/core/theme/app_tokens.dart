@@ -1,182 +1,168 @@
 import 'package:flutter/material.dart';
 
-/// Musaic 设计令牌（Design Tokens）
+/// Musaic 设计令牌（Master Plan §8）。
 ///
-/// 深色优先，Apple Music 风格。
-class AppTokens {
-  AppTokens._();
+/// Apple Music 红渐变、24/28 圆角、受控模糊、动效曲线；深色优先。
+/// 所有 UI 组件只允许引用此处令牌，禁止散落魔法数。
+abstract final class AppTokens {
+  // ---------- 品牌色 ----------
+  /// 主品牌色（Apple Music 红）。
+  static const Color accent = Color(0xFFFA2E4E);
 
-  // ── 品牌色 ──────────────────────────────────────────────
-  static const Color brandRed = Color(0xFFFA2D48);
-  static const Color brandPink = Color(0xFFFB266B);
-  static const Color brandOrange = Color(0xFFFF6B35);
+  /// 品牌渐变的深端。
+  static const Color accentDeep = Color(0xFFD61F3F);
 
-  static const LinearGradient brandGradient = LinearGradient(
-    colors: [brandRed, brandPink, brandOrange],
-    stops: [0.0, 0.5, 1.0],
+  /// 品牌渐变。
+  static const Gradient brandGradient = LinearGradient(
     begin: Alignment.topLeft,
     end: Alignment.bottomRight,
+    colors: [accentDeep, accent],
   );
 
-  static const LinearGradient brandGradientVertical = LinearGradient(
-    colors: [brandRed, brandPink],
-    stops: [0.0, 1.0],
-    begin: Alignment.topCenter,
-    end: Alignment.bottomCenter,
+  // ---------- 中性色（深色优先） ----------
+  static const Color darkBackground = Color(0xFF0E0E11);
+  static const Color darkSurface = Color(0xFF17171C);
+  static const Color darkSurfaceHigh = Color(0xFF20202A);
+  static const Color darkOutline = Color(0xFF2C2C36);
+  static const Color darkTextPrimary = Color(0xFFF2F2F7);
+  static const Color darkTextSecondary = Color(0xFFA0A0AC);
+
+  static const Color lightBackground = Color(0xFFF6F6F9);
+  static const Color lightSurface = Color(0xFFFFFFFF);
+  static const Color lightSurfaceHigh = Color(0xFFEFEFF4);
+  static const Color lightOutline = Color(0xFFDCDCE4);
+  static const Color lightTextPrimary = Color(0xFF1B1B1F);
+  static const Color lightTextSecondary = Color(0xFF66666F);
+
+  // ---------- 几何 ----------
+  static const double radiusCard = 24;
+  static const double radiusSheet = 28;
+  static const double radiusChip = 12;
+
+  /// 自适应骨架断点：< 840 使用底部导航，>= 840 使用 NavigationRail。
+  static const double compactBreakpoint = 840;
+
+  static const EdgeInsets pagePadding = EdgeInsets.symmetric(
+    horizontal: 20,
+    vertical: 12,
   );
 
-  // ── 背景 / 表面 ─────────────────────────────────────────
-  static const Color surfaceBase = Color(0xFF0A0A0F);
-  static const Color surface = Color(0xFF14141F);
-  static const Color surfaceSecondary = Color(0xFF1E1E2E);
-  static const Color surfaceTertiary = Color(0xFF2A2A3C);
-
-  // ── 文本 ─────────────────────────────────────────────────
-  static const Color textPrimary = Color(0xFFFFFFFF);
-  static const Color textSecondary = Color(0xFFB8B8C8);
-  static const Color textTertiary = Color(0xFF6E6E7E);
-
-  // ── 功能色 ──────────────────────────────────────────────
-  static const Color success = Color(0xFF34C759);
-  static const Color warning = Color(0xFFFF9500);
-  static const Color error = Color(0xFFFF3B30);
-
-  // ── 圆角 ────────────────────────────────────────────────
-  static const double radiusLarge = 24.0;
-  static const double radiusXLarge = 28.0;
-  static const double radiusMedium = 16.0;
-  static const double radiusSmall = 12.0;
-
-  static BorderRadius get borderRadiusLarge => BorderRadius.circular(radiusLarge);
-  static BorderRadius get borderRadiusXLarge => BorderRadius.circular(radiusXLarge);
-  static BorderRadius get borderRadiusMedium => BorderRadius.circular(radiusMedium);
-  static BorderRadius get borderRadiusSmall => BorderRadius.circular(radiusSmall);
-
-  // ── 模糊 ────────────────────────────────────────────────
-  static const double blurSigmaLight = 12.0;
-  static const double blurSigmaHeavy = 24.0;
-
-  // ── 动效 ────────────────────────────────────────────────
-  static const Duration durationFast = Duration(milliseconds: 200);
-  static const Duration durationNormal = Duration(milliseconds: 350);
+  // ---------- 动效 ----------
+  static const Duration durationFast = Duration(milliseconds: 150);
+  static const Duration durationNormal = Duration(milliseconds: 250);
   static const Duration durationSlow = Duration(milliseconds: 450);
-  static const Duration durationSlower = Duration(milliseconds: 600);
 
-  static const Curve curveEmphasized = Curves.easeInOutCubicEmphasized;
-  static const Curve curveDecelerate = Curves.easeOutCubic;
-  static const Curve curveAccelerate = Curves.easeInCubic;
+  static const Curve curveEmphasized = Curves.easeOutCubic;
 
-  // ── 阴影 / 玻璃 ────────────────────────────────────────
-  static List<BoxShadow> get glassShadow => const [
-    BoxShadow(
-      color: Color(0x1A000000),
-      blurRadius: 24,
-      offset: Offset(0, 8),
-    ),
-  ];
+  // ---------- 性能预算（Master Plan §10.2） ----------
+  /// 进度条刷新节流周期。
+  static const Duration positionThrottle = Duration(milliseconds: 100);
 
-  static Color glassColor({double alpha = 0.72}) =>
-      Color.alphaBlend(textPrimary.withValues(alpha: 0.08), surface).withValues(alpha: alpha);
+  /// 每屏最多一个实时模糊区；其余场景使用静态模糊图。
+  static const bool enableLiveBlurByDefault = true;
 
-  // ── 尺寸 ────────────────────────────────────────────────
-  static const double miniPlayerHeight = 64.0;
-  static const double bottomNavHeight = 80.0;
-  static const double railWidth = 72.0;
-  static const double maxContentWidth = 840.0;
+  // ---------- 主题 ----------
+  static ThemeData get darkTheme => _buildTheme(Brightness.dark);
 
-  // ── 主题数据 ────────────────────────────────────────────
-  static ThemeData get darkTheme {
-    final base = ThemeData.dark(useMaterial3: true);
-    final defaultScheme = base.colorScheme;
-    final colorScheme = defaultScheme.copyWith(
-      primary: brandRed,
-      onPrimary: Colors.white,
-      secondary: brandPink,
-      tertiary: brandOrange,
-      surface: surface,
-      error: error,
+  static ThemeData get lightTheme => _buildTheme(Brightness.light);
+
+  static ThemeData _buildTheme(Brightness brightness) {
+    final isDark = brightness == Brightness.dark;
+    final scheme = ColorScheme.fromSeed(
+      seedColor: accent,
+      brightness: brightness,
+      primary: accent,
+      secondary: accent,
+      surface: isDark ? darkSurface : lightSurface,
+      onSurface: isDark ? darkTextPrimary : lightTextPrimary,
+      surfaceContainerHighest: isDark ? darkSurfaceHigh : lightSurfaceHigh,
+      outlineVariant: isDark ? darkOutline : lightOutline,
     );
+    final textSecondary = isDark ? darkTextSecondary : lightTextSecondary;
 
-    return base.copyWith(
-      colorScheme: colorScheme,
-      scaffoldBackgroundColor: surfaceBase,
-      appBarTheme: base.appBarTheme.copyWith(
-        backgroundColor: surface,
-        elevation: 0,
+    return ThemeData(
+      useMaterial3: true,
+      colorScheme: scheme,
+      scaffoldBackgroundColor:
+          isDark ? darkBackground : lightBackground,
+      splashFactory: InkRipple.splashFactory,
+      appBarTheme: AppBarTheme(
+        backgroundColor: Colors.transparent,
+        scrolledUnderElevation: 0,
         centerTitle: false,
-        titleTextStyle: base.textTheme.titleLarge?.copyWith(
-          color: textPrimary,
+        foregroundColor: scheme.onSurface,
+        titleTextStyle: TextStyle(
+          fontSize: 22,
           fontWeight: FontWeight.w700,
+          color: scheme.onSurface,
         ),
       ),
-      cardTheme: base.cardTheme.copyWith(
-        color: surfaceSecondary,
+      cardTheme: CardThemeData(
+        color: scheme.surface,
         elevation: 0,
         shape: RoundedRectangleBorder(
-          borderRadius: borderRadiusMedium,
+          borderRadius: BorderRadius.circular(radiusCard),
+          side: BorderSide(color: scheme.outlineVariant.withValues(alpha: 0.6)),
+        ),
+        clipBehavior: Clip.antiAlias,
+      ),
+      navigationBarTheme: NavigationBarThemeData(
+        height: 68,
+        backgroundColor:
+            (isDark ? darkBackground : lightBackground).withValues(alpha: 0.92),
+        indicatorColor: accent.withValues(alpha: 0.16),
+        iconTheme: WidgetStateProperty.resolveWith(
+          (states) => IconThemeData(
+            color: states.contains(WidgetState.selected)
+                ? accent
+                : textSecondary,
+          ),
+        ),
+        labelTextStyle: WidgetStateProperty.resolveWith(
+          (states) => TextStyle(
+            fontSize: 11,
+            fontWeight: states.contains(WidgetState.selected)
+                ? FontWeight.w600
+                : FontWeight.w400,
+            color: states.contains(WidgetState.selected)
+                ? accent
+                : textSecondary,
+          ),
         ),
       ),
-      dividerTheme: base.dividerTheme.copyWith(
-        color: surfaceTertiary,
-        thickness: 0.5,
-        space: 1,
-      ),
-      textTheme: base.textTheme.copyWith(
-        displayLarge: const TextStyle(color: textPrimary),
-        displayMedium: const TextStyle(color: textPrimary),
-        displaySmall: const TextStyle(color: textPrimary),
-        headlineLarge: const TextStyle(color: textPrimary),
-        headlineMedium: const TextStyle(color: textPrimary),
-        headlineSmall: const TextStyle(color: textPrimary),
-        titleLarge: const TextStyle(color: textPrimary),
-        titleMedium: const TextStyle(color: textPrimary),
-        titleSmall: const TextStyle(color: textPrimary),
-        bodyLarge: const TextStyle(color: textPrimary),
-        bodyMedium: const TextStyle(color: textSecondary),
-        bodySmall: const TextStyle(color: textTertiary),
-        labelLarge: const TextStyle(color: textPrimary),
-        labelMedium: const TextStyle(color: textSecondary),
-        labelSmall: const TextStyle(color: textTertiary),
-      ),
-      iconTheme: base.iconTheme.copyWith(color: textSecondary),
-    );
-  }
-
-  static ThemeData get lightTheme {
-    final base = ThemeData.light(useMaterial3: true);
-    final colorScheme = base.colorScheme.copyWith(
-      primary: brandRed,
-      onPrimary: Colors.white,
-      secondary: brandPink,
-      tertiary: brandOrange,
-      surface: const Color(0xFFF2F2F7),
-      onSurface: const Color(0xFF1C1C1E),
-      error: error,
-    );
-
-    return base.copyWith(
-      colorScheme: colorScheme,
-      scaffoldBackgroundColor: const Color(0xFFFFFFFF),
-      appBarTheme: base.appBarTheme.copyWith(
-        backgroundColor: const Color(0xFFF2F2F7),
-        elevation: 0,
-        centerTitle: false,
-        titleTextStyle: base.textTheme.titleLarge?.copyWith(
-          color: const Color(0xFF1C1C1E),
-          fontWeight: FontWeight.w700,
+      navigationRailTheme: NavigationRailThemeData(
+        backgroundColor:
+            (isDark ? darkBackground : lightBackground).withValues(alpha: 0.92),
+        indicatorColor: accent.withValues(alpha: 0.16),
+        selectedIconTheme: const IconThemeData(color: accent),
+        selectedLabelTextStyle: const TextStyle(
+          fontSize: 12,
+          fontWeight: FontWeight.w600,
+          color: accent,
         ),
+        unselectedIconTheme: IconThemeData(color: textSecondary),
+        unselectedLabelTextStyle: TextStyle(fontSize: 12, color: textSecondary),
       ),
-      cardTheme: base.cardTheme.copyWith(
-        color: const Color(0xFFF9F9FC),
-        elevation: 0,
+      sliderTheme: SliderThemeData(
+        activeTrackColor: accent,
+        inactiveTrackColor: scheme.outlineVariant.withValues(alpha: 0.5),
+        thumbColor: scheme.onSurface,
+        overlayColor: accent.withValues(alpha: 0.12),
+        trackHeight: 3,
+      ),
+      snackBarTheme: SnackBarThemeData(
+        behavior: SnackBarBehavior.floating,
+        backgroundColor: isDark ? darkSurfaceHigh : darkTextPrimary,
+        contentTextStyle: TextStyle(
+          color: isDark ? darkTextPrimary : darkBackground,
+        ),
         shape: RoundedRectangleBorder(
-          borderRadius: borderRadiusMedium,
+          borderRadius: BorderRadius.circular(radiusChip),
         ),
       ),
-      dividerTheme: base.dividerTheme.copyWith(
-        color: surfaceTertiary,
+      dividerTheme: DividerThemeData(
+        color: scheme.outlineVariant.withValues(alpha: 0.5),
         thickness: 0.5,
-        space: 1,
       ),
     );
   }

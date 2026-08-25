@@ -1,122 +1,169 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import 'package:musaic/features/auth/domain/source_account.dart';
-import 'package:musaic/features/auth/application/account_notifier.dart';
-import 'package:musaic/core/source/source_registry.dart';
-import 'package:musaic/core/source/music_source.dart';
-import 'package:musaic/features/auth/presentation/login_dialog.dart';
+import '../../../core/di/app_providers.dart';
+import '../../../core/theme/app_tokens.dart';
+import '../application/account_notifier.dart';
+import '../domain/source_account.dart';
+import 'login_dialog.dart';
 
-class AccountCenter extends ConsumerWidget {
-  const AccountCenter({super.key});
+/// 账号中心页面（账号文档 §6）：按渠道独立登录 / 登出 / 状态展示。
+class AccountCenterPage extends ConsumerWidget {
+  const AccountCenterPage({super.key});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final accountState = ref.watch(accountNotifierProvider);
-    final registry = SourceRegistry();
+    final sources = ref.watch(sourceRegistryProvider).all;
 
     return Scaffold(
       appBar: AppBar(title: const Text('账号')),
       body: ListView(
-        children: registry.all.map((source) {
-
-          final account = accountState.accounts[source.sourceId];
-          return _AccountTile(
-            source: source,
-            account: account,
-            onTap: () => _handleTap(context, ref, source),
-          );
-        }).toList(),
-      ),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: () => ref
-            .read(accountNotifierProvider.notifier)
-            .checkAll(),
-        icon: const Icon(Icons.refresh),
-        label: const Text('刷新状态'),
+        padding: AppTokens.pagePadding,
+        children: [
+          for (final source in sources)
+            _SourceAccountTile(
+                key: ValueKey('account-${source.sourceId}'),
+                sourceId: source.sourceId,
+              ),
+          const SizedBox(height: 24),
+          Center(
+            child: TextButton.icon(
+              style: TextButton.styleFrom(foregroundColor: Colors.redAccent),
+              onPressed: () => _confirmClearAll(context, ref),
+              icon: const Icon(Icons.delete_sweep_rounded, size: 20),
+              label: const Text('一键清除所有账号数据'),
+            ),
+          ),
+          const SizedBox(height: 8),
+          Center(
+            child: Text(
+              '凭据仅存于本机安全存储（Keychain / Keystore），永不明文上传',
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: Theme.of(context)
+                        .colorScheme
+                        .onSurface
+                        .withValues(alpha: 0.45),
+                  ),
+            ),
+          ),
+        ],
       ),
     );
   }
 
-  void _handleTap(
-    BuildContext context,
-    WidgetRef ref,
-    MusicSource source,
-  ) {
-    final account = ref
-        .read(accountNotifierProvider)
-        .accounts[source.sourceId];
-
-    if (account?.status == AccountStatus.loggedIn) {
-      showDialog(
-        context: context,
-        builder: (_) => AlertDialog(
-          title: Text('${source.sourceName}'),
-          content: Text('当前账号：${account?.profile?.nickname ?? account?.profile?.userId ?? ''}'),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('关闭'),
-            ),
-            FilledButton(
-              onPressed: () {
-                ref
-                    .read(accountNotifierProvider.notifier)
-                    .logout(source.sourceId);
-                Navigator.pop(context);
-              },
-              child: const Text('登出'),
-            ),
-          ],
-        ),
-      );
-    } else {
-      showDialog(
-        context: context,
-        builder: (_) => LoginDialog(source: source),
-      );
+  Future<void> _confirmClearAll(BuildContext context, WidgetRef ref) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('清除所有账号数据？'),
+        content: const Text('将删除全部渠道的登录凭据与本地资料记录。'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: Colors.redAccent),
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('清除'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed == true) {
+      await ref.read(accountsProvider.notifier).clearAllAccountsData();
     }
   }
 }
 
-class _AccountTile extends StatelessWidget {
-  const _AccountTile({
-    required this.source,
-    required this.account,
-    required this.onTap,
-  });
+class _SourceAccountTile extends ConsumerWidget {
+  const _SourceAccountTile({super.key, required this.sourceId});
 
-  final MusicSource source;
-  final SourceAccount? account;
-  final VoidCallback onTap;
+  final String sourceId;
 
   @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return ListTile(
-      leading: CircleAvatar(
-        backgroundImage: account?.profile?.avatarUrl != null
-            ? NetworkImage(account!.profile!.avatarUrl!)
-            : null,
-        child: account?.profile?.avatarUrl == null
-            ? const Icon(Icons.person)
-            : null,
+  Widget build(BuildContext context, WidgetRef ref) {
+    final registry = ref.watch(sourceRegistryProvider);
+    final source = registry.resolve(sourceId);
+    if (source == null) return const SizedBox.shrink();
+
+    final account = ref.watch(accountsProvider).of(sourceId);
+    final scheme = Theme.of(context).colorScheme;
+
+    final (statusLabel, statusColor) = switch (account.status) {
+      AccountStatus.loggedOut => ('未登录', scheme.onSurface.withValues(alpha: 0.5)),
+      AccountStatus.loggedIn => (
+          account.nickname ?? '已登录',
+          Colors.greenAccent.withValues(alpha: 0.9),
+        ),
+      AccountStatus.expired => ('已过期，请重新登录', Colors.orangeAccent),
+    };
+
+    return Card(
+      margin: const EdgeInsets.only(bottom: 12),
+      child: ListTile(
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(AppTokens.radiusCard - 4),
+        ),
+        leading: CircleAvatar(
+          backgroundColor: AppTokens.accent.withValues(alpha: 0.15),
+          backgroundImage: account.avatarUrl == null
+              ? null
+              : NetworkImage(account.avatarUrl!),
+          child: account.avatarUrl == null
+              ? Text(
+                  source.displayName.characters.first,
+                  style: const TextStyle(
+                    fontWeight: FontWeight.w700,
+                    color: AppTokens.accent,
+                  ),
+                )
+              : null,
+        ),
+        title: Text(source.displayName,
+            style: const TextStyle(fontWeight: FontWeight.w600)),
+        subtitle: Row(
+          children: [
+            Container(
+              width: 6,
+              height: 6,
+              decoration:
+                  BoxDecoration(color: statusColor, shape: BoxShape.circle),
+            ),
+            const SizedBox(width: 6),
+            Flexible(
+              child: Text(statusLabel,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                      fontSize: 12,
+                      color: scheme.onSurface.withValues(alpha: 0.65))),
+            ),
+          ],
+        ),
+        trailing: account.status == AccountStatus.loggedOut &&
+                source.authCapability.requiresLogin
+            ? null // 由 onTap 打开登录
+            : (account.isLoggedIn
+                ? IconButton(
+                    tooltip: '登出',
+                    icon: Icon(Icons.logout_rounded,
+                        size: 20, color: scheme.onSurface.withValues(alpha: 0.6)),
+                    onPressed: () => ref
+                        .read(accountsProvider.notifier)
+                        .logout(sourceId),
+                  )
+                : null),
+        onTap: () {
+          if (source.authCapability.requiresLogin) {
+            showLoginDialog(context, source);
+          } else {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text('${source.displayName} 无需登录')),
+            );
+          }
+        },
       ),
-      title: Text(source.sourceName),
-      subtitle: Text(
-        account?.status == AccountStatus.loggedIn
-            ? (account?.profile?.nickname ?? '已登录')
-            : '未登录',
-      ),
-      trailing: Icon(
-        account?.status == AccountStatus.loggedIn
-            ? Icons.check_circle
-            : Icons.login,
-        color: account?.status == AccountStatus.loggedIn
-            ? theme.colorScheme.primary
-            : null,
-      ),
-      onTap: onTap,
     );
   }
 }

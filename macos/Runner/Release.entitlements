@@ -4,5 +4,17 @@
 <dict>
 	<key>com.apple.security.app-sandbox</key>
 	<true/>
+	<key>com.apple.security.network.client</key>
+	<true/>
+	<!-- 访问系统音乐目录（本地文件渠道，Master Plan §10.3） -->
+	<key>com.apple.security.assets.music.read-only</key>
+	<true/>
+	<key>com.apple.security.files.user-selected.read-only</key>
+	<true/>
+	<!-- flutter_secure_storage 需要（账号文档安全清单） -->
+	<key>keychain-access-groups</key>
+	<array>
+		<string>$(AppIdentifierPrefix)dev.musaic.app</string>
+	</array>
 </dict>
 </plist>

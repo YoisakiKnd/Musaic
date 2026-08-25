@@ -1,164 +1,129 @@
+import 'dart:async';
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import 'package:flutter_secure_storage/flutter_secure_storage.dart';
-import 'package:hive_flutter/hive_flutter.dart';
+import '../../../core/di/app_providers.dart';
+import '../domain/auth_result.dart';
+import '../domain/source_account.dart';
 
-import 'package:musaic/features/auth/domain/source_account.dart';
-import 'package:musaic/features/auth/data/account_repository.dart';
-import 'package:musaic/core/source/music_source.dart';
-import 'package:musaic/core/source/source_registry.dart';
+/// 全部渠道账号状态。
+class AccountsState {
+  const AccountsState({this.bySource = const <String, SourceAccount>{}});
 
-/// 账号操作状态。
-enum AccountAction { idle, loading, success, failure }
+  final Map<String, SourceAccount> bySource;
 
-/// 账号状态。
-class AccountState {
-  const AccountState({
-    required this.accounts,
-    required this.action,
-    this.activeSourceId,
-    this.errorMessage,
-  });
-
-  factory AccountState.initial() => AccountState(
-        accounts: const {},
-        action: AccountAction.idle,
+  SourceAccount of(String sourceId) =>
+      bySource[sourceId] ??
+      SourceAccount(
+        sourceId: sourceId,
+        status: AccountStatus.loggedOut,
       );
 
-  final Map<String, SourceAccount> accounts;
-  final AccountAction action;
-  final String? activeSourceId;
-  final String? errorMessage;
-
-  AccountState copyWith({
-    Map<String, SourceAccount>? accounts,
-    AccountAction? action,
-    String? activeSourceId,
-    String? errorMessage,
-  }) {
-    return AccountState(
-      accounts: accounts ?? this.accounts,
-      action: action ?? this.action,
-      activeSourceId: activeSourceId ?? this.activeSourceId,
-      errorMessage: errorMessage ?? this.errorMessage,
-    );
+  AccountsState withAccount(SourceAccount account) {
+    final next = Map<String, SourceAccount>.of(bySource);
+    next[account.sourceId] = account;
+    return AccountsState(bySource: next);
   }
 }
 
-/// 账号状态管理器。
-class AccountNotifier extends Notifier<AccountState> {
-  AccountNotifier([SourceRegistry? registry]) : _registry = registry ?? SourceRegistry();
-
-  final SourceRegistry _registry;
-
+/// 账号状态管理（Master Plan §6 / 账号文档生命周期）。
+///
+/// - 启动：乐观恢复缓存状态（<200ms），后台异步校验，失效标记「已过期」。
+/// - 运行：401/301 被动捕获同样标记过期；过期不删凭据，引导重新登录。
+class AccountNotifier extends Notifier<AccountsState> {
   @override
-  @override
-  AccountState build() {
-    _restore();
-    return AccountState.initial();
+  AccountsState build() {
+    final restored =
+        ref.read(accountRepositoryProvider).restoreAll();
+    unawaited(Future.microtask(() => _verifyAll(restored)));
+    return AccountsState(bySource: restored);
   }
 
-  AccountRepository get _repository =>
-      AccountRepository(const FlutterSecureStorage(), Hive.box('default'));
-
-  Future<void> _restore() async {
-    final accounts = <String, SourceAccount>{};
-    for (final source in _registry.all) {
-      final account = await _repository.readAccount(source.sourceId);
-      if (account != null) {
-        accounts[source.sourceId] = account;
-      }
-    }
-    state = state.copyWith(accounts: accounts);
-  }
-
-  Future<void> login(String sourceId, Map<String, String> credentials) async {
-    final source = _registry.resolve(sourceId);
-    if (source == null) return;
-
-    state = state.copyWith(action: AccountAction.loading);
-
-    try {
-      await source.login(credentials);
-      final profile = source is MusicSourceWithProfile
-          ? await source.getProfile()
-          : null;
-
-      final account = SourceAccount(
-        sourceId: sourceId,
-        status: AccountStatus.loggedIn,
-        profile: profile,
-        lastCheckedAt: DateTime.now(),
-      );
-
-      await _repository.saveAccount(account);
-      final accounts = Map<String, SourceAccount>.from(state.accounts);
-      accounts[sourceId] = account;
-      state = state.copyWith(
-        accounts: accounts,
-        action: AccountAction.success,
-        activeSourceId: sourceId,
-        errorMessage: null,
-      );
-    } catch (e) {
-      state = state.copyWith(
-        action: AccountAction.failure,
-        errorMessage: e.toString(),
+  /// 登录：渠道验证成功后凭据入安全存储、资料入 Hive、状态广播。
+  Future<AuthResult> login(
+    String sourceId,
+    Map<String, String> credentials,
+  ) async {
+    final source =
+        ref.read(sourceRegistryProvider).resolve(sourceId);
+    if (source == null) {
+      return const AuthFailure(
+        reason: AuthFailureReason.unsupported,
+        message: '渠道未注册',
       );
     }
+    final result = await source.login(credentials);
+    if (result is AuthSuccess) {
+      final repository = ref.read(accountRepositoryProvider);
+      await repository.saveCredentials(sourceId, credentials);
+      await repository.saveAccount(result.account);
+      state = state.withAccount(result.account);
+    }
+    return result;
   }
 
   Future<void> logout(String sourceId) async {
-    final source = _registry.resolve(sourceId);
-    await source?.logout();
-    await _repository.deleteAccount(sourceId);
-    final accounts = Map<String, SourceAccount>.from(state.accounts);
-    accounts[sourceId] = SourceAccount(
-      sourceId: sourceId,
-      status: AccountStatus.loggedOut,
+    final source =
+        ref.read(sourceRegistryProvider).resolve(sourceId);
+    try {
+      await source?.logout();
+    } catch (_) {
+      // 渠道侧登出失败不阻塞本地清理
+    }
+    await ref.read(accountRepositoryProvider).logout(sourceId);
+    state = state.withAccount(
+      SourceAccount(sourceId: sourceId, status: AccountStatus.loggedOut),
     );
-    state = state.copyWith(accounts: accounts);
   }
 
-  Future<void> checkAll() async {
-    final accounts = Map<String, SourceAccount>.from(state.accounts);
-    for (final entry in accounts.entries) {
-      final source = _registry.resolve(entry.key);
-      if (source == null) continue;
-      final valid = await source.checkSession();
-      accounts[entry.key] = entry.value.copyWith(
-        status: valid ? AccountStatus.loggedIn : AccountStatus.expired,
-        lastCheckedAt: DateTime.now(),
-        expiredAt: valid ? null : DateTime.now(),
-      );
+  /// 网络层被动捕获到会话过期时调用。
+  void markExpiredIfLoggedIn(String sourceId) {
+    if (state.of(sourceId).status != AccountStatus.loggedIn) return;
+    unawaited(_markExpired(sourceId));
+  }
+
+  Future<void> _markExpired(String sourceId) async {
+    final repository = ref.read(accountRepositoryProvider);
+    await repository.markExpired(sourceId);
+    state = state.withAccount(repository.readAccount(sourceId));
+  }
+
+  Future<void> _verifyAll(Map<String, SourceAccount> restored) async {
+    for (final entry in restored.entries) {
+      if (entry.value.status != AccountStatus.loggedIn) continue;
+      unawaited(_verify(entry.key));
     }
-    for (final source in _registry.all) {
-      if (!accounts.containsKey(source.sourceId)) {
-        final valid = await source.checkSession();
-        accounts[source.sourceId] = SourceAccount(
-          sourceId: source.sourceId,
-          status: valid ? AccountStatus.loggedIn : AccountStatus.loggedOut,
-          lastCheckedAt: DateTime.now(),
-        );
+  }
+
+  /// 后台校验：无效则标记过期；网络异常保持乐观状态不打扰用户。
+  Future<void> _verify(String sourceId) async {
+    final source =
+        ref.read(sourceRegistryProvider).resolve(sourceId);
+    if (source == null) return;
+    try {
+      final valid =
+          await source.checkSession().timeout(const Duration(seconds: 8));
+      if (!valid && state.of(sourceId).status == AccountStatus.loggedIn) {
+        await _markExpired(sourceId);
       }
+    } on TimeoutException {
+      // 校验超时：保留乐观登录态
+    } catch (_) {
+      // 网络异常：保留乐观登录态
     }
-    await _repository.saveAccount(accounts.values.first);
-    state = state.copyWith(accounts: accounts);
   }
 
-  void clearError() {
-    state = state.copyWith(action: AccountAction.idle, errorMessage: null);
+  /// 一键清除所有账号数据。
+  Future<void> clearAllAccountsData() async {
+    await ref.read(accountRepositoryProvider).clearAll();
+    state = const AccountsState();
   }
 }
 
-/// 带用户资料查询能力的渠道扩展。
-abstract class MusicSourceWithProfile extends MusicSource {
-  MusicSourceWithProfile();
+final accountsProvider =
+    NotifierProvider<AccountNotifier, AccountsState>(AccountNotifier.new);
 
-  Future<AccountProfile?> getProfile();
-}
-
-/// accountNotifierProvider
-final accountNotifierProvider =
-    NotifierProvider<AccountNotifier, AccountState>(AccountNotifier.new);
-
+/// 单个渠道账号状态的便捷选择器。
+final sourceAccountProvider = Provider.family<SourceAccount, String>(
+  (ref, sourceId) => ref.watch(accountsProvider).of(sourceId),
+);
