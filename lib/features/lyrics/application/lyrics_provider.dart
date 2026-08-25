@@ -113,6 +113,6 @@ class LyricsNotifier extends Notifier<LyricsState> {
 
 /// lyricsNotifierProvider
 final lyricsNotifierProvider =
-    NotifierProvider<LyricsNotifier, LyricsState>((ref) {
+    NotifierProvider<LyricsNotifier, LyricsState>(() {
   return LyricsNotifier();
 });
