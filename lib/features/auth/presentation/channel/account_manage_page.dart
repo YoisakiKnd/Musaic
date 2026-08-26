@@ -5,6 +5,7 @@ import '../../../../core/di/app_providers.dart';
 import '../../../../core/theme/app_tokens.dart';
 import '../../application/account_notifier.dart';
 import '../../domain/source_account.dart';
+import 'kugou_login_page.dart';
 import 'netease_login_page.dart';
 import 'qq_music_login_page.dart';
 
@@ -173,7 +174,11 @@ class _ChannelEntry extends ConsumerWidget {
           ),
         );
       case 'kugou':
-        _showComingSoon(context, '酷狗音乐', '酷狗账号登录');
+        Navigator.of(context).push(
+          MaterialPageRoute<void>(
+            builder: (_) => const KugouLoginPage(),
+          ),
+        );
       case 'ytmusic':
         _showComingSoon(context, 'YouTube Music', 'Google 账号授权');
       default:
