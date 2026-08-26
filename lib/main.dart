@@ -16,6 +16,10 @@ import 'features/auth/data/account_repository.dart';
 import 'features/library/data/library_repository.dart';
 import 'features/player/audio_handler.dart';
 import 'features/search/data/search_history_repository.dart';
+import 'features/settings/local_music_settings_page.dart'
+    show
+        LocalMusicSettingsRepository,
+        localMusicSettingsRepositoryProvider;
 import 'features/settings/settings_providers.dart';
 import 'core/di/app_providers.dart';
 
@@ -98,6 +102,8 @@ Future<void> main() async {
       await Hive.openBox<String>(LibraryRepository.playlistsBoxName);
   final searchHistoryBox =
       await Hive.openBox<String>(SearchHistoryRepository.boxName);
+  final localMusicSettingsBox =
+      await Hive.openBox<String>(LocalMusicSettingsRepository.boxName);
 
   await _Bootstrap._configureAudioSession();
   await _Bootstrap._configureDesktopWindow();
@@ -126,6 +132,9 @@ Future<void> main() async {
         audioHandlerProvider.overrideWithValue(audioHandler),
         searchHistoryRepositoryProvider.overrideWithValue(
           SearchHistoryRepository(box: searchHistoryBox),
+        ),
+        localMusicSettingsRepositoryProvider.overrideWithValue(
+          LocalMusicSettingsRepository(box: localMusicSettingsBox),
         ),
       ],
       child: const MusaicApp(),

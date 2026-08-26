@@ -135,8 +135,7 @@ class _SearchResultsPageState extends ConsumerState<SearchResultsPage> {
           ],
         ),
       );
-      controller.dispose();
-      if (name == null || name.isEmpty) return;
+        if (name == null || name.isEmpty) return;
       await repository.createPlaylist(name);
     }
     for (final track in tracks) {
@@ -215,7 +214,6 @@ class _SearchResultsPageState extends ConsumerState<SearchResultsPage> {
         ],
       ),
     );
-    controller.dispose();
     if (name == null || name.isEmpty) return;
     await repository.createPlaylist(name);
     for (final track in _tracks) {

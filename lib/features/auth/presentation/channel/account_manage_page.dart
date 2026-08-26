@@ -15,7 +15,12 @@ class AccountManagePage extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final sources = ref.watch(sourceRegistryProvider).all;
+    // 本地文件渠道免登录，已独立到「设置 → 本地音乐」的文件夹管理，不在账号列表展示
+    final sources = ref
+        .watch(sourceRegistryProvider)
+        .all
+        .where((source) => source.sourceId != 'local')
+        .toList(growable: false);
 
     return Scaffold(
       appBar: AppBar(title: const Text('账号管理')),

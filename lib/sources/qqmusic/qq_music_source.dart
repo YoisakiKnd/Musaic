@@ -216,7 +216,8 @@ class QqMusicSource extends MusicSource {
         'appid': '716027609',
         'e': '2',
         'l': 'M',
-        's': '3',
+        // s=7 → 官方 259px PNG；s=3 仅 111px，铺到 200pt 显得过小
+        's': '7',
         'd': '72',
         'v': '4',
         't': _random.nextDouble().toString(),

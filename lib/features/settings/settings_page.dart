@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/di/app_providers.dart';
 import '../../core/theme/app_tokens.dart';
 import '../auth/presentation/channel/account_manage_page.dart';
+import 'local_music_settings_page.dart';
 import 'settings_providers.dart';
 
 /// 设置页（一级）：账号管理 / 外观 / 播放与性能 / 数据管理 / 关于，
@@ -20,6 +21,16 @@ class SettingsPage extends ConsumerWidget {
       body: ListView(
         padding: const EdgeInsets.fromLTRB(16, 8, 16, 40),
         children: [
+          _EntryCard(
+            icon: Icons.library_music_rounded,
+            title: '本地音乐',
+            subtitle: '扫描文件夹管理 / 启动自动扫描',
+            onTap: () => Navigator.of(context).push(
+              MaterialPageRoute<void>(
+                builder: (_) => const LocalMusicSettingsPage(),
+              ),
+            ),
+          ),
           _EntryCard(
             icon: Icons.person_rounded,
             title: '账号管理',

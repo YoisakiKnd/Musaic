@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../features/auth/application/account_notifier.dart';
@@ -5,6 +7,8 @@ import '../../features/auth/data/account_repository.dart';
 import '../../features/library/data/library_repository.dart';
 import '../../features/player/audio_handler.dart';
 import '../../features/search/data/search_history_repository.dart';
+import '../../features/settings/local_music_settings_page.dart'
+    show localMusicSettingsRepositoryProvider;
 import '../source/music_source.dart';
 import '../source/source_registry.dart';
 import '../../sources/kugou/kugou_source.dart';
@@ -55,6 +59,16 @@ final sourceRegistryProvider = Provider<SourceRegistry>((ref) {
   registry.register(
     LocalFileSource(
       credentialReader: createCredentialReader(LocalFileSource.id),
+      // 用户在「设置 → 本地音乐」添加的文件夹优先；未配置时回退默认目录
+      directoryProvider: () async {
+        final settings = ref.read(localMusicSettingsRepositoryProvider);
+        final userDirs = settings.folders
+            .map(Directory.new)
+            .where((dir) => dir.existsSync())
+            .toList(growable: false);
+        if (userDirs.isNotEmpty) return userDirs;
+        return LocalFileSource.defaultDirectories();
+      },
     ),
   );
 

@@ -102,7 +102,8 @@ class _HomePageState extends ConsumerState<HomePage> {
                   ),
                   IconButton(
                     tooltip: '设置与账号',
-                    onPressed: () => context.go('/settings'),
+                    // push 而非 go：go 会替换导航栈，系统返回会直接退出应用
+                    onPressed: () => context.push('/settings'),
                     icon: const Icon(Icons.settings_rounded),
                   ),
                 ],

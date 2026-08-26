@@ -25,6 +25,7 @@ dependencies:
   hive: ^2.2.3
   hive_flutter: ^1.1.0
   path_provider: ^2.1.4
+  permission_handler: ^11.3.1     # 本地音乐扫描的媒体权限运行时请求
 
   # 播放内核
   just_audio: ^0.9.42

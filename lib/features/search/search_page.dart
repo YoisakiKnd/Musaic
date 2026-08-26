@@ -6,15 +6,18 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/di/app_providers.dart';
 import '../../core/error/source_exception.dart';
 import '../../core/model/track.dart';
+import '../../core/source/music_source.dart';
 import '../../core/theme/app_tokens.dart';
 import 'search_results_page.dart';
 
 enum _AggregateMode { grouped, merged }
 
+enum _ScopeMode { single, aggregate }
+
 enum _SortMode { relevance, durationAsc, durationDesc }
 
-/// 搜索表单页（PicaComic 式）：目标渠道多选 + 聚合模式 + 排序 + 历史搜索；
-/// 提交后进入独立结果页（支持多选批量操作）。
+/// 搜索表单页：默认单一渠道搜索；切到「聚合搜索」才展开多选（默认全选）
+/// 与展示/排序选项，避免用户挨个取消勾选。
 class SearchPage extends ConsumerStatefulWidget {
   const SearchPage({super.key});
 
@@ -24,6 +27,8 @@ class SearchPage extends ConsumerStatefulWidget {
 
 class _SearchPageState extends ConsumerState<SearchPage> {
   final TextEditingController _controller = TextEditingController();
+  _ScopeMode _scope = _ScopeMode.single;
+  String? _singleTarget;
   Set<String> _targets = <String>{};
   _AggregateMode _mode = _AggregateMode.grouped;
   _SortMode _sort = _SortMode.relevance;
@@ -38,6 +43,13 @@ class _SearchPageState extends ConsumerState<SearchPage> {
       if (!mounted) return;
       final sources = ref.read(sourceRegistryProvider).all;
       setState(() {
+        // 单一模式默认选网易云，无则取第一个渠道
+        _singleTarget = sources
+                .where((s) => s.sourceId == 'netease')
+                .map((s) => s.sourceId)
+                .firstOrNull ??
+            (sources.isNotEmpty ? sources.first.sourceId : null);
+        // 聚合模式默认全选
         _targets = sources.map((s) => s.sourceId).toSet();
         _history = ref.read(searchHistoryRepositoryProvider).load();
         _uiReady = true;
@@ -55,9 +67,21 @@ class _SearchPageState extends ConsumerState<SearchPage> {
     final query = rawQuery.trim();
     if (query.isEmpty || _searching) return;
     final registry = ref.read(sourceRegistryProvider);
-    final sources = registry.all
-        .where((s) => _targets.contains(s.sourceId))
-        .toList(growable: false);
+    final List<MusicSource> sources;
+    if (_scope == _ScopeMode.single) {
+      final single = registry.resolve(_singleTarget ?? '');
+      if (single == null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('请选择一个搜索渠道')),
+        );
+        return;
+      }
+      sources = [single];
+    } else {
+      sources = registry.all
+          .where((s) => _targets.contains(s.sourceId))
+          .toList(growable: false);
+    }
     if (sources.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('请至少选择一个目标渠道')),
@@ -193,45 +217,66 @@ class _SearchPageState extends ConsumerState<SearchPage> {
       body: ListView(
         padding: const EdgeInsets.fromLTRB(16, 12, 16, 160),
         children: [
-          _sectionLabel('目标'),
-          _buildTargetChips(sources),
-          _sectionLabel('聚合搜索'),
+          _sectionLabel('搜索范围'),
           Wrap(
             spacing: 8,
             children: [
               _choiceChip(
-                '分开展示',
-                _mode == _AggregateMode.grouped,
-                () => setState(() => _mode = _AggregateMode.grouped),
+                '单曲搜索',
+                _scope == _ScopeMode.single,
+                () => setState(() => _scope = _ScopeMode.single),
               ),
               _choiceChip(
-                '合并展示',
-                _mode == _AggregateMode.merged,
-                () => setState(() => _mode = _AggregateMode.merged),
+                '聚合搜索',
+                _scope == _ScopeMode.aggregate,
+                () => setState(() => _scope = _ScopeMode.aggregate),
               ),
             ],
           ),
-          _sectionLabel('排序'),
-          Wrap(
-            spacing: 8,
-            children: [
-              _choiceChip(
-                '相关度',
-                _sort == _SortMode.relevance,
-                () => setState(() => _sort = _SortMode.relevance),
-              ),
-              _choiceChip(
-                '时长 ↑',
-                _sort == _SortMode.durationAsc,
-                () => setState(() => _sort = _SortMode.durationAsc),
-              ),
-              _choiceChip(
-                '时长 ↓',
-                _sort == _SortMode.durationDesc,
-                () => setState(() => _sort = _SortMode.durationDesc),
-              ),
-            ],
-          ),
+          if (_scope == _ScopeMode.single) ...[
+            _sectionLabel('搜索渠道'),
+            _buildSingleTargetChips(sources),
+          ] else ...[
+            _sectionLabel('目标渠道（默认全选）'),
+            _buildAggregateTargetChips(sources),
+            _sectionLabel('结果展示'),
+            Wrap(
+              spacing: 8,
+              children: [
+                _choiceChip(
+                  '分开展示',
+                  _mode == _AggregateMode.grouped,
+                  () => setState(() => _mode = _AggregateMode.grouped),
+                ),
+                _choiceChip(
+                  '合并展示',
+                  _mode == _AggregateMode.merged,
+                  () => setState(() => _mode = _AggregateMode.merged),
+                ),
+              ],
+            ),
+            _sectionLabel('排序'),
+            Wrap(
+              spacing: 8,
+              children: [
+                _choiceChip(
+                  '相关度',
+                  _sort == _SortMode.relevance,
+                  () => setState(() => _sort = _SortMode.relevance),
+                ),
+                _choiceChip(
+                  '时长 ↑',
+                  _sort == _SortMode.durationAsc,
+                  () => setState(() => _sort = _SortMode.durationAsc),
+                ),
+                _choiceChip(
+                  '时长 ↓',
+                  _sort == _SortMode.durationDesc,
+                  () => setState(() => _sort = _SortMode.durationDesc),
+                ),
+              ],
+            ),
+          ],
           if (_history.isNotEmpty) ...[
             Row(
               children: [
@@ -275,33 +320,65 @@ class _SearchPageState extends ConsumerState<SearchPage> {
                 fontSize: 15, fontWeight: FontWeight.w700)),
       );
 
-  Widget _buildTargetChips(List<dynamic> sources) {
+  /// 单一模式：渠道单选（点谁搜谁）。
+  Widget _buildSingleTargetChips(List<MusicSource> sources) {
     return Wrap(
       spacing: 8,
       runSpacing: 8,
       children: [
         for (final source in sources)
-          FilterChip(
-            label: Text((source as dynamic).displayName as String),
-            selected: _targets.contains((source as dynamic).sourceId),
-            onSelected: (selected) => setState(() {
-              selected
-                  ? _targets.add((source as dynamic).sourceId as String)
-                  : _targets.remove((source as dynamic).sourceId);
-            }),
-            selectedColor: AppTokens.accent.withValues(alpha: 0.18),
-            checkmarkColor: AppTokens.accent,
-            labelStyle: TextStyle(
-              fontSize: 13,
-              color: _targets.contains((source as dynamic).sourceId)
-                  ? AppTokens.accent
-                  : null,
-              fontWeight:
-                  _targets.contains((source as dynamic).sourceId)
+          _choiceChip(
+            source.displayName,
+            _singleTarget == source.sourceId,
+            () => setState(() => _singleTarget = source.sourceId),
+          ),
+      ],
+    );
+  }
+
+  /// 聚合模式：渠道多选（默认全选）+ 全选/清空快捷操作。
+  Widget _buildAggregateTargetChips(List<MusicSource> sources) {
+    final allSelected =
+        sources.isNotEmpty && sources.every((s) => _targets.contains(s.sourceId));
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            for (final source in sources)
+              FilterChip(
+                label: Text(source.displayName),
+                selected: _targets.contains(source.sourceId),
+                onSelected: (selected) => setState(() {
+                  selected
+                      ? _targets.add(source.sourceId)
+                      : _targets.remove(source.sourceId);
+                }),
+                selectedColor: AppTokens.accent.withValues(alpha: 0.18),
+                checkmarkColor: AppTokens.accent,
+                labelStyle: TextStyle(
+                  fontSize: 13,
+                  color: _targets.contains(source.sourceId)
+                      ? AppTokens.accent
+                      : null,
+                  fontWeight: _targets.contains(source.sourceId)
                       ? FontWeight.w600
                       : FontWeight.w400,
-            ),
-          ),
+                ),
+              ),
+          ],
+        ),
+        const SizedBox(height: 4),
+        TextButton(
+          onPressed: () => setState(() {
+            _targets = allSelected
+                ? <String>{}
+                : sources.map((s) => s.sourceId).toSet();
+          }),
+          child: Text(allSelected ? '全部取消' : '全选'),
+        ),
       ],
     );
   }
