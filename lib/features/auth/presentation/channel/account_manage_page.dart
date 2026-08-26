@@ -6,6 +6,7 @@ import '../../../../core/theme/app_tokens.dart';
 import '../../application/account_notifier.dart';
 import '../../domain/source_account.dart';
 import 'netease_login_page.dart';
+import 'qq_music_login_page.dart';
 
 /// 账号管理（设置二级页）：各渠道状态一览，点进各渠道独立登录页。
 class AccountManagePage extends ConsumerWidget {
@@ -166,7 +167,11 @@ class _ChannelEntry extends ConsumerWidget {
           ),
         );
       case 'qqmusic':
-        _showComingSoon(context, 'QQ 音乐', 'QQ 登录（扫码 / 账号密码）');
+        Navigator.of(context).push(
+          MaterialPageRoute<void>(
+            builder: (_) => const QqMusicLoginPage(),
+          ),
+        );
       case 'kugou':
         _showComingSoon(context, '酷狗音乐', '酷狗账号登录');
       case 'ytmusic':

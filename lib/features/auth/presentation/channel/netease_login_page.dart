@@ -7,6 +7,7 @@ import 'package:qr_flutter/qr_flutter.dart';
 import '../../../../core/theme/app_tokens.dart';
 import '../../../../core/di/app_providers.dart';
 import '../../domain/auth_result.dart';
+import '../../domain/qr_login_poll.dart';
 import '../../domain/source_account.dart';
 import '../../application/account_notifier.dart';
 import '../../../../sources/netease/netease_source.dart';
@@ -91,11 +92,11 @@ class _NeteaseLoginPageState extends ConsumerState<NeteaseLoginPage>
             _qrStatus = '二维码已过期';
             _qrExpired = true;
           });
-        case QrLoginPollSuccess(:final musicU, :final nickname):
+        case QrLoginPollSuccess(:final credentials, :final nickname):
           _pollTimer?.cancel();
           await ref.read(accountsProvider.notifier).completeLogin(
                 'netease',
-                {'MUSIC_U': musicU},
+                credentials,
                 SourceAccount.markNow(
                   sourceId: 'netease',
                   status: AccountStatus.loggedIn,

@@ -12,6 +12,7 @@ import '../../core/network/source_auth_interceptor.dart';
 import '../../core/source/music_source.dart';
 import '../../features/auth/domain/auth_capability.dart';
 import '../../features/auth/domain/auth_result.dart';
+import '../../features/auth/domain/qr_login_poll.dart';
 import '../../features/auth/domain/source_account.dart';
 import '../../features/lyrics/domain/lrc_parser.dart';
 import '../../features/lyrics/domain/lyric_bundle.dart';
@@ -394,12 +395,13 @@ class NeteaseSource extends MusicSource {
         String? nickname;
         if (musicU != null && musicU.isNotEmpty) {
           try {
-            final profile = await _fetchProfile(cookie: 'MUSIC_U=\$musicU');
+            final profile =
+                await _fetchProfile(cookie: 'MUSIC_U=$musicU');
             nickname = profile?['nickname'] as String?;
           } catch (_) {}
         }
         return QrLoginPoll.success(
-          musicU: musicU ?? '',
+          credentials: <String, String>{'MUSIC_U': musicU ?? ''},
           nickname: nickname,
         );
       default:
@@ -465,7 +467,7 @@ class NeteaseSource extends MusicSource {
     final album = _asMap(song['album']);
     final durationMs = song['duration'] as int?;
     return Track(
-      id: '\$songId',
+      id: '$songId',
       sourceId: NeteaseSource.id,
       title: name,
       artist: artists.isEmpty ? '未知歌手' : artists,
@@ -635,34 +637,4 @@ class NeteaseUserPlaylist {
   final int trackCount;
   final int playCount;
   final String? coverUrl;
-}
-
-/// 二维码登录轮询状态。
-sealed class QrLoginPoll {
-  const QrLoginPoll();
-
-  factory QrLoginPoll.waiting() = QrLoginPollWaiting;
-  factory QrLoginPoll.scanned() = QrLoginPollScanned;
-  factory QrLoginPoll.expired() = QrLoginPollExpired;
-  factory QrLoginPoll.success({required String musicU, String? nickname}) =
-      QrLoginPollSuccess;
-}
-
-class QrLoginPollWaiting extends QrLoginPoll {
-  const QrLoginPollWaiting();
-}
-
-class QrLoginPollScanned extends QrLoginPoll {
-  const QrLoginPollScanned();
-}
-
-class QrLoginPollExpired extends QrLoginPoll {
-  const QrLoginPollExpired();
-}
-
-class QrLoginPollSuccess extends QrLoginPoll {
-  const QrLoginPollSuccess({required this.musicU, this.nickname});
-
-  final String musicU;
-  final String? nickname;
 }
