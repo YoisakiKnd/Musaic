@@ -7,6 +7,7 @@ import 'package:dio/dio.dart';
 import 'netease_crypto.dart';
 
 import '../../core/error/source_exception.dart';
+import '../../core/utils/url_utils.dart';
 import '../../core/model/track.dart';
 import '../../core/network/source_auth_interceptor.dart';
 import '../../core/source/music_source.dart';
@@ -184,8 +185,12 @@ class NeteaseSource extends MusicSource {
       final url = item?['url'] as String?;
       final code = item?['code'] as int? ?? -1;
       if (url == null || url.isEmpty || code != 200) {
+        // 分级提示：未登录引导登录；已登录则说明版权/会员限制
+        final loggedIn = await _hasCredentials();
         throw UnavailableStreamException(
-          '该曲目需要会员或暂不可用',
+          loggedIn
+              ? '受版权方限制，该曲目暂不可播放（可能需要黑胶会员）'
+              : '该曲目为会员/版权曲目，请先在「设置 → 账号管理」登录后尝试播放',
           sourceId: sourceId,
         );
       }
@@ -391,6 +396,9 @@ class NeteaseSource extends MusicSource {
   }
 
   /// 轮询二维码状态。
+  ///
+  /// 803 授权成功：MUSIC_U 可能出现在 Set-Cookie 头或响应体 cookie 字段，
+  /// 两路都取，避免只读 body 漏凭据导致「扫码后无动静」。
   Future<QrLoginPoll> pollQrLogin(String key) async {
     final response = await _dio.get<dynamic>(
       '/api/login/qrcode/client/login',
@@ -405,24 +413,94 @@ class NeteaseSource extends MusicSource {
       case 802:
         return QrLoginPoll.scanned();
       case 803:
-        final musicU = _musicUFromBodyCookie(
-          data?['cookie'] as String? ?? '',
+        final musicU = _extractMusicU(response) ??
+            _musicUFromBodyCookie(data?['cookie'] as String? ?? '');
+        developer.log(
+          '二维码授权成功：musicU=${musicU == null ? '缺失' : '已取得(${musicU.length}字符)'}',
+          name: 'MusaicNetease',
         );
-        String? nickname;
-        if (musicU != null && musicU.isNotEmpty) {
-          try {
-            final profile =
-                await _fetchProfile(cookie: 'MUSIC_U=$musicU');
-            nickname = profile?['nickname'] as String?;
-          } catch (_) {}
+        if (musicU == null || musicU.isEmpty) {
+          throw NetworkSourceException(
+            '授权成功但未取得登录凭据，请重试',
+            sourceId: sourceId,
+          );
         }
+        String? nickname;
+        try {
+          final info = await fetchAccountSummary(cookie: 'MUSIC_U=$musicU');
+          nickname = info?.nickname;
+        } catch (_) {}
         return QrLoginPoll.success(
-          credentials: <String, String>{'MUSIC_U': musicU ?? ''},
+          credentials: <String, String>{'MUSIC_U': musicU},
           nickname: nickname,
         );
       default:
+        developer.log('二维码轮询 code=$code', name: 'MusaicNetease');
         return QrLoginPoll.waiting();
     }
+  }
+
+  /// 拉取网易云账号昵称与会员状态（黑胶/VIP）。
+  ///
+  /// [cookie] 缺省时从安全存储读取。
+  Future<({String nickname, String? vipLabel})?> fetchAccountSummary({
+    String? cookie,
+  }) async {
+    String cookieHeader = cookie ?? '';
+    if (cookieHeader.isEmpty) {
+      final credentials = await credentialReader();
+      final musicU = credentials['MUSIC_U'] ?? '';
+      if (musicU.isEmpty) return null;
+      cookieHeader = 'MUSIC_U=$musicU';
+    }
+    final profile = await _fetchProfile(cookie: cookieHeader);
+    final nickname = profile?['nickname'] as String?;
+    if (profile == null || nickname == null || nickname.isEmpty) {
+      return null;
+    }
+
+    // 会员状态：weapi openvip v2（vipType 10=VIP 20/40=黑胶 11=学生）
+    String? vipLabel;
+    try {
+      final (:params, :encSecKey) =
+          NeteaseCrypto.encryptPayload(<String, dynamic>{'csrf_token': ''});
+      final vipResp = await _dio.post<dynamic>(
+        '/weapi/openvip/v2/info',
+        options: Options(
+          contentType: Headers.formUrlEncodedContentType,
+          responseType: ResponseType.plain,
+          headers: <String, String>{'Cookie': cookieHeader},
+        ),
+        data: 'params=${Uri.encodeQueryComponent(params)}'
+            '&encSecKey=${Uri.encodeQueryComponent(encSecKey)}',
+      );
+      final vipData = _asMap(_decoded(vipResp))?['data'];
+      final redPlus = _asMap(vipData)?['redplus'];
+      final vipType = _asMap(redPlus)?['vipType'] as int? ??
+          _asMap(vipData)?['vipType'] as int? ??
+          0;
+      final level = _asMap(redPlus)?['redVipLevel'] as int? ??
+          _asMap(vipData)?['redVipLevel'] as int?;
+      vipLabel = switch (vipType) {
+        10 => 'VIP${level != null ? ' Lv$level' : ''}',
+        11 => '学生会员',
+        20 || 40 => '黑胶SVIP${level != null ? ' Lv$level' : ''}',
+        _ => null,
+      };
+    } catch (_) {
+      // 会员信息获取失败不阻塞资料展示
+    }
+    return (nickname: nickname, vipLabel: vipLabel);
+  }
+
+  @override
+  Future<SourceAccount?> refreshAccountInfo(SourceAccount account) async {
+    final info = await fetchAccountSummary();
+    if (info == null) return null;
+    return account.copyWith(
+      nickname: info.nickname,
+      vipLabel: info.vipLabel,
+    );
   }
 
   /// 当前登录账号的用户歌单（登录后调用）。
@@ -490,7 +568,7 @@ class NeteaseSource extends MusicSource {
       album: album?['name'] as String?,
       duration:
           durationMs == null ? null : Duration(milliseconds: durationMs),
-      coverUrl: album?['picUrl'] as String?,
+      coverUrl: (album?['picUrl'] as String?)?.toHttps(),
       sourceData: <String, dynamic>{'neteaseId': songId},
     );
   }
@@ -605,6 +683,16 @@ class NeteaseSource extends MusicSource {
     return _asMap(data['profile']);
   }
 
+  /// 是否已有登录凭据（用于失败提示分级）。
+  Future<bool> _hasCredentials() async {
+    try {
+      final credentials = await credentialReader();
+      return (credentials['MUSIC_U'] ?? '').isNotEmpty;
+    } catch (_) {
+      return false;
+    }
+  }
+
   int? _songIdOf(Track track) =>
       (track.sourceData?['neteaseId'] as num?)?.toInt() ??
       int.tryParse(track.id);
@@ -629,7 +717,7 @@ class NeteaseSource extends MusicSource {
       album: album?['name'] as String?,
       duration:
           durationMs == null ? null : Duration(milliseconds: durationMs),
-      coverUrl: album?['picUrl'] as String?,
+      coverUrl: (album?['picUrl'] as String?)?.toHttps(),
       sourceData: <String, dynamic>{'neteaseId': songId},
     );
   }

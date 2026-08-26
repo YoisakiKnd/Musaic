@@ -40,6 +40,7 @@ dependencies:
   encrypt: ^5.0.3
   crypto: ^3.0.3                 # 网易云 weapi 登录加密
   qr_flutter: ^4.1.0              # 登录二维码渲染
+  flutter_inappwebview: ^6.1.5    # YouTube Music WebView 登录（可读 httpOnly Cookie）
   meta: ^1.15.0
   path: ^1.9.0
 

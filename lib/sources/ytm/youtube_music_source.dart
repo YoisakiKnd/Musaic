@@ -1,3 +1,7 @@
+import 'dart:convert';
+import 'dart:developer' as developer;
+
+import 'package:crypto/crypto.dart' as crypto;
 import 'package:dio/dio.dart';
 
 import '../../core/error/source_exception.dart';
@@ -5,6 +9,7 @@ import '../../core/model/track.dart';
 import '../../core/source/music_source.dart';
 import '../../features/auth/domain/auth_capability.dart';
 import '../../features/auth/domain/auth_result.dart';
+import '../../features/auth/domain/source_account.dart';
 import '../../features/lyrics/domain/lyric_bundle.dart';
 
 /// YouTube Music 渠道（V1 匿名能力：搜索 / 播放直链）。
@@ -185,14 +190,137 @@ class YouTubeMusicSource extends MusicSource {
   @override
   Future<LyricBundle?> fetchLyrics(Track track) async => null;
 
-  // ---------- 账号能力 ----------
+  // ---------- 账号能力（WebView 登录 + Cookie 凭据） ----------
+
+  /// 用 WebView 提取的 Cookie 构建账号：
+  /// 校验方式为调 youtubei get_account_info 拿昵称；失败视为未登录。
+  Future<SourceAccount> loginWithCookies(
+    Map<String, String> cookies,
+  ) async {
+    final info = await fetchAccountSummary(cookies: cookies);
+    if (info == null) {
+      throw NetworkSourceException('未检测到有效登录态', sourceId: sourceId);
+    }
+    return SourceAccount.markNow(
+      sourceId: sourceId,
+      status: AccountStatus.loggedIn,
+      userId: info.$2,
+      nickname: info.$1,
+    );
+  }
+
+  /// youtubei get_account_info：返回 (昵称, accountId)；未登录返回 null。
+  Future<(String, String?)?> fetchAccountSummary({
+    Map<String, String>? cookies,
+  }) async {
+    final cookieMap = cookies ?? await credentialReader();
+    final sapisid = cookieMap['SAPISID'] ??
+        cookieMap['__Secure-1PAPISID'] ??
+        cookieMap['__Secure-3PAPISID'] ??
+        '';
+    final psid = cookieMap['__Secure-1PSID'] ??
+        cookieMap['__Secure-3PSID'] ??
+        cookieMap['SID'] ??
+        '';
+    if (sapisid.isEmpty || psid.isEmpty) return null;
+
+    const origin = 'https://music.youtube.com';
+    final millis = DateTime.now().millisecondsSinceEpoch;
+    // SAPISIDHASH 授权头
+    final hashInput = '$millis $sapisid $origin';
+    final hash = crypto.sha1
+        .convert(const AsciiEncoder().convert(hashInput))
+        .toString();
+    final authorization = 'SAPISIDHASH ${millis}_$hash';
+
+    try {
+      final response = await _dio.post<dynamic>(
+        '/youtubei/v1/account/account_menu',
+        queryParameters: <String, dynamic>{'prettyPrint': false},
+        options: Options(
+          headers: <String, String>{
+            'Authorization': authorization,
+            'X-Origin': origin,
+            'X-Youtube-Client-Name': '52',
+            'X-Youtube-Client-Version': _webRemixVersion,
+            'Cookie': cookieMap.entries
+                .map((e) => '${e.key}=${e.value}')
+                .join('; '),
+          },
+        ),
+        data: <String, dynamic>{
+          'context': <String, dynamic>{
+            'client': <String, dynamic>{
+              'clientName': 'WEB_REMIX',
+              'clientVersion': _webRemixVersion,
+              'hl': 'zh-CN',
+              'gl': 'CN',
+            },
+          },
+        },
+      );
+      final data = response.data;
+      // 账号名在 actions[0].toggleMenuServiceItemRenderer... 处层级较深，做宽松提取
+      final nickname = _deepFindString(data, 'accountName') ??
+          _deepFindString(data, 'text');
+      final accountid = _deepFindString(data, 'accountId');
+      if (nickname == null || nickname.isEmpty) return null;
+      return (nickname, accountid);
+    } on DioException catch (e) {
+      developer.log(
+        'account_menu 失败: status=${e.response?.statusCode}',
+        name: 'MusaicYTM',
+      );
+      return null;
+    }
+  }
+
+  /// 在任意嵌套 JSON 中递归找第一个指定键的字符串值。
+  String? _deepFindString(dynamic node, String key) {
+    if (node is Map<String, dynamic>) {
+      final value = node[key];
+      if (value is String && value.isNotEmpty) return value;
+      for (final child in node.values) {
+        final found = _deepFindString(child, key);
+        if (found != null) return found;
+      }
+    } else if (node is List<dynamic>) {
+      for (final child in node) {
+        final found = _deepFindString(child, key);
+        if (found != null) return found;
+      }
+    }
+    return null;
+  }
 
   @override
-  Future<AuthResult> login(Map<String, String> credentials) async =>
-      const AuthFailure(
-        reason: AuthFailureReason.unsupported,
-        message: 'YouTube Music 匿名模式无需登录',
+  Future<AuthResult> login(Map<String, String> credentials) async {
+    try {
+      final account = await loginWithCookies(credentials);
+      return AuthSuccess(account, credentials: credentials);
+    } on SourceException {
+      return const AuthFailure(
+        reason: AuthFailureReason.invalidCredentials,
+        message: 'Cookie 无效或已过期，请在登录页重新登录',
       );
+    }
+  }
+
+  @override
+  Future<bool> checkSession() async {
+    try {
+      return await fetchAccountSummary() != null;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  @override
+  Future<SourceAccount?> refreshAccountInfo(SourceAccount account) async {
+    final info = await fetchAccountSummary();
+    if (info == null) return null;
+    return account.copyWith(nickname: info.$1);
+  }
 
   // ---------- 解析 ----------
 

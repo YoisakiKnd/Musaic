@@ -91,13 +91,51 @@ class QqMusicSource extends MusicSource {
       final songs = _asMap(_asMap(_asMap(_decoded(response))?['data'])?['song'])
           ?['itemlist'] as List<dynamic>?;
       if (songs == null) return const <Track>[];
-      return songs
+      final tracks = songs
           .map(_trackFromSmartboxItem)
           .whereType<Track>()
           .toList(growable: false);
+      // smartbox 不带封面：并发补拉专辑图（失败静默，不阻塞搜索）
+      return _enrichCovers(tracks);
     } on DioException {
       throw NetworkSourceException('搜索失败：网络异常', sourceId: sourceId);
     }
+  }
+
+  /// smartbox 结果补专辑封面（songmid → 单曲详情 → album mid → 封面 URL）。
+  Future<List<Track>> _enrichCovers(List<Track> tracks) async {
+    final enriched = await Future.wait(
+      tracks.map((track) async {
+        try {
+          final songMid = track.sourceData?['songmid'] as String? ?? track.id;
+          final response = await _dio.get<dynamic>(
+            'https://c.y.qq.com/v8/fcg-bin/fcg_play_single_song.fcg',
+            queryParameters: <String, dynamic>{
+              'songmid': songMid,
+              'platform': 'yqq',
+              'format': 'json',
+            },
+            options: Options(responseType: ResponseType.plain),
+          );
+          final list = _decoded(response) as List<dynamic>? ??
+              _asMap(_decoded(response))?['data'] as List<dynamic>?;
+          if (list == null || list.isEmpty) return track;
+          final albumMid =
+              _asMap(_asMap(list.first)?['album'])?['mid'] as String?;
+          if (albumMid == null || albumMid.isEmpty) return track;
+          return track.copyWith(
+            album: _asMap(_asMap(list.first)?['album'])?['name'] as String? ??
+                track.album,
+            coverUrl:
+                'https://y.gtimg.cn/music/photo_new/T002R300x300M000$albumMid.jpg',
+          );
+        } catch (_) {
+          return track;
+        }
+      }),
+      eagerError: false,
+    );
+    return enriched;
   }
 
   @override
@@ -111,39 +149,43 @@ class QqMusicSource extends MusicSource {
       throw UnavailableStreamException('曲目缺少渠道标识', sourceId: sourceId);
     }
     String uin = '0';
+    String musickey = '';
+    bool loggedIn = false;
     try {
       final credentials = await credentialReader();
       uin = credentials['uin'] ?? credentials['qqmusic_u'] ?? '0';
+      musickey = credentials['musickey'] ?? credentials['qqmusic_key'] ?? '';
+      loggedIn = uin.isNotEmpty && uin != '0' && musickey.isNotEmpty;
     } catch (_) {}
-    final guid = _deviceGuid;
+    final comm = _androidComm(
+      tmeLoginType: 2,
+      uin: loggedIn ? uin : null,
+      musickey: loggedIn ? musickey : null,
+    );
     try {
-      final response = await _dio.post<dynamic>(
-        'https://u.y.qq.com/cgi-bin/musicu.fcg',
-        data: <String, dynamic>{
-          'req': <String, dynamic>{
-            'module': 'vkey.GetVkeyServer',
-            'method': 'CgiGetVkey',
-            'param': <String, dynamic>{
-              'guid': guid,
-              'songmid': <String>[songMid],
-              'songtype': <int>[0],
-              'uin': uin,
-              'loginflag': 1,
-              'platform': '20',
-            },
-          },
+      final data = await _musicuCgi(
+        module: 'vkey.GetVkeyServer',
+        method: 'CgiGetVkey',
+        param: <String, dynamic>{
+          'guid': _deviceGuid,
+          'songmid': <String>[songMid],
+          'songtype': <int>[0],
+          'uin': uin,
+          'loginflag': 1,
+          'platform': '20',
         },
-        options: Options(responseType: ResponseType.plain),
+        comm: comm,
       );
-      final data = _asMap(_decoded(response));
-      final midurlInfo =
-          _asMap(data?['data'])?['midurlinfo'] as List<dynamic>?;
-      final item =
-          midurlInfo == null || midurlInfo.isEmpty ? null : _asMap(midurlInfo.first);
+      final midurlInfo = data?['midurlinfo'] as List<dynamic>?;
+      final item = midurlInfo == null || midurlInfo.isEmpty
+          ? null
+          : _asMap(midurlInfo.first);
       final purl = item?['purl'] as String? ?? '';
       if (purl.isEmpty) {
         throw UnavailableStreamException(
-          '该曲目暂不可播放（可能需要会员）',
+          loggedIn
+              ? '受版权方限制，该曲目暂不可播放（可能需要会员）'
+              : '该曲目需要登录后播放，请先在「设置 → 账号管理」登录 QQ 音乐',
           sourceId: sourceId,
         );
       }
@@ -161,6 +203,70 @@ class QqMusicSource extends MusicSource {
     }
   }
 
+  // ---------- musicu.fcg 统一调用 ----------
+
+  /// Android 端 comm 公共参数（对照 luren-dc/QQMusicApi build_comm）。
+  ///
+  /// 登录交换时 QIMEI 允许为空串；已登录调用带 qq + authst(musickey)。
+  Map<String, dynamic> _androidComm({
+    required int tmeLoginType,
+    String? uin,
+    String? musickey,
+  }) {
+    return <String, dynamic>{
+      'ct': 11,
+      'cv': 14090008,
+      'v': 14090008,
+      'chid': '10003505',
+      if (uin != null && uin.isNotEmpty) 'qq': uin,
+      if (musickey != null && musickey.isNotEmpty) 'authst': musickey,
+      'tmeAppID': 'qqmusic',
+      'tmeLoginType': tmeLoginType,
+      'QIMEI': '',
+      'QIMEI36': '',
+      'OpenUDID': _deviceGuid,
+      'udid': _deviceGuid,
+      'OpenUDID2': _deviceGuid,
+      'uid': _sessionUid,
+      'sid': _sessionSid,
+      'aid': _androidId,
+      'os_ver': '14',
+      'phonetype': 'Musaic',
+      'devicelevel': '34',
+      'newdevicelevel': '34',
+      'rom': 'Musaic/android_14',
+    };
+  }
+
+  /// musicu.fcg 统一 POST；返回 req.data（业务码异常仅记日志）。
+  Future<Map<String, dynamic>?> _musicuCgi({
+    required String module,
+    required String method,
+    required Map<String, dynamic> param,
+    Map<String, dynamic>? comm,
+  }) async {
+    final response = await _dio.post<dynamic>(
+      'https://u.y.qq.com/cgi-bin/musicu.fcg',
+      data: <String, dynamic>{
+        if (comm != null) 'comm': comm,
+        'req': <String, dynamic>{
+          'module': module,
+          'method': method,
+          'param': param,
+        },
+      },
+      options: Options(responseType: ResponseType.plain),
+    );
+    final outer = _asMap(_decoded(response));
+    final req = _asMap(outer)?['req'];
+    final code = _asMap(req)?['code'] as int? ?? -1;
+    if (code != 0 && code != 2000) {
+      developer.log('$module.$method 业务码 $code', name: 'MusaicQQ');
+    }
+    final data = _asMap(req)?['data'];
+    return data is Map<String, dynamic> ? data : null;
+  }
+
   /// 稳定设备标识（登录态下同一设备复用）。
   String get _deviceGuid =>
       _guidCache ??= List.generate(
@@ -169,6 +275,19 @@ class QqMusicSource extends MusicSource {
       ).join();
 
   String? _guidCache;
+
+  String get _sessionUid => _sessionUidCache ??= _randomHex(16);
+  String get _sessionSid => _sessionSidCache ??= _randomHex(16);
+  String get _androidId => _androidIdCache ??= _randomHex(16);
+
+  String? _sessionUidCache;
+  String? _sessionSidCache;
+  String? _androidIdCache;
+
+  String _randomHex(int length) => List.generate(
+        length,
+        (_) => '0123456789abcdef'[_random.nextInt(16)],
+      ).join();
 
   @override
   Future<LyricBundle?> fetchLyrics(Track track) async {
@@ -206,9 +325,15 @@ class QqMusicSource extends MusicSource {
     }
   }
 
-  // ---------- 真实登录（ptlogin 扫码 / QQ 互联 OAuth） ----------
+  // ---------- 真实登录（QQ音乐扫码：QQ / 微信双通道） ----------
+  //
+  // QQ 通道：ptlogin 二维码（手机 QQ 扫码）→ check_sig → oauth authorize →
+  //          musicu.fcg QQConnectLogin.QQLogin 凭据交换；
+  // 微信通道：open.weixin.qq.com 二维码（微信扫码）→ 长轮询 code →
+  //          musicu.fcg music.login.LoginServer.Login 凭据交换。
+  // 两通道均对照 luren-dc/QQMusicApi 参考实现。
 
-  /// 步骤 1：获取登录二维码（PNG 字节 + qrsig 会话标识）。
+  /// 创建 QQ 扫码登录会话（PNG 字节 + qrsig）。
   Future<({Uint8List png, String qrsig})> createQrLogin() async {
     final response = await _dio.get<List<int>>(
       'https://ssl.ptlogin2.qq.com/ptqrshow',
@@ -234,15 +359,58 @@ class QqMusicSource extends MusicSource {
     final png = Uint8List.fromList(response.data ?? const <int>[]);
     final qrsig = _cookieFrom(response, 'qrsig');
     if (png.isEmpty || qrsig == null || qrsig.isEmpty) {
+      developer.log(
+        'ptqrshow 失败: status=${response.statusCode} pngLen=${png.length}',
+        name: 'MusaicQQ',
+      );
       throw NetworkSourceException('获取登录二维码失败', sourceId: sourceId);
     }
     return (png: png, qrsig: qrsig);
   }
 
-  /// 步骤 2：轮询二维码状态。
-  ///
-  /// 未扫码 66 → waiting；已扫待确认 67 → scanned；失效 65 → expired；
-  /// 成功 0 → 继续步骤 3-6 换取 QQ 音乐凭据后返回 success。
+  /// 创建微信扫码登录会话（JPEG 字节 + uuid）。
+  Future<({Uint8List png, String uuid})> createWxQrLogin() async {
+    final page = await _dio.get<String>(
+      'https://open.weixin.qq.com/connect/qrconnect',
+      queryParameters: <String, dynamic>{
+        'appid': 'wx48db31d50e334801',
+        'redirect_uri':
+            'https://y.qq.com/portal/wx_redirect.html?login_type=2'
+                '&surl=https://y.qq.com/',
+        'response_type': 'code',
+        'scope': 'snsapi_login',
+        'state': 'STATE',
+        'href':
+            'https://y.qq.com/mediastyle/music_v17/src/css/popup_wechat.css'
+                '#wechat_redirect',
+      },
+      options: Options(responseType: ResponseType.plain),
+    );
+    final html = page.data ?? '';
+    final match = RegExp('uuid=(.+?)"').firstMatch(html);
+    final uuid = match?.group(1);
+    if (uuid == null || uuid.isEmpty) {
+      developer.log('微信二维码 uuid 提取失败 len=${html.length}',
+          name: 'MusaicQQ');
+      throw NetworkSourceException('获取微信二维码失败', sourceId: sourceId);
+    }
+    final img = await _dio.get<List<int>>(
+      'https://open.weixin.qq.com/connect/qrcode/$uuid',
+      options: Options(
+        responseType: ResponseType.bytes,
+        headers: <String, String>{
+          'Referer': 'https://open.weixin.qq.com/connect/qrconnect',
+        },
+      ),
+    );
+    final png = Uint8List.fromList(img.data ?? const <int>[]);
+    if (png.isEmpty) {
+      throw NetworkSourceException('获取微信二维码失败', sourceId: sourceId);
+    }
+    return (png: png, uuid: uuid);
+  }
+
+  /// 轮询 QQ 二维码状态：66 等待 / 67 已扫 / 65 过期 / 0 成功。
   Future<QrLoginPoll> pollQrLogin(String qrsig) async {
     final ts = DateTime.now().millisecondsSinceEpoch;
     final response = await _dio.get<String>(
@@ -276,6 +444,8 @@ class QqMusicSource extends MusicSource {
     final body = response.data ?? '';
     final args = _parsePtuiCb(body);
     if (args == null || args.isEmpty) {
+      developer.log('ptqrlogin 响应异常: ${body.trim().substring(0, body.trim().length.clamp(0, 120))}',
+          name: 'MusaicQQ');
       throw NetworkSourceException('二维码状态解析失败', sourceId: sourceId);
     }
     final code = int.tryParse(args[0]) ?? -1;
@@ -287,15 +457,17 @@ class QqMusicSource extends MusicSource {
       case 65:
         return const QrLoginPollExpired();
       case 0:
-        if (args.length < 3) {
-          return const QrLoginPollExpired();
-        }
-        final sigx = RegExp(r'(?:\?|&)ptsigx=(.+?)&s_url').firstMatch(args[2]);
-        final uin = RegExp(r'(?:\?|&)uin=(.+?)&service').firstMatch(args[2]);
+        if (args.length < 3) return const QrLoginPollExpired();
+        final sigx =
+            RegExp(r'(?:\?|&)ptsigx=(.+?)&s_url').firstMatch(args[2]);
+        final uin =
+            RegExp(r'(?:\?|&)uin=(.+?)&service').firstMatch(args[2]);
         if (sigx == null || uin == null) {
+          developer.log('回调参数解析失败: ${args[2].substring(0, args[2].length.clamp(0, 200))}',
+              name: 'MusaicQQ');
           throw NetworkSourceException('登录参数解析失败', sourceId: sourceId);
         }
-        return _exchangeCredential(
+        return _exchangeQqCredential(
           uin: uin.group(1)!,
           sigx: sigx.group(1)!,
         );
@@ -304,12 +476,68 @@ class QqMusicSource extends MusicSource {
     }
   }
 
-  /// 步骤 3-6：check_sig → oauth authorize → musicu.fcg 凭据交换。
-  Future<QrLoginPoll> _exchangeCredential({
+  /// 轮询微信二维码状态（长轮询，单次最长约 25s）。
+  ///
+  /// 408 等待 / 405 已确认（含 code）/ 404 过期 / 402 已取消。
+  Future<QrLoginPoll> pollWxQrLogin(String uuid) async {
+    final Response<String> response;
+    try {
+      response = await _dio.get<String>(
+        'https://lp.open.weixin.qq.com/connect/l/qrconnect',
+        queryParameters: <String, dynamic>{
+          'uuid': uuid,
+          '_': '${DateTime.now().millisecondsSinceEpoch}',
+        },
+        options: Options(
+          responseType: ResponseType.plain,
+          headers: <String, String>{
+            'Referer': 'https://open.weixin.qq.com/',
+          },
+        ),
+      );
+    } on DioException catch (e) {
+      if (e.type == DioExceptionType.receiveTimeout ||
+          e.type == DioExceptionType.connectionTimeout) {
+        return const QrLoginPollWaiting(); // 长轮询超时 = 继续等待
+      }
+      rethrow;
+    }
+    final body = response.data ?? '';
+    final match = RegExp(
+      r"window\.wx_errcode=(\d+);window\.wx_code='([^']*)'",
+    ).firstMatch(body);
+    if (match == null) {
+      developer.log('微信轮询响应异常: ${body.substring(0, body.length.clamp(0, 120))}',
+          name: 'MusaicQQ');
+      return const QrLoginPollWaiting();
+    }
+    final errcode = int.tryParse(match.group(1)!) ?? -1;
+    final wxCode = match.group(2) ?? '';
+    switch (errcode) {
+      case 408:
+      case 409:
+        return const QrLoginPollWaiting();
+      case 405:
+        if (wxCode.isEmpty) {
+          throw NetworkSourceException('微信授权失败（code 为空）',
+              sourceId: sourceId);
+        }
+        return _exchangeWxCredential(wxCode);
+      case 404:
+        return const QrLoginPollExpired();
+      case 402:
+        throw NetworkSourceException('微信授权被取消', sourceId: sourceId);
+      default:
+        return const QrLoginPollWaiting();
+    }
+  }
+
+  /// QQ 通道凭据交换：check_sig → oauth authorize → QQLogin。
+  Future<QrLoginPoll> _exchangeQqCredential({
     required String uin,
     required String sigx,
   }) async {
-    // 步骤 3：check_sig，换取 p_skey 等域 Cookie
+    // 步骤 1：check_sig，换取 p_skey 等域 Cookie
     final checkResp = await _dio.get<dynamic>(
       'https://ssl.ptlogin2.graph.qq.com/check_sig',
       queryParameters: <String, dynamic>{
@@ -342,15 +570,19 @@ class QqMusicSource extends MusicSource {
       ),
     );
     final authCookies = _cookiesFrom(checkResp);
-    final pskey = authCookies['p_skey'] ??
-        authCookies['p-skey'] ??
-        authCookies['pskey'];
+    developer.log(
+      'check_sig status=${checkResp.statusCode} '
+      'cookies=${authCookies.keys.toList()}',
+      name: 'MusaicQQ',
+    );
+    final pskey =
+        authCookies['p_skey'] ?? authCookies['p-skey'] ?? authCookies['pskey'];
     if (pskey == null || pskey.isEmpty) {
-      developer.log('check_sig 未返回 p_skey', name: 'MusaicQQ');
-      throw NetworkSourceException('QQ 授权确认失败，请重试', sourceId: sourceId);
+      throw NetworkSourceException('QQ 授权确认失败（未取得 p_skey），请重试',
+          sourceId: sourceId);
     }
 
-    // 步骤 4：oauth authorize 换取授权 code
+    // 步骤 2：oauth authorize 换取授权 code
     final cookieHeader = authCookies.entries
         .map((e) => '${e.key}=${e.value}')
         .join('; ');
@@ -371,6 +603,7 @@ class QqMusicSource extends MusicSource {
         'openapi': '1010_1030',
         'g_tk': '${_hash33(pskey, 5381)}',
         'auth_time': '${DateTime.now().millisecondsSinceEpoch}',
+        'ui': '${_randomHex(8).substring(0, 8)}-musaic',
       },
       options: Options(
         contentType: Headers.formUrlEncodedContentType,
@@ -384,91 +617,148 @@ class QqMusicSource extends MusicSource {
       ),
     );
     final location = authResp.headers.value('location') ?? '';
+    developer.log('authorize status=${authResp.statusCode} '
+        'location=${location.substring(0, location.length.clamp(0, 120))}',
+        name: 'MusaicQQ');
     final codeMatch =
         RegExp(r'(?<=code=)(.+?)(?=&)').firstMatch(location);
     final authCode = codeMatch?.group(1);
     if (authCode == null || authCode.isEmpty) {
-      developer.log('oauth authorize 未返回 code: $location', name: 'MusaicQQ');
       throw NetworkSourceException('QQ 授权失败，请重新扫码', sourceId: sourceId);
     }
 
-    // 步骤 5：musicu.fcg QQConnectLogin.QQLogin 换取音乐凭据
-    final loginResp = await _dio.post<dynamic>(
-      'https://u.y.qq.com/cgi-bin/musicu.fcg',
-      data: <String, dynamic>{
-        'comm': <String, dynamic>{'tmeLoginType': 2},
-        'req': <String, dynamic>{
-          'module': 'QQConnectLogin.LoginServer',
-          'method': 'QQLogin',
-          'param': <String, dynamic>{'code': authCode},
-        },
-      },
-      options: Options(responseType: ResponseType.plain),
+    // 步骤 3：musicu.fcg QQConnectLogin.QQLogin（完整 Android comm）
+    final data = await _musicuCgi(
+      module: 'QQConnectLogin.LoginServer',
+      method: 'QQLogin',
+      param: <String, dynamic>{'code': authCode},
+      comm: _androidComm(tmeLoginType: 2),
     );
-    final loginData = _asMap(_decoded(loginResp));
-    final inner = _asMap(loginData)?['req'];
-    final body = _asMap(inner)?['data'];
-    final musicid = body?['musicid'];
-    final musickey = body?['musickey'] as String?;
-    final encryptUin = body?['encryptUin'] as String? ??
-        body?['strMusicid']?.toString() ??
-        '';
+    return _credentialFromLoginData(data, fallbackNickname: null);
+  }
+
+  /// 微信通道凭据交换：music.login.LoginServer/Login。
+  Future<QrLoginPoll> _exchangeWxCredential(String wxCode) async {
+    final data = await _musicuCgi(
+      module: 'music.login.LoginServer',
+      method: 'Login',
+      param: <String, dynamic>{
+        'code': wxCode,
+        'strAppid': 'wx48db31d50e334801',
+      },
+      comm: _androidComm(tmeLoginType: 1),
+    );
+    return _credentialFromLoginData(data, fallbackNickname: null);
+  }
+
+  /// 从凭据交换响应提取账号；成功后顺带拉取昵称与会员状态。
+  Future<QrLoginPoll> _credentialFromLoginData(
+    Map<String, dynamic>? data, {
+    required String? fallbackNickname,
+  }) async {
+    final musicid = data?['musicid'];
+    final musickey = data?['musickey'] as String?;
+    final encryptUin = data?['encryptUin'] as String? ?? '';
     if (musicid == null ||
+        musicid.toString().isEmpty ||
         musickey == null ||
-        musickey.isEmpty ||
-        musicid.toString().isEmpty) {
+        musickey.isEmpty) {
+      developer.log('凭据交换响应异常: ${data?.keys.toList()}',
+          name: 'MusaicQQ');
       throw NetworkSourceException('凭据交换失败，请重新扫码', sourceId: sourceId);
     }
+    final credentials = <String, String>{
+      'uin': musicid.toString(),
+      'qqmusic_u': musicid.toString(),
+      'musickey': musickey,
+      'qqmusic_key': musickey,
+      'qm_keyst': musickey,
+      if (encryptUin.isNotEmpty) 'euin': encryptUin,
+    };
 
-    // 步骤 6：拉取昵称（失败不阻塞登录）
+    // 拉取昵称（会员状态由账号页刷新时展示；失败不阻塞登录）
     String? nickname;
     try {
-      nickname = await _fetchNickname(
-        musicid: musicid.toString(),
-        musickey: musickey,
-      );
+      final info = await fetchAccountSummary(credentials: credentials);
+      nickname = info?.nickname;
     } catch (_) {}
 
     return QrLoginPoll.success(
-      credentials: <String, String>{
-        'uin': musicid.toString(),
-        'qqmusic_u': musicid.toString(),
-        'qqmusic_key': musickey,
-        'qm_keyst': musickey,
-        if (encryptUin.isNotEmpty) 'euin': encryptUin,
-      },
-      nickname: nickname,
+      credentials: credentials,
+      nickname: nickname ?? fallbackNickname,
     );
   }
 
-  Future<String?> _fetchNickname({
-    required String musicid,
-    required String musickey,
+  /// 拉取 QQ 音乐账号昵称与会员状态。
+  Future<({String nickname, String? vipLabel})?>
+      fetchAccountSummary({
+    Map<String, String>? credentials,
   }) async {
-    final response = await _dio.get<dynamic>(
-      'https://c.y.qq.com/rfc/cgi-bin/musicu.fcg',
-      queryParameters: <String, dynamic>{
-        'data': jsonEncode(<String, dynamic>{
-          'req': <String, dynamic>{
-            'module': 'music.userInfo.UserInfoServer',
-            'method': 'GetUserInfo',
-            'param': <String, dynamic>{},
-          },
-        }),
-      },
-      options: Options(
-        responseType: ResponseType.plain,
-        headers: <String, String>{
-          'Cookie': 'uin=$musicid; qqmusic_u=$musicid; '
-              'qqmusic_key=$musickey; qm_keyst=$musickey',
-        },
-      ),
+    Map<String, String> cred;
+    if (credentials != null) {
+      cred = credentials;
+    } else {
+      cred = await credentialReader();
+    }
+    final uin = cred['uin'] ?? cred['qqmusic_u'] ?? '';
+    final musickey = cred['musickey'] ?? cred['qqmusic_key'] ?? '';
+    final euin = cred['euin'] ?? '';
+    if (uin.isEmpty || musickey.isEmpty) return null;
+    final comm = _androidComm(
+      tmeLoginType: 2,
+      uin: uin,
+      musickey: musickey,
     );
-    final data = _asMap(_decoded(response));
-    final nick = _asMap(
-          _asMap(_asMap(data)?['req'])?['data'],
-        )?['nick'] as String?;
-    return (nick == null || nick.isEmpty) ? null : nick;
+
+    String nickname = '';
+    try {
+      final header = await _musicuCgi(
+        module: 'music.UnifiedHomepage.UnifiedHomepageSrv',
+        method: 'GetHomepageHeader',
+        param: <String, dynamic>{
+          'uin': euin.isNotEmpty ? euin : uin,
+          'IsQueryTabDetail': 1,
+        },
+        comm: comm,
+      );
+      nickname =
+          (_asMap(header?['Info'])?['BaseInfo']?['NickName'] as String?) ?? '';
+    } catch (_) {}
+
+    String? vipLabel;
+    try {
+      final vip = await _musicuCgi(
+        module: 'VipLogin.VipLoginInter',
+        method: 'vip_login_base',
+        param: <String, dynamic>{},
+        comm: comm,
+      );
+      final identity = _asMap(vip)?['VipIdentity'] ?? vip;
+      final isVip = (identity?['vip'] as num? ?? 0) > 0;
+      final isHuge = (identity?['HugeVip'] as num? ?? 0) > 0;
+      final level = identity?['level'] as num?;
+      if (isHuge) {
+        vipLabel = level != null ? '豪华绿钻 Lv$level' : '豪华绿钻';
+      } else if (isVip) {
+        vipLabel = level != null ? '绿钻 Lv$level' : '绿钻会员';
+      }
+    } catch (_) {}
+
+    if (nickname.isEmpty && vipLabel == null) return null;
+    return (
+      nickname: nickname.isEmpty ? 'QQ 音乐用户' : nickname,
+      vipLabel: vipLabel,
+    );
+  }
+
+  @override
+  Future<SourceAccount?> refreshAccountInfo(SourceAccount account) async {
+    final info = await fetchAccountSummary();
+    if (info == null) return null;
+    return account.copyWith(
+      nickname: info.nickname,
+      vipLabel: info.vipLabel,
+    );
   }
 
   @override
@@ -502,14 +792,8 @@ class QqMusicSource extends MusicSource {
   @override
   Future<bool> checkSession() async {
     try {
-      final credentials = await credentialReader();
-      final key = credentials['qqmusic_key'];
-      final uin = credentials['uin'] ?? credentials['qqmusic_u'];
-      if (key == null || key.isEmpty || uin == null || uin.isEmpty) {
-        return false;
-      }
-      final nickname = await _fetchNickname(musicid: uin, musickey: key);
-      return nickname != null;
+      final info = await fetchAccountSummary();
+      return info != null;
     } catch (_) {
       return false;
     }

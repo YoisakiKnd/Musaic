@@ -1,5 +1,6 @@
 import '../../features/auth/domain/auth_capability.dart';
 import '../../features/auth/domain/auth_result.dart';
+import '../../features/auth/domain/source_account.dart';
 import '../../features/lyrics/domain/lyric_bundle.dart';
 import '../model/track.dart';
 
@@ -67,4 +68,9 @@ abstract class MusicSource {
 
   /// 校验已存凭据是否仍然有效（供启动时后台校验）。
   Future<bool> checkSession() async => false;
+
+  /// 刷新账号资料（昵称 / 会员状态）；不支持或未登录时返回 null。
+  Future<SourceAccount?> refreshAccountInfo(SourceAccount account) async {
+    return null;
+  }
 }

@@ -8,6 +8,7 @@ import '../../domain/source_account.dart';
 import 'kugou_login_page.dart';
 import 'netease_login_page.dart';
 import 'qq_music_login_page.dart';
+import 'ytmusic_login_page.dart';
 
 /// 账号管理（设置二级页）：各渠道状态一览，点进各渠道独立登录页。
 class AccountManagePage extends ConsumerWidget {
@@ -124,8 +125,46 @@ class _ChannelEntry extends ConsumerWidget {
                 )
               : null,
         ),
-        title: Text(source.displayName,
-            style: const TextStyle(fontWeight: FontWeight.w600)),
+        title: Row(
+          children: [
+            Flexible(
+              child: Text(
+                account.isLoggedIn && account.nickname != null
+                    ? account.nickname!
+                    : source.displayName,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(fontWeight: FontWeight.w600),
+              ),
+            ),
+            if (account.isLoggedIn && account.nickname != null) ...[
+              const SizedBox(width: 6),
+              Text(source.displayName,
+                  style: TextStyle(
+                      fontSize: 11,
+                      color: scheme.onSurface.withValues(alpha: 0.45))),
+            ],
+            if (account.vipLabel != null) ...[
+              const SizedBox(width: 6),
+              Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                decoration: BoxDecoration(
+                  gradient: AppTokens.brandGradient,
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: Text(
+                  account.vipLabel!,
+                  style: const TextStyle(
+                    fontSize: 10,
+                    fontWeight: FontWeight.w700,
+                    color: Colors.white,
+                  ),
+                ),
+              ),
+            ],
+          ],
+        ),
         subtitle: Row(
           children: [
             Container(
@@ -146,18 +185,82 @@ class _ChannelEntry extends ConsumerWidget {
           ],
         ),
         trailing: account.isLoggedIn
-            ? IconButton(
-                tooltip: '登出',
-                icon: Icon(Icons.logout_rounded,
-                    size: 20,
-                    color: scheme.onSurface.withValues(alpha: 0.6)),
-                onPressed: () =>
-                    ref.read(accountsProvider.notifier).logout(sourceId),
+            ? Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  IconButton(
+                    tooltip: '刷新资料',
+                    icon: Icon(Icons.refresh_rounded,
+                        size: 20,
+                        color: scheme.onSurface.withValues(alpha: 0.6)),
+                    onPressed: () => _refreshAccount(context, ref, sourceId),
+                  ),
+                  IconButton(
+                    tooltip: '退出账号',
+                    icon: Icon(Icons.logout_rounded,
+                        size: 20,
+                        color: scheme.onSurface.withValues(alpha: 0.6)),
+                    onPressed: () async {
+                      final confirmed = await showDialog<bool>(
+                        context: context,
+                        builder: (dialogContext) => AlertDialog(
+                          title: Text('退出 ${source.displayName}？'),
+                          content:
+                              const Text('将删除本机保存的登录凭据。'),
+                          actions: [
+                            TextButton(
+                              onPressed: () =>
+                                  Navigator.of(dialogContext).pop(false),
+                              child: const Text('取消'),
+                            ),
+                            FilledButton(
+                              style: FilledButton.styleFrom(
+                                  backgroundColor: AppTokens.accent),
+                              onPressed: () =>
+                                  Navigator.of(dialogContext).pop(true),
+                              child: const Text('退出'),
+                            ),
+                          ],
+                        ),
+                      );
+                      if (confirmed == true) {
+                        await ref
+                            .read(accountsProvider.notifier)
+                            .logout(sourceId);
+                      }
+                    },
+                  ),
+                ],
               )
             : const Icon(Icons.chevron_right_rounded),
         onTap: () => _openChannelLogin(context, sourceId, account),
       ),
     );
+  }
+
+  Future<void> _refreshAccount(
+    BuildContext context,
+    WidgetRef ref,
+    String sourceId,
+  ) async {
+    try {
+      final updated =
+          await ref.read(accountsProvider.notifier).refreshAccount(sourceId);
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(updated == null
+              ? '该渠道暂不支持刷新资料'
+              : '已更新：${updated.nickname ?? ''}'
+                  '${updated.vipLabel != null ? ' · ${updated.vipLabel}' : ''}'),
+        ),
+      );
+    } catch (_) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('刷新失败，请检查网络或重新登录')),
+      );
+    }
   }
 
   void _openChannelLogin(
@@ -185,7 +288,11 @@ class _ChannelEntry extends ConsumerWidget {
           ),
         );
       case 'ytmusic':
-        _showComingSoon(context, 'YouTube Music', 'Google 账号授权');
+        Navigator.of(context).push(
+          MaterialPageRoute<void>(
+            builder: (_) => const YtmusicLoginPage(),
+          ),
+        );
       default:
         _showComingSoon(context, sourceId, '账号登录');
     }

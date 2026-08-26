@@ -14,6 +14,7 @@ import '../../features/auth/domain/auth_capability.dart';
 import '../../features/auth/domain/auth_result.dart';
 import '../../features/auth/domain/qr_login_poll.dart';
 import '../../features/auth/domain/source_account.dart';
+import '../../core/utils/url_utils.dart';
 import '../../features/lyrics/domain/lrc_parser.dart';
 import '../../features/lyrics/domain/lyric_bundle.dart';
 
@@ -130,8 +131,12 @@ class KugouSource extends MusicSource {
       final status = data?['status'] as int? ?? -1;
       final url = data?['url'] as String?;
       if (status != 1 || url == null || url.isEmpty) {
+        // 分级提示：未登录引导登录；已登录则说明版权限制
+        final loggedIn = await _hasCredentials();
         throw UnavailableStreamException(
-          '该曲目需要版权授权，暂不可播放',
+          loggedIn
+              ? '受版权方限制，该曲目暂不可播放'
+              : '该曲目需要版权授权，请先在「设置 → 账号管理」登录酷狗后尝试播放',
           sourceId: sourceId,
         );
       }
@@ -340,6 +345,28 @@ class KugouSource extends MusicSource {
     }
   }
 
+  /// 是否已有登录凭据（用于失败提示分级）。
+  Future<bool> _hasCredentials() async {
+    try {
+      final credentials = await credentialReader();
+      return (credentials['token'] ?? '').isNotEmpty &&
+          (credentials['userid'] ?? '').isNotEmpty;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  @override
+  Future<SourceAccount?> refreshAccountInfo(SourceAccount account) async {
+    final credentials = await credentialReader();
+    final token = credentials['token'] ?? '';
+    final userid = credentials['userid'] ?? '';
+    if (token.isEmpty || userid.isEmpty) return null;
+    final nickname = await _fetchNickname(token: token, userid: userid);
+    if (nickname == null) return null;
+    return account.copyWith(nickname: nickname);
+  }
+
   // ---------- 工具 ----------
 
   String _nowSec() =>
@@ -388,7 +415,7 @@ class KugouSource extends MusicSource {
     final albumId = song['AlbumID'] as String?;
     final coverUrl = (image == null || image.isEmpty)
         ? null
-        : image.replaceAll('{size}', '240');
+        : image.replaceAll('{size}', '240').toHttps();
     return Track(
       id: hash,
       sourceId: sourceId,

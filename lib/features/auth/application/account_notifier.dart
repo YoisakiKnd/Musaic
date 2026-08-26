@@ -89,6 +89,20 @@ class AccountNotifier extends Notifier<AccountsState> {
     );
   }
 
+  /// 刷新账号资料（昵称 / 会员状态）。
+  ///
+  /// 渠道不支持时返回 null；网络失败时抛出由 UI 提示。
+  Future<SourceAccount?> refreshAccount(String sourceId) async {
+    final account = state.of(sourceId);
+    if (!account.isLoggedIn) return null;
+    final source = ref.read(sourceRegistryProvider).resolve(sourceId);
+    final updated = await source?.refreshAccountInfo(account);
+    if (updated == null) return null;
+    await ref.read(accountRepositoryProvider).saveAccount(updated);
+    state = state.withAccount(updated);
+    return updated;
+  }
+
   /// 网络层被动捕获到会话过期时调用。
   void markExpiredIfLoggedIn(String sourceId) {
     if (state.of(sourceId).status != AccountStatus.loggedIn) return;

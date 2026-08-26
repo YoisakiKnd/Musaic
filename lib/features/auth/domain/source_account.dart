@@ -13,6 +13,7 @@ class SourceAccount {
     this.userId,
     this.nickname,
     this.avatarUrl,
+    this.vipLabel,
     this.updatedAt,
   });
 
@@ -23,6 +24,7 @@ class SourceAccount {
     String? userId,
     String? nickname,
     String? avatarUrl,
+    String? vipLabel,
   }) {
     return SourceAccount(
       sourceId: sourceId,
@@ -30,6 +32,7 @@ class SourceAccount {
       userId: userId,
       nickname: nickname,
       avatarUrl: avatarUrl,
+      vipLabel: vipLabel,
       updatedAt: DateTime.now(),
     );
   }
@@ -42,6 +45,9 @@ class SourceAccount {
   final String? nickname;
   final String? avatarUrl;
 
+  /// 会员状态标签（如「黑胶SVIP」「豪华绿钻」）；无会员为 null。
+  final String? vipLabel;
+
   /// 状态更新时间（用于启动恢复与调试）；从未更新时为 null。
   final DateTime? updatedAt;
 
@@ -53,6 +59,7 @@ class SourceAccount {
     Object? userId = _unset,
     Object? nickname = _unset,
     Object? avatarUrl = _unset,
+    Object? vipLabel = _unset,
     bool touchUpdatedAt = true,
   }) {
     return SourceAccount(
@@ -64,6 +71,8 @@ class SourceAccount {
       avatarUrl: identical(avatarUrl, _unset)
           ? this.avatarUrl
           : avatarUrl as String?,
+      vipLabel:
+          identical(vipLabel, _unset) ? this.vipLabel : vipLabel as String?,
       updatedAt:
           touchUpdatedAt ? DateTime.now() : updatedAt,
     );
@@ -77,6 +86,7 @@ class SourceAccount {
         if (userId != null) 'userId': userId,
         if (nickname != null) 'nickname': nickname,
         if (avatarUrl != null) 'avatarUrl': avatarUrl,
+        if (vipLabel != null) 'vipLabel': vipLabel,
         if (updatedAt != null) 'updatedAt': updatedAt!.millisecondsSinceEpoch,
       };
 
@@ -89,6 +99,7 @@ class SourceAccount {
       userId: json['userId'] as String?,
       nickname: json['nickname'] as String?,
       avatarUrl: json['avatarUrl'] as String?,
+      vipLabel: json['vipLabel'] as String?,
       updatedAt: rawUpdated == null
           ? null
           : DateTime.fromMillisecondsSinceEpoch(rawUpdated as int),

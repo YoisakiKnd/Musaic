@@ -237,7 +237,21 @@ class _SearchPageState extends ConsumerState<SearchPage> {
             _sectionLabel('搜索渠道'),
             _buildSingleTargetChips(sources),
           ] else ...[
-            _sectionLabel('目标渠道（默认全选）'),
+            Row(
+              children: [
+                Expanded(child: _sectionLabel('搜索渠道')),
+                TextButton(
+                  onPressed: () => setState(() {
+                    _targets = sources.map((s) => s.sourceId).toSet();
+                  }),
+                  child: const Text('全选'),
+                ),
+                TextButton(
+                  onPressed: () => setState(() => _targets = <String>{}),
+                  child: const Text('全部取消'),
+                ),
+              ],
+            ),
             _buildAggregateTargetChips(sources),
             _sectionLabel('结果展示'),
             Wrap(
@@ -336,49 +350,33 @@ class _SearchPageState extends ConsumerState<SearchPage> {
     );
   }
 
-  /// 聚合模式：渠道多选（默认全选）+ 全选/清空快捷操作。
+  /// 聚合模式：渠道多选（默认全选）。
   Widget _buildAggregateTargetChips(List<MusicSource> sources) {
-    final allSelected =
-        sources.isNotEmpty && sources.every((s) => _targets.contains(s.sourceId));
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
+    return Wrap(
+      spacing: 8,
+      runSpacing: 8,
       children: [
-        Wrap(
-          spacing: 8,
-          runSpacing: 8,
-          children: [
-            for (final source in sources)
-              FilterChip(
-                label: Text(source.displayName),
-                selected: _targets.contains(source.sourceId),
-                onSelected: (selected) => setState(() {
-                  selected
-                      ? _targets.add(source.sourceId)
-                      : _targets.remove(source.sourceId);
-                }),
-                selectedColor: AppTokens.accent.withValues(alpha: 0.18),
-                checkmarkColor: AppTokens.accent,
-                labelStyle: TextStyle(
-                  fontSize: 13,
-                  color: _targets.contains(source.sourceId)
-                      ? AppTokens.accent
-                      : null,
-                  fontWeight: _targets.contains(source.sourceId)
-                      ? FontWeight.w600
-                      : FontWeight.w400,
-                ),
-              ),
-          ],
-        ),
-        const SizedBox(height: 4),
-        TextButton(
-          onPressed: () => setState(() {
-            _targets = allSelected
-                ? <String>{}
-                : sources.map((s) => s.sourceId).toSet();
-          }),
-          child: Text(allSelected ? '全部取消' : '全选'),
-        ),
+        for (final source in sources)
+          FilterChip(
+            label: Text(source.displayName),
+            selected: _targets.contains(source.sourceId),
+            onSelected: (selected) => setState(() {
+              selected
+                  ? _targets.add(source.sourceId)
+                  : _targets.remove(source.sourceId);
+            }),
+            selectedColor: AppTokens.accent.withValues(alpha: 0.18),
+            checkmarkColor: AppTokens.accent,
+            labelStyle: TextStyle(
+              fontSize: 13,
+              color: _targets.contains(source.sourceId)
+                  ? AppTokens.accent
+                  : null,
+              fontWeight: _targets.contains(source.sourceId)
+                  ? FontWeight.w600
+                  : FontWeight.w400,
+            ),
+          ),
       ],
     );
   }
