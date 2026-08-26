@@ -5,6 +5,11 @@
 *.swo
 *.log
 
+# Dart/Flutter 工具本机状态（勿与 .dart_tool/ 构建缓存混淆）
+.dart-tool/
+.config/
+.flutter
+
 # Flutter
 .dart_tool/
 .flutter-plugins
