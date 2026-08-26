@@ -13,7 +13,7 @@
 | 能力 | 说明 |
 |---|---|
 | 多渠道聚合 | 统一搜索（含历史、合并/分组、目标多选） / 播放 / 歌词；渠道可插拔，UI 零改动接入新渠道 |
-| 渠道矩阵 | • **网易云**：搜索/播放/逐字歌词；**手机密码 + 二维码扫码真实登录**（weapi 加密），登录后同步账号歌单<br>• **QQ 音乐**：搜索/LRC 歌词；**ptlogin 扫码真实登录**（QQ 互联 OAuth），凭据注入 musicu.fcg 解锁 vkey 播放<br>• **酷狗**：搜索/播放/封面；**h5 二维码扫码真实登录**（web 签名），token/userid 解锁完整试听<br>• **YTM**：部分搜索（需可访问 YouTube 的网络环境，Google 授权待接入） |
+| 渠道矩阵 | • **网易云**：搜索/播放/逐字歌词；**手机密码 + 二维码扫码登录**，登录后展示昵称与黑胶/VIP 等级，支持资料刷新与退出<br>• **QQ 音乐**：搜索/歌词/封面；**QQ 扫码 + 微信扫码双通道登录**（完整 Android comm 凭据交换），登录后展示昵称与绿钻等级，解锁认证 vkey 播放<br>• **酷狗**：搜索/播放/封面；**h5 二维码扫码登录**（web 签名），token/userid 解锁完整试听<br>• **YTM**：搜索/播放（需可访问 YouTube）；**WebView Google 登录**（Cookie 提取 + SAPISIDHASH 校验） |
 | 本地文件 | 扫描本地目录，ID3v2/v1 标签与内嵌封面，同名 .lrc 与 USLT 歌词 |
 | 按渠道账号 | 三态状态机（未登录/已登录/已过期），启动乐观恢复 + 后台校验 + 401 被动捕获 |
 | 播放内核 | just_audio + audio_service：通知栏/锁屏/SMTC/Now Playing、队列、顺序/循环/单曲/随机、「上一首超 3 秒先回开头」、定时关闭、并发保护 |
@@ -92,6 +92,9 @@ lib/
 
 ```bash
 flutter test   # 71 tests passing
+```
+
+> `flutter_inappwebview` 与 AGP 9 存在 proguard 配置不兼容，pub cache 清理后请执行 `bash tool/patch_inappwebview_gradle.sh`。
 ```
 
 ## 路线图状态
