@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:hive_flutter/hive_flutter.dart';
@@ -102,14 +103,11 @@ class _LocalMusicSettingsPageState
     extends ConsumerState<LocalMusicSettingsPage> {
   bool _scanning = false;
   int? _lastCount;
-  List<String> _presets = const <String>[];
 
   @override
   void initState() {
     super.initState();
-    LocalMusicSettingsRepository.presetCandidates().then((presets) {
-      if (mounted) setState(() => _presets = presets);
-    });
+    _ensurePermission();
   }
 
   LocalMusicSettingsRepository get _repo =>
@@ -157,76 +155,59 @@ class _LocalMusicSettingsPageState
     }
   }
 
-  Future<void> _addFolderDialog() async {
-    final controller = TextEditingController();
-    final appFolder = await LocalMusicSettingsRepository.defaultAppFolder();
+  /// 打开系统文件管理器（SAF）选择音乐文件夹。
+  Future<void> _pickAndAddFolder() async {
+    final permitted = await _ensurePermission();
     if (!mounted) return;
-    final added = await showDialog<String>(
-      context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: const Text('添加扫描文件夹'),
-        // 退出动画期间 TextField 仍在树上，控制器不可提前 dispose
-        content: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              TextField(
-                controller: controller,
-                autofocus: true,
-                decoration: const InputDecoration(
-                  hintText: '/storage/emulated/0/Music',
-                  labelText: '文件夹路径',
-                ),
-                onSubmitted: (value) =>
-                    Navigator.of(dialogContext).pop(value.trim()),
-              ),
-              const SizedBox(height: 12),
-              if (appFolder != null)
-                ActionChip(
-                  label: Text('内置目录（$appFolder）',
-                      style: const TextStyle(fontSize: 12)),
-                  onPressed: () =>
-                      Navigator.of(dialogContext).pop(appFolder),
-                ),
-              for (final preset in _presets)
-                ActionChip(
-                  label: Text(preset, style: const TextStyle(fontSize: 12)),
-                  onPressed: () =>
-                      Navigator.of(dialogContext).pop(preset),
-                ),
-            ],
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(dialogContext).pop(),
-            child: const Text('取消'),
-          ),
-          FilledButton(
-            style:
-                FilledButton.styleFrom(backgroundColor: AppTokens.accent),
-            onPressed: () =>
-                Navigator.of(dialogContext).pop(controller.text.trim()),
-            child: const Text('添加'),
-          ),
-        ],
-      ),
-    );
-    if (added == null || added.isEmpty) return;
-    final dir = Directory(added);
-    if (!dir.existsSync()) {
-      if (!mounted) return;
+    if (!permitted) {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('目录不存在：$added')),
+        const SnackBar(content: Text('未授予音乐权限，无法访问所选文件夹')),
       );
       return;
     }
-    await _repo.addFolder(added);
+    String? pickedPath;
+    try {
+      pickedPath = await FilePicker.platform.getDirectoryPath(
+        dialogTitle: '选择音乐文件夹',
+        lockParentWindow: true,
+      );
+    } catch (_) {
+      pickedPath = null;
+    }
+    if (!mounted) return;
+    if (pickedPath == null || pickedPath.isEmpty) return; // 用户取消
+
+    final repo = _repo;
+    if (repo.folders.contains(pickedPath)) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('该文件夹已添加')),
+      );
+      return;
+    }
+    await repo.addFolder(pickedPath);
     if (!mounted) return;
     setState(() {});
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('已添加：$added')),
+      SnackBar(content: Text('已添加：$pickedPath')),
+    );
+  }
+
+  /// 快捷添加应用内置目录（无需权限）。
+  Future<void> _addAppFolder() async {
+    final appFolder = await LocalMusicSettingsRepository.defaultAppFolder();
+    if (appFolder == null || !mounted) return;
+    final repo = _repo;
+    if (repo.folders.contains(appFolder)) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('内置目录已添加')),
+      );
+      return;
+    }
+    await repo.addFolder(appFolder);
+    if (!mounted) return;
+    setState(() {});
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('已添加：$appFolder')),
     );
   }
 
@@ -250,10 +231,10 @@ class _LocalMusicSettingsPageState
                         fontSize: 15, fontWeight: FontWeight.w700)),
               ),
               IconButton(
-                tooltip: '添加文件夹',
+                tooltip: '前往文件管理器选择文件夹',
                 icon: const Icon(Icons.create_new_folder_rounded,
                     color: AppTokens.accent),
-                onPressed: _addFolderDialog,
+                onPressed: _pickAndAddFolder,
               ),
             ],
           ),
@@ -292,6 +273,15 @@ class _LocalMusicSettingsPageState
                   ),
                 ),
               ),
+          const SizedBox(height: 4),
+          Center(
+            child: TextButton.icon(
+              onPressed: _addAppFolder,
+              icon: const Icon(Icons.inventory_2_outlined, size: 16),
+              label: const Text('添加应用内置目录（无需权限）',
+                  style: TextStyle(fontSize: 12)),
+            ),
+          ),
           const SizedBox(height: 8),
           FilledButton.icon(
             style: FilledButton.styleFrom(

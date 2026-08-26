@@ -20,7 +20,12 @@ import 'features/settings/local_music_settings_page.dart'
     show
         LocalMusicSettingsRepository,
         localMusicSettingsRepositoryProvider;
-import 'features/settings/settings_providers.dart';
+import 'features/settings/settings_providers.dart'
+    show
+        AppSettingsRepository,
+        appSettingsRepositoryProvider,
+        oledBlackProvider,
+        themeModeProvider;
 import 'core/di/app_providers.dart';
 
 /// 组合根所需的已初始化依赖集合。
@@ -104,6 +109,8 @@ Future<void> main() async {
       await Hive.openBox<String>(SearchHistoryRepository.boxName);
   final localMusicSettingsBox =
       await Hive.openBox<String>(LocalMusicSettingsRepository.boxName);
+  final appSettingsBox =
+      await Hive.openBox<String>(AppSettingsRepository.boxName);
 
   await _Bootstrap._configureAudioSession();
   await _Bootstrap._configureDesktopWindow();
@@ -136,6 +143,9 @@ Future<void> main() async {
         localMusicSettingsRepositoryProvider.overrideWithValue(
           LocalMusicSettingsRepository(box: localMusicSettingsBox),
         ),
+        appSettingsRepositoryProvider.overrideWithValue(
+          AppSettingsRepository(box: appSettingsBox),
+        ),
       ],
       child: const MusaicApp(),
     ),
@@ -149,11 +159,12 @@ class MusaicApp extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final router = ref.watch(routerProvider);
     final themeMode = ref.watch(themeModeProvider);
+    final oled = ref.watch(oledBlackProvider);
     return MaterialApp.router(
       title: 'Musaic — 音乐拼图',
       debugShowCheckedModeBanner: false,
       theme: AppTokens.lightTheme,
-      darkTheme: AppTokens.darkTheme,
+      darkTheme: oled ? AppTokens.oledTheme : AppTokens.darkTheme,
       themeMode: themeMode,
       routerConfig: router,
     );

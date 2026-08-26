@@ -1,5 +1,10 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:path/path.dart' as p;
+import 'package:path_provider/path_provider.dart';
 
 import '../../core/di/app_providers.dart';
 import '../../core/theme/app_tokens.dart';
@@ -113,9 +118,9 @@ class AppearancePage extends ConsumerWidget {
           Card(
             child: RadioGroup<ThemeMode>(
               groupValue: themeMode,
-              onChanged: (value) =>
-                  ref.read(themeModeProvider.notifier).state =
-                      value ?? ThemeMode.dark,
+              onChanged: (value) => ref
+                  .read(themeModeProvider.notifier)
+                  .set(value ?? ThemeMode.dark),
               child: Column(
                 children: [
                   for (final mode in ThemeMode.values)
@@ -129,6 +134,20 @@ class AppearancePage extends ConsumerWidget {
                     ),
                 ],
               ),
+            ),
+          ),
+          const SizedBox(height: 12),
+          Card(
+            child: SwitchListTile(
+              title: const Text('OLED 纯黑背景'),
+              subtitle: const Text(
+                '深色主题下使用纯黑背景，省电且对比更强',
+                style: TextStyle(fontSize: 12),
+              ),
+              value: ref.watch(oledBlackProvider),
+              activeThumbColor: AppTokens.accent,
+              onChanged: (value) =>
+                  ref.read(oledBlackProvider.notifier).set(value),
             ),
           ),
         ],
@@ -159,7 +178,7 @@ class PlaybackPage extends ConsumerWidget {
               value: glass,
               activeThumbColor: AppTokens.accent,
               onChanged: (value) =>
-                  ref.read(enableGlassProvider.notifier).state = value,
+                  ref.read(enableGlassProvider.notifier).set(value),
             ),
           ),
         ],
@@ -205,6 +224,20 @@ class DataPage extends ConsumerWidget {
                 ),
                 const Divider(height: 1, indent: 56),
                 ListTile(
+                  leading: const Icon(Icons.image_outlined),
+                  title: const Text('清除封面缓存'),
+                  subtitle: const Text('删除本地扫描生成的内嵌封面缓存',
+                      style: TextStyle(fontSize: 12)),
+                  onTap: () async {
+                    final cleared = await _clearCoverCache();
+                    if (!context.mounted) return;
+                    _toast(context, cleared
+                        ? '封面缓存已清除'
+                        : '暂无需要清理的缓存');
+                  },
+                ),
+                const Divider(height: 1, indent: 56),
+                ListTile(
                   leading: const Icon(Icons.favorite_border_rounded),
                   title: const Text('清空喜欢的音乐'),
                   onTap: () async {
@@ -235,17 +268,33 @@ class AboutPage extends StatelessWidget {
       appBar: AppBar(title: const Text('关于')),
       body: ListView(
         padding: const EdgeInsets.all(16),
-        children: const [
+        children: [
           Card(
             child: Column(
               children: [
-                ListTile(
+                const ListTile(
                   leading: Icon(Icons.info_outline_rounded),
                   title: Text('Musaic · 音乐拼图'),
                   subtitle: Text('版本 0.1.0 · 多渠道聚合播放器'),
                 ),
-                Divider(height: 1, indent: 56),
+                const Divider(height: 1, indent: 56),
                 ListTile(
+                  leading: const Icon(Icons.code_rounded),
+                  title: const Text('开源仓库'),
+                  subtitle: const Text(
+                    'github.com/YoisakiKnd/Musaic',
+                    style: TextStyle(fontSize: 12),
+                  ),
+                  trailing: const Icon(Icons.copy_rounded, size: 18),
+                  onTap: () {
+                    Clipboard.setData(
+                      const ClipboardData(text: 'https://github.com/YoisakiKnd/Musaic'),
+                    );
+                    _toast(context, '仓库地址已复制');
+                  },
+                ),
+                const Divider(height: 1, indent: 56),
+                const ListTile(
                   leading: Icon(Icons.gavel_rounded),
                   title: Text('免责声明'),
                   subtitle: Text(
@@ -259,6 +308,18 @@ class AboutPage extends StatelessWidget {
         ],
       ),
     );
+  }
+}
+
+Future<bool> _clearCoverCache() async {
+  try {
+    final temp = await getTemporaryDirectory();
+    final dir = Directory(p.join(temp.path, 'musaic_covers'));
+    if (!dir.existsSync()) return false;
+    await dir.delete(recursive: true);
+    return true;
+  } catch (_) {
+    return false;
   }
 }
 

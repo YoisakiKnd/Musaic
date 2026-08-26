@@ -64,18 +64,33 @@ abstract final class AppTokens {
   // ---------- 主题 ----------
   static ThemeData get darkTheme => _buildTheme(Brightness.dark);
 
+  /// OLED 纯黑深色主题：背景/卡片全部纯黑，省电且对比更强。
+  static ThemeData get oledTheme => _buildTheme(Brightness.dark, oled: true);
+
   static ThemeData get lightTheme => _buildTheme(Brightness.light);
 
-  static ThemeData _buildTheme(Brightness brightness) {
+  static ThemeData _buildTheme(
+    Brightness brightness, {
+    bool oled = false,
+  }) {
     final isDark = brightness == Brightness.dark;
+    final background = isDark
+        ? (oled ? Colors.black : darkBackground)
+        : lightBackground;
+    final surface = isDark
+        ? (oled ? Colors.black : darkSurface)
+        : lightSurface;
+    final surfaceHigh = isDark
+        ? (oled ? const Color(0xFF141414) : darkSurfaceHigh)
+        : lightSurfaceHigh;
     final scheme = ColorScheme.fromSeed(
       seedColor: accent,
       brightness: brightness,
       primary: accent,
       secondary: accent,
-      surface: isDark ? darkSurface : lightSurface,
+      surface: surface,
       onSurface: isDark ? darkTextPrimary : lightTextPrimary,
-      surfaceContainerHighest: isDark ? darkSurfaceHigh : lightSurfaceHigh,
+      surfaceContainerHighest: surfaceHigh,
       outlineVariant: isDark ? darkOutline : lightOutline,
     );
     final textSecondary = isDark ? darkTextSecondary : lightTextSecondary;
@@ -83,8 +98,7 @@ abstract final class AppTokens {
     return ThemeData(
       useMaterial3: true,
       colorScheme: scheme,
-      scaffoldBackgroundColor:
-          isDark ? darkBackground : lightBackground,
+      scaffoldBackgroundColor: background,
       splashFactory: InkRipple.splashFactory,
       appBarTheme: AppBarTheme(
         backgroundColor: Colors.transparent,
