@@ -1,9 +1,10 @@
 import 'dart:convert';
+import 'dart:developer' as developer;
+import 'dart:math';
 
 import 'package:dio/dio.dart';
 
 import 'netease_crypto.dart';
-import 'package:flutter/foundation.dart';
 
 import '../../core/error/source_exception.dart';
 import '../../core/model/track.dart';
@@ -31,6 +32,8 @@ class NeteaseSource extends MusicSource {
 
   /// 会话过期回调（由组合根接 AccountNotifier）。
   final void Function()? onSessionExpired;
+
+  final Random _random = Random.secure();
 
   @override
   String get sourceId => NeteaseSource.id;
@@ -120,9 +123,10 @@ class NeteaseSource extends MusicSource {
           .whereType<Track>()
           .toList(growable: false);
     } on DioException catch (e) {
-      debugPrint(
-        'MusaicNetease search 失败: type=${e.type} '
+      developer.log(
+        'search 失败: type=${e.type} '
         'status=${e.response?.statusCode} msg=${e.message}',
+        name: 'MusaicNetease',
       );
       throw NetworkSourceException('搜索失败：网络异常', sourceId: sourceId);
     }
@@ -252,6 +256,29 @@ class NeteaseSource extends MusicSource {
 
   // ---------- 真实登录（weapi / 二维码） ----------
 
+  /// 游客指纹 Cookie（对照 NeteaseCloudMusicApi request.js 校准）。
+  /// weapi 登录类接口缺这些字段会返回空响应体。
+  String _guestCookie() {
+    final hex = List.generate(
+      32,
+      (_) => '0123456789abcdef'[_random.nextInt(16)],
+    ).join();
+    final ts = DateTime.now().millisecondsSinceEpoch;
+    return <String, String>{
+      '__remember_me': 'true',
+      'ntes_kaola_ad': '1',
+      '_ntes_nuid': hex,
+      '_ntes_nnid': '$hex,$ts',
+      'WEVNSM': '1.0.0',
+      'osver':
+          'Microsoft-Windows-10-Professional-build-22631-64bit',
+      'deviceId': hex,
+      'os': 'pc',
+      'channel': 'netease',
+      'appver': '3.0.18.203152',
+    }.entries.map((e) => '${e.key}=${e.value}').join('; ');
+  }
+
   /// 手机号 + 密码登录（weapi 加密真实请求）。
   /// 成功返回 [AuthSuccess]（含资料），凭据为 MUSIC_U。
   Future<AuthResult> loginByPhone(
@@ -260,24 +287,32 @@ class NeteaseSource extends MusicSource {
     String countryCode = '86',
   }) async {
     final payload = <String, dynamic>{
+      'type': '1',
+      'https': 'true',
       'phone': phone,
       'countrycode': countryCode,
       'password': NeteaseCrypto.md5Hex(password),
       'rememberLogin': 'true',
+      'csrf_token': '',
     };
     final (:params, :encSecKey) = NeteaseCrypto.encryptPayload(payload);
     try {
       final response = await _dio.post<dynamic>(
-        '/weapi/login',
+        '/weapi/w/login/cellphone',
         options: Options(
           contentType: Headers.formUrlEncodedContentType,
           responseType: ResponseType.plain,
           headers: <String, String>{
             'Referer': 'https://music.163.com',
-            'Cookie': 'os=pc; appver=8.9.75',
+            'User-Agent':
+                'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) '
+                'AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 '
+                'Safari/537.36 Edg/124.0.0.0',
+            'Cookie': _guestCookie(),
           },
         ),
-        data: 'params=$params&encSecKey=$encSecKey',
+        data: 'params=${Uri.encodeQueryComponent(params)}'
+            '&encSecKey=${Uri.encodeQueryComponent(encSecKey)}',
       );
       final data = _asMap(_decoded(response));
       final code = data?['code'] as int? ?? -1;

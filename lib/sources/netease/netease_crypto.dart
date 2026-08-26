@@ -1,5 +1,4 @@
 import 'dart:convert';
-import 'dart:typed_data';
 import 'dart:math';
 
 import 'package:crypto/crypto.dart';
@@ -7,15 +6,18 @@ import 'package:encrypt/encrypt.dart';
 
 /// 网易云 weapi 请求加密（登录等敏感接口使用）。
 ///
-/// 算法（社区公开标准实现）：
+/// 算法（对照 NeteaseCloudMusicApi 参考实现校准）：
 /// 1. 生成 16 位随机 secretKey（base62 字符集）；
-/// 2. params = AES-CBC-PKCS7(json, key:'0CoJUm6Qyw8W8jud', iv:'0102030405')
+/// 2. params = AES-CBC-PKCS7(json, key:'0CoJUm6Qyw8W8jud', iv:'0102030405060708')
 ///    → base64，再用 secretKey 同 iv 二次加密 → base64；
 /// 3. encSecKey = RSA 无填充(secretKey 字节逆序, e=010001, n=网易公钥)
 ///    → 256 位十六进制。
 abstract final class NeteaseCrypto {
   static const String _presetKey = '0CoJUm6Qyw8W8jud';
-  static const String _iv = '0102030405';
+
+  /// 注意：必须为 16 字节 ASCII；早期流传的 '0102030405' 短 IV
+  /// 会使服务端 CBC 首块解密失败并返回空响应体。
+  static const String _iv = '0102030405060708';
   static const String _charset =
       'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
 
@@ -27,11 +29,8 @@ abstract final class NeteaseCrypto {
       '575cce10b424d813cfe4875d3e82047b97ddef52741d546b8e289dc6935b'
       '3ece0462db0a22b8e7';
 
-  /// CryptoJS 对短 IV 隐式零填充到块大小；encrypt 包要求显式 16 字节。
-  static IV get _iv16 {
-    final bytes = Uint8List(16)..setAll(0, utf8.encode(_iv));
-    return IV(bytes);
-  }
+  /// IV 即 16 字节 ASCII 原文，无零填充。
+  static IV get _iv16 => IV.fromUtf8(_iv);
 
   static final Encrypter _presetEncrypter = Encrypter(
     AES(
