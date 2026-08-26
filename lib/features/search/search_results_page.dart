@@ -34,6 +34,7 @@ class SearchResultsPage extends ConsumerStatefulWidget {
 class _SearchResultsPageState extends ConsumerState<SearchResultsPage> {
   final Set<String> _selected = <String>{};
   bool _selecting = false;
+  bool _grouped = false;
 
   late List<Track> _tracks;
 
@@ -262,6 +263,14 @@ class _SearchResultsPageState extends ConsumerState<SearchResultsPage> {
               ),
             ] else ...[
               IconButton(
+                tooltip: _grouped ? '合并展示' : '分开展示',
+                onPressed:
+                    _tracks.isEmpty ? null : () => setState(() => _grouped = !_grouped),
+                icon: Icon(_grouped
+                    ? Icons.view_agenda_outlined
+                    : Icons.category_outlined),
+              ),
+              IconButton(
                 tooltip: '多选',
                 onPressed: _enterSelectMode,
                 icon: const Icon(Icons.checklist_rounded),
@@ -283,37 +292,39 @@ class _SearchResultsPageState extends ConsumerState<SearchResultsPage> {
                   ),
                 ),
               )
-            : ListView.builder(
-                padding: EdgeInsets.fromLTRB(
-                  0, 8, 0, _selecting ? 120 : 160,
-                ),
-                itemCount: _tracks.length,
-                itemBuilder: (context, index) {
-                  final track = _tracks[index];
-                  final checked = _selected.contains(track.key);
-                  return Row(
-                    children: [
-                      if (_selecting)
-                        Checkbox(
-                          value: checked,
-                          activeColor: AppTokens.accent,
-                          onChanged: (_) => _toggleSelect(track),
-                        ),
-                      Expanded(
-                        child: TrackTile(
-                          key: ValueKey('result-${track.key}-$index'),
-                          track: track,
-                          queue: _tracks,
-                          dense: true,
-                          onTapOverride: _selecting
-                              ? () => _toggleSelect(track)
-                              : null,
-                        ),
-                      ),
-                    ],
-                  );
-                },
-              ),
+            : _grouped
+                ? _buildGroupedBody(scheme)
+                : ListView.builder(
+                    padding: EdgeInsets.fromLTRB(
+                      0, 8, 0, _selecting ? 120 : 160,
+                    ),
+                    itemCount: _tracks.length,
+                    itemBuilder: (context, index) {
+                      final track = _tracks[index];
+                      final checked = _selected.contains(track.key);
+                      return Row(
+                        children: [
+                          if (_selecting)
+                            Checkbox(
+                              value: checked,
+                              activeColor: AppTokens.accent,
+                              onChanged: (_) => _toggleSelect(track),
+                            ),
+                          Expanded(
+                            child: TrackTile(
+                              key: ValueKey('result-${track.key}-$index'),
+                              track: track,
+                              queue: _tracks,
+                              dense: true,
+                              onTapOverride: _selecting
+                                  ? () => _toggleSelect(track)
+                                  : null,
+                            ),
+                          ),
+                        ],
+                      );
+                    },
+                  ),
         bottomNavigationBar: _selecting
             ? SafeArea(
                 minimum: const EdgeInsets.fromLTRB(16, 0, 16, 12),
@@ -349,6 +360,100 @@ class _SearchResultsPageState extends ConsumerState<SearchResultsPage> {
               )
             : null,
       ),
+    );
+  }
+
+  /// 分组模式：按渠道分节展示（含失败渠道的错误提示）。
+  Widget _buildGroupedBody(ColorScheme scheme) {
+    final registry = ref.read(sourceRegistryProvider);
+    final children = <Widget>[];
+    for (final source in registry.all) {
+      final value = widget.results[source.sourceId];
+      if (value is List<Track>) {
+        if (value.isEmpty) continue;
+        // 分组节标题
+        children.add(Padding(
+          padding: const EdgeInsets.fromLTRB(16, 16, 16, 4),
+          child: Row(
+            children: [
+              Container(
+                width: 4,
+                height: 14,
+                decoration: BoxDecoration(
+                  color: AppTokens.accent,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Text(
+                source.displayName,
+                style: const TextStyle(
+                  fontSize: 15,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              const SizedBox(width: 6),
+              Text(
+                '${value.length} 首',
+                style: TextStyle(
+                  fontSize: 12,
+                  color: scheme.onSurface.withValues(alpha: 0.45),
+                ),
+              ),
+            ],
+          ),
+        ));
+        for (final track in value) {
+          final checked = _selected.contains(track.key);
+          children.add(Row(
+            children: [
+              if (_selecting)
+                Checkbox(
+                  value: checked,
+                  activeColor: AppTokens.accent,
+                  onChanged: (_) => _toggleSelect(track),
+                ),
+              Expanded(
+                child: TrackTile(
+                  key: ValueKey('grouped-${track.key}'),
+                  track: track,
+                  queue: value,
+                  dense: true,
+                  onTapOverride:
+                      _selecting ? () => _toggleSelect(track) : null,
+                ),
+              ),
+            ],
+          ));
+        }
+      } else if (value is String) {
+        // 渠道失败提示
+        children.add(Padding(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+          child: Row(
+            children: [
+              Icon(Icons.error_outline_rounded,
+                  size: 16, color: scheme.error.withValues(alpha: 0.7)),
+              const SizedBox(width: 6),
+              Flexible(
+                child: Text(
+                  '${source.displayName}：$value',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: scheme.onSurface.withValues(alpha: 0.5),
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+            ],
+          ),
+        ));
+      }
+    }
+    return ListView(
+      padding: EdgeInsets.fromLTRB(0, 8, 0, _selecting ? 120 : 160),
+      children: children,
     );
   }
 
