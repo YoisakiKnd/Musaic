@@ -8,6 +8,7 @@ import 'package:just_audio/just_audio.dart' as ja;
 import '../../core/di/app_providers.dart';
 import '../../core/error/source_exception.dart';
 import '../../core/model/track.dart';
+import '../../core/source/music_source.dart' show ResolvedStream;
 import '../../core/theme/app_tokens.dart';
 import 'audio_handler.dart';
 import 'domain/queue_logic.dart';
@@ -99,6 +100,7 @@ class PlayerNotifier extends Notifier<PlayerState> {
   Timer? _positionTimer;
   Timer? _sleepTimer;
   bool _autoAdvancing = false;
+  int _loadSeq = 0; // 加载序号：过期请求的状态更新一律丢弃
   final Random _random = Random();
 
   /// 随机模式洗牌序列（shuffleOn=false 时忽略）。
@@ -276,6 +278,7 @@ class PlayerNotifier extends Notifier<PlayerState> {
   }
 
   Future<void> _loadAndPlay(int index) async {
+    final seq = ++_loadSeq;
     final track = state.queue[index];
     state = state.copyWith(
       currentIndex: index,
@@ -296,7 +299,16 @@ class PlayerNotifier extends Notifier<PlayerState> {
           sourceId: track.sourceId,
         );
       }
-      final resolved = await source.resolveStream(track);
+      final ResolvedStream resolved;
+      try {
+        resolved = await source
+            .resolveStream(track)
+            .timeout(const Duration(seconds: 15));
+      } on TimeoutException {
+        throw NetworkSourceException('解析播放地址超时',
+            sourceId: track.sourceId);
+      }
+      if (seq != _loadSeq) return; // 已被更新的加载请求取代
       debugPrint(
         'MusaicPlayer stream: ${resolved.url} '
         '(local=${resolved.isLocalFile})',
@@ -304,13 +316,18 @@ class PlayerNotifier extends Notifier<PlayerState> {
 
       final player = _handler.player;
       if (resolved.isLocalFile) {
-        await player.setFilePath(resolved.url);
+        await player
+            .setFilePath(resolved.url)
+            .timeout(const Duration(seconds: 25));
       } else {
-        await player.setUrl(
-          resolved.url,
-          headers: resolved.headers ?? const <String, String>{},
-        );
+        await player
+            .setUrl(
+              resolved.url,
+              headers: resolved.headers ?? const <String, String>{},
+            )
+            .timeout(const Duration(seconds: 25));
       }
+      if (seq != _loadSeq) return;
       _handler.updateNowPlaying(
         trackToMediaItem(
           id: track.key,
@@ -322,14 +339,17 @@ class PlayerNotifier extends Notifier<PlayerState> {
         ),
       );
       await player.play();
+      if (seq != _loadSeq) return;
       state = state.copyWith(loading: false, playing: true);
 
       // 记录最近播放（本地优先存储，失败静默）
       unawaited(_recordHistory(track));
     } on SourceException catch (e) {
+      if (seq != _loadSeq) return;
       debugPrint('MusaicPlayer SourceException: ${e.message}');
       state = state.copyWith(loading: false, playing: false, error: e.message);
     } catch (e, st) {
+      if (seq != _loadSeq) return;
       debugPrint('MusaicPlayer 播放异常: $e');
       debugPrint('MusaicPlayer 堆栈首行: ${st.toString().split('\n').take(4).join(' | ')}');
       state = state.copyWith(

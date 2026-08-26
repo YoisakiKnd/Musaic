@@ -31,3 +31,5 @@ final playlistsProvider = StreamProvider<List<String>>((ref) async* {
     yield repository.playlistNames;
   }
 });
+
+/// 网易云账号歌单（登录后可用；账号状态变化自动重取）。

@@ -18,7 +18,6 @@ class AppShell extends ConsumerWidget {
     (Icons.home_rounded, '首页'),
     (Icons.search_rounded, '搜索'),
     (Icons.library_music_rounded, '资料库'),
-    (Icons.person_rounded, '账号'),
   ];
 
   @override
@@ -35,18 +34,37 @@ class AppShell extends ConsumerWidget {
   }
 
   Widget _buildCompact(BuildContext context, bool hasQueue) {
+    final scheme = Theme.of(context).colorScheme;
     return Scaffold(
       extendBody: true,
-      body: navigationShell,
-      bottomNavigationBar: Column(
-        mainAxisSize: MainAxisSize.min,
+      body: Stack(
         children: [
+          Positioned.fill(child: navigationShell),
           if (hasQueue)
-            const Padding(
-              padding: EdgeInsets.only(bottom: 2),
+            const Positioned(
+              left: 12,
+              right: 12,
+              bottom: 92,
               child: MiniPlayer(),
             ),
-          NavigationBar(
+        ],
+      ),
+      bottomNavigationBar: SafeArea(
+        minimum: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+        child: Container(
+          decoration: BoxDecoration(
+            color: scheme.surface.withValues(alpha: 0.94),
+            borderRadius: BorderRadius.circular(32),
+            border: Border.all(
+              color: scheme.outlineVariant.withValues(alpha: 0.5),
+            ),
+          ),
+          child: NavigationBar(
+            height: 64,
+            backgroundColor: Colors.transparent,
+            shadowColor: Colors.transparent,
+            surfaceTintColor: Colors.transparent,
+            indicatorColor: AppTokens.accent.withValues(alpha: 0.15),
             selectedIndex: navigationShell.currentIndex,
             onDestinationSelected: (index) => navigationShell.goBranch(
               index,
@@ -61,7 +79,7 @@ class AppShell extends ConsumerWidget {
                 ),
             ],
           ),
-        ],
+        ),
       ),
     );
   }

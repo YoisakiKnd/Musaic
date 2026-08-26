@@ -6,4 +6,10 @@
         <domain includeSubdomains="false">127.0.0.1</domain>
         <domain includeSubdomains="false">localhost</domain>
     </domain-config>
+    <!-- QQ 音乐 / 酷狗 的匿名播放直链为 http CDN -->
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="true">qq.com</domain>
+        <domain includeSubdomains="true">kugou.com</domain>
+        <domain includeSubdomains="true">kglink.cn</domain>
+    </domain-config>
 </network-security-config>

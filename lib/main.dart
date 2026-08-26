@@ -1,7 +1,7 @@
 import 'dart:io' show Platform;
 
 import 'package:audio_service/audio_service.dart';
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/foundation.dart' show kIsWeb, PlatformDispatcher;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
@@ -15,6 +15,8 @@ import 'core/theme/app_tokens.dart';
 import 'features/auth/data/account_repository.dart';
 import 'features/library/data/library_repository.dart';
 import 'features/player/audio_handler.dart';
+import 'features/search/data/search_history_repository.dart';
+import 'features/settings/settings_providers.dart';
 import 'core/di/app_providers.dart';
 
 /// 组合根所需的已初始化依赖集合。
@@ -69,6 +71,22 @@ class _Bootstrap {
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
+  // release 模式下构建/异步异常默认静默，统一转存 logcat 便于远程诊断
+  FlutterError.onError = (details) {
+    debugPrint(
+      'MusaicFlutterError: ${details.exception}\n'
+      '${details.stack?.toString().split('\n').take(6).join('\n')}',
+    );
+    FlutterError.presentError(details);
+  };
+  PlatformDispatcher.instance.onError = (error, stack) {
+    debugPrint(
+      'MusaicAsyncError: $error\n'
+      '${stack.toString().split('\n').take(6).join('\n')}',
+    );
+    return true;
+  };
+
   await Hive.initFlutter();
   final accountsBox =
       await Hive.openBox<String>(AccountRepository.accountBoxName);
@@ -78,6 +96,8 @@ Future<void> main() async {
       await Hive.openBox<String>(LibraryRepository.historyBoxName);
   final playlistsBox =
       await Hive.openBox<String>(LibraryRepository.playlistsBoxName);
+  final searchHistoryBox =
+      await Hive.openBox<String>(SearchHistoryRepository.boxName);
 
   await _Bootstrap._configureAudioSession();
   await _Bootstrap._configureDesktopWindow();
@@ -104,6 +124,9 @@ Future<void> main() async {
           ),
         ),
         audioHandlerProvider.overrideWithValue(audioHandler),
+        searchHistoryRepositoryProvider.overrideWithValue(
+          SearchHistoryRepository(box: searchHistoryBox),
+        ),
       ],
       child: const MusaicApp(),
     ),
@@ -116,12 +139,13 @@ class MusaicApp extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final router = ref.watch(routerProvider);
+    final themeMode = ref.watch(themeModeProvider);
     return MaterialApp.router(
       title: 'Musaic — 音乐拼图',
       debugShowCheckedModeBanner: false,
       theme: AppTokens.lightTheme,
       darkTheme: AppTokens.darkTheme,
-      themeMode: ThemeMode.dark, // 深色优先（设计令牌 §8）
+      themeMode: themeMode,
       routerConfig: router,
     );
   }

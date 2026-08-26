@@ -39,6 +39,19 @@ class AccountNotifier extends Notifier<AccountsState> {
     return AccountsState(bySource: restored);
   }
 
+  /// 完成登录（二维码 / 手机密码等流程共用）：
+  /// 渠道验证成功后由页面调用，凭据入安全存储、资料入 Hive、状态广播。
+  Future<void> completeLogin(
+    String sourceId,
+    Map<String, String> credentials,
+    SourceAccount account,
+  ) async {
+    final repository = ref.read(accountRepositoryProvider);
+    await repository.saveCredentials(sourceId, credentials);
+    await repository.saveAccount(account);
+    state = state.withAccount(account);
+  }
+
   /// 登录：渠道验证成功后凭据入安全存储、资料入 Hive、状态广播。
   Future<AuthResult> login(
     String sourceId,

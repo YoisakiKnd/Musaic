@@ -6,24 +6,24 @@ import 'package:flutter/material.dart';
 /// 所有 UI 组件只允许引用此处令牌，禁止散落魔法数。
 abstract final class AppTokens {
   // ---------- 品牌色 ----------
-  /// 主品牌色（Apple Music 红）。
-  static const Color accent = Color(0xFFFA2E4E);
+  /// 主品牌色（Apple Music 粉红，对齐 Mei）。
+  static const Color accent = Color(0xFFFF2D55);
 
   /// 品牌渐变的深端。
-  static const Color accentDeep = Color(0xFFD61F3F);
+  static const Color accentDeep = Color(0xFFE0173F);
 
   /// 品牌渐变。
   static const Gradient brandGradient = LinearGradient(
     begin: Alignment.topLeft,
     end: Alignment.bottomRight,
-    colors: [accentDeep, accent],
+    colors: [accent, accentDeep],
   );
 
   // ---------- 中性色（深色优先） ----------
-  static const Color darkBackground = Color(0xFF0E0E11);
-  static const Color darkSurface = Color(0xFF17171C);
-  static const Color darkSurfaceHigh = Color(0xFF20202A);
-  static const Color darkOutline = Color(0xFF2C2C36);
+  static const Color darkBackground = Color(0xFF151013);
+  static const Color darkSurface = Color(0xFF1F181D);
+  static const Color darkSurfaceHigh = Color(0xFF2B2127);
+  static const Color darkOutline = Color(0xFF3B2F37);
   static const Color darkTextPrimary = Color(0xFFF2F2F7);
   static const Color darkTextSecondary = Color(0xFFA0A0AC);
 

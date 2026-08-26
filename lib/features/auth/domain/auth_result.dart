@@ -24,9 +24,12 @@ sealed class AuthResult {
 }
 
 class AuthSuccess extends AuthResult {
-  const AuthSuccess(this.account);
+  const AuthSuccess(this.account, {this.credentials = const <String, String>{}});
 
   final SourceAccount account;
+
+  /// 登录流程产生的凭据（如 MUSIC_U），由调用方落安全存储。
+  final Map<String, String> credentials;
 }
 
 class AuthFailure extends AuthResult {

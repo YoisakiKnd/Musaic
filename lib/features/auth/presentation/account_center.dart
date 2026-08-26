@@ -7,72 +7,23 @@ import '../application/account_notifier.dart';
 import '../domain/source_account.dart';
 import 'login_dialog.dart';
 
-/// 账号中心页面（账号文档 §6）：按渠道独立登录 / 登出 / 状态展示。
-class AccountCenterPage extends ConsumerWidget {
-  const AccountCenterPage({super.key});
+/// 渠道账号卡片列表（设置页「账号」区块复用）。
+class SourceAccountList extends ConsumerWidget {
+  const SourceAccountList({super.key});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final sources = ref.watch(sourceRegistryProvider).all;
 
-    return Scaffold(
-      appBar: AppBar(title: const Text('账号')),
-      body: ListView(
-        padding: AppTokens.pagePadding,
-        children: [
-          for (final source in sources)
-            _SourceAccountTile(
-                key: ValueKey('account-${source.sourceId}'),
-                sourceId: source.sourceId,
-              ),
-          const SizedBox(height: 24),
-          Center(
-            child: TextButton.icon(
-              style: TextButton.styleFrom(foregroundColor: Colors.redAccent),
-              onPressed: () => _confirmClearAll(context, ref),
-              icon: const Icon(Icons.delete_sweep_rounded, size: 20),
-              label: const Text('一键清除所有账号数据'),
-            ),
+    return Column(
+      children: [
+        for (final source in sources)
+          _SourceAccountTile(
+            key: ValueKey('account-${source.sourceId}'),
+            sourceId: source.sourceId,
           ),
-          const SizedBox(height: 8),
-          Center(
-            child: Text(
-              '凭据仅存于本机安全存储（Keychain / Keystore），永不明文上传',
-              style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                    color: Theme.of(context)
-                        .colorScheme
-                        .onSurface
-                        .withValues(alpha: 0.45),
-                  ),
-            ),
-          ),
-        ],
-      ),
+      ],
     );
-  }
-
-  Future<void> _confirmClearAll(BuildContext context, WidgetRef ref) async {
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: const Text('清除所有账号数据？'),
-        content: const Text('将删除全部渠道的登录凭据与本地资料记录。'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(dialogContext).pop(false),
-            child: const Text('取消'),
-          ),
-          FilledButton(
-            style: FilledButton.styleFrom(backgroundColor: Colors.redAccent),
-            onPressed: () => Navigator.of(dialogContext).pop(true),
-            child: const Text('清除'),
-          ),
-        ],
-      ),
-    );
-    if (confirmed == true) {
-      await ref.read(accountsProvider.notifier).clearAllAccountsData();
-    }
   }
 }
 
@@ -91,7 +42,8 @@ class _SourceAccountTile extends ConsumerWidget {
     final scheme = Theme.of(context).colorScheme;
 
     final (statusLabel, statusColor) = switch (account.status) {
-      AccountStatus.loggedOut => ('未登录', scheme.onSurface.withValues(alpha: 0.5)),
+      AccountStatus.loggedOut =>
+        ('未登录', scheme.onSurface.withValues(alpha: 0.5)),
       AccountStatus.loggedIn => (
           account.nickname ?? '已登录',
           Colors.greenAccent.withValues(alpha: 0.9),
@@ -141,19 +93,17 @@ class _SourceAccountTile extends ConsumerWidget {
             ),
           ],
         ),
-        trailing: account.status == AccountStatus.loggedOut &&
-                source.authCapability.requiresLogin
-            ? null // 由 onTap 打开登录
-            : (account.isLoggedIn
-                ? IconButton(
-                    tooltip: '登出',
-                    icon: Icon(Icons.logout_rounded,
-                        size: 20, color: scheme.onSurface.withValues(alpha: 0.6)),
-                    onPressed: () => ref
-                        .read(accountsProvider.notifier)
-                        .logout(sourceId),
-                  )
-                : null),
+        trailing: account.isLoggedIn
+            ? IconButton(
+                tooltip: '登出',
+                icon: Icon(Icons.logout_rounded,
+                    size: 20,
+                    color: scheme.onSurface.withValues(alpha: 0.6)),
+                onPressed: () => ref
+                    .read(accountsProvider.notifier)
+                    .logout(sourceId),
+              )
+            : null,
         onTap: () {
           if (source.authCapability.requiresLogin) {
             showLoginDialog(context, source);

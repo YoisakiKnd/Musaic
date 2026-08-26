@@ -19,12 +19,20 @@ class TrackTile extends ConsumerWidget {
     required this.track,
     required this.queue,
     this.onRemove,
+    this.onLongPress,
+    this.onTapOverride,
     this.dense = false,
   });
 
   final Track track;
   final List<Track> queue;
   final VoidCallback? onRemove;
+
+  /// 长按回调（如搜索页的「添加到歌单」）；缺省回落到 onRemove。
+  final VoidCallback? onLongPress;
+
+  /// 点击覆盖（多选模式下用于切换选中）；缺省为播放行为。
+  final VoidCallback? onTapOverride;
   final bool dense;
 
   @override
@@ -40,7 +48,7 @@ class TrackTile extends ConsumerWidget {
 
     return ListTile(
       dense: dense,
-      onTap: () {
+      onTap: onTapOverride ?? () {
         ref.read(playerNotifierProvider.notifier).playQueue(
               queue,
               startIndex:
@@ -49,7 +57,7 @@ class TrackTile extends ConsumerWidget {
             );
         context.push('/player');
       },
-      onLongPress: onRemove,
+      onLongPress: onLongPress ?? onRemove,
       leading: _TileCover(coverUrl: track.coverUrl),
       title: Text(
         track.title,

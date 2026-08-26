@@ -4,6 +4,9 @@ import 'package:go_router/go_router.dart';
 
 import '../../core/di/app_providers.dart' show libraryRepositoryProvider;
 import '../../core/theme/app_tokens.dart';
+import 'data/netease_playlists_provider.dart';
+import '../../../sources/netease/netease_source.dart' show NeteaseUserPlaylist;
+import 'remote_playlist_page.dart';
 import '../shared/widgets/track_tile.dart';
 import 'data/library_providers.dart';
 
@@ -103,54 +106,30 @@ class _PlaylistsTab extends ConsumerWidget {
         playlistsAsync.when(
           loading: () => const Center(child: CircularProgressIndicator()),
           error: (e, _) => Center(child: Text('加载失败：$e')),
-          data: (names) => names.isEmpty
-              ? const _EmptyHint(icon: Icons.queue_music_rounded, text: '创建你的第一个歌单')
-              : ListView.builder(
-                  padding: AppTokens.pagePadding,
-                  itemCount: names.length,
-                  itemBuilder: (context, index) {
-                    final name = names[index];
-                    final count = repository.playlistTracks(name).length;
-                    return Card(
-                      margin: const EdgeInsets.only(bottom: 10),
-                      child: ListTile(
-                        shape: RoundedRectangleBorder(
-                          borderRadius:
-                              BorderRadius.circular(AppTokens.radiusCard - 4),
-                        ),
-                        leading: Container(
-                          width: 44,
-                          height: 44,
-                          decoration: BoxDecoration(
-                            gradient: LinearGradient(
-                              colors: [
-                                AppTokens.accentDeep.withValues(alpha: 0.3),
-                                AppTokens.accent.withValues(alpha: 0.3),
-                              ],
-                            ),
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                          child: const Icon(Icons.queue_music_rounded,
-                              color: Colors.white70),
-                        ),
-                        title: Text(name),
-                        subtitle: Text('$count 首',
-                            style: const TextStyle(fontSize: 12)),
-                        trailing: IconButton(
-                          icon: Icon(Icons.delete_outline_rounded,
-                              size: 20,
-                              color: Theme.of(context)
-                                  .colorScheme
-                                  .onSurface
-                                  .withValues(alpha: 0.5)),
-                          onPressed: () =>
-                              repository.deletePlaylist(name),
-                        ),
-                        onTap: () => context.push('/playlist/$name'),
-                      ),
-                    );
-                  },
-                ),
+          data: (names) {
+            final neteaseAsync = ref.watch(neteaseUserPlaylistsProvider);
+            final neteasePlaylists =
+                neteaseAsync.value ?? const <NeteaseUserPlaylist>[];
+            final hasAccount = neteasePlaylists.isNotEmpty;
+            if (names.isEmpty && !hasAccount) {
+              return const _EmptyHint(icon: Icons.queue_music_rounded, text: '创建你的第一个歌单');
+            }
+            return ListView(
+              padding: AppTokens.pagePadding,
+              children: [
+                if (hasAccount) ...[
+                  const _SectionTitle('账号歌单 · 网易云'),
+                  for (final pl in neteasePlaylists)
+                    _RemotePlaylistCard(playlist: pl),
+                  const SizedBox(height: 12),
+                ],
+                if (names.isNotEmpty) ...[
+                  const _SectionTitle('本地歌单'),
+                  for (final name in names) _LocalPlaylistCard(name: name),
+                ],
+              ],
+            );
+          },
         ),
         Positioned(
           right: 24,
@@ -222,6 +201,120 @@ class _EmptyHint extends StatelessWidget {
                     .withValues(alpha: 0.55),
               )),
         ],
+      ),
+    );
+  }
+}
+
+
+/// 分区标题。
+class _SectionTitle extends StatelessWidget {
+  const _SectionTitle(this.text);
+
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(top: 8, bottom: 8),
+      child: Text(text,
+          style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
+    );
+  }
+}
+
+/// 网易云账号歌单卡片。
+class _RemotePlaylistCard extends ConsumerWidget {
+  const _RemotePlaylistCard({required this.playlist});
+
+  final NeteaseUserPlaylist playlist;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final scheme = Theme.of(context).colorScheme;
+    return Card(
+      margin: const EdgeInsets.only(bottom: 10),
+      child: ListTile(
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(AppTokens.radiusCard - 4),
+        ),
+        leading: Container(
+          width: 44,
+          height: 44,
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              colors: [
+                AppTokens.accentDeep.withValues(alpha: 0.3),
+                AppTokens.accent.withValues(alpha: 0.3),
+              ],
+            ),
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: const Icon(Icons.cloud_queue_rounded,
+              color: Colors.white70),
+        ),
+        title: Text(playlist.name,
+            maxLines: 1, overflow: TextOverflow.ellipsis),
+        subtitle: Text(
+          '${playlist.trackCount} 首 · ${playlist.playCount} 次播放',
+          style: const TextStyle(fontSize: 12),
+        ),
+        trailing: Icon(Icons.chevron_right_rounded,
+            color: scheme.onSurface.withValues(alpha: 0.4)),
+        onTap: () => Navigator.of(context).push(
+          MaterialPageRoute<void>(
+            builder: (_) => RemotePlaylistPage(playlist: playlist),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// 本地歌单卡片。
+class _LocalPlaylistCard extends ConsumerWidget {
+  const _LocalPlaylistCard({required this.name});
+
+  final String name;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final repository = ref.watch(libraryRepositoryProvider);
+    final count = repository.playlistTracks(name).length;
+    return Card(
+      margin: const EdgeInsets.only(bottom: 10),
+      child: ListTile(
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(AppTokens.radiusCard - 4),
+        ),
+        leading: Container(
+          width: 44,
+          height: 44,
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              colors: [
+                AppTokens.accentDeep.withValues(alpha: 0.3),
+                AppTokens.accent.withValues(alpha: 0.3),
+              ],
+            ),
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: const Icon(Icons.queue_music_rounded,
+              color: Colors.white70),
+        ),
+        title: Text(name),
+        subtitle: Text('$count 首',
+            style: const TextStyle(fontSize: 12)),
+        trailing: IconButton(
+          icon: Icon(Icons.delete_outline_rounded,
+              size: 20,
+              color: Theme.of(context)
+                  .colorScheme
+                  .onSurface
+                  .withValues(alpha: 0.5)),
+          onPressed: () => repository.deletePlaylist(name),
+        ),
+        onTap: () => context.push('/playlist/\${Uri.encodeComponent(name)}'),
       ),
     );
   }

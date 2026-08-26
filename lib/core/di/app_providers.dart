@@ -4,10 +4,14 @@ import '../../features/auth/application/account_notifier.dart';
 import '../../features/auth/data/account_repository.dart';
 import '../../features/library/data/library_repository.dart';
 import '../../features/player/audio_handler.dart';
+import '../../features/search/data/search_history_repository.dart';
 import '../source/music_source.dart';
 import '../source/source_registry.dart';
+import '../../sources/kugou/kugou_source.dart';
 import '../../sources/local/local_file_source.dart';
 import '../../sources/netease/netease_source.dart';
+import '../../sources/qqmusic/qq_music_source.dart';
+import '../../sources/ytm/youtube_music_source.dart';
 
 /// 组合根（依赖注入）。
 ///
@@ -24,6 +28,10 @@ final libraryRepositoryProvider = Provider<LibraryRepository>((ref) {
 
 final audioHandlerProvider = Provider<MusaicAudioHandler>((ref) {
   throw StateError('audioHandlerProvider 必须在启动时 override');
+});
+
+final searchHistoryRepositoryProvider = Provider<SearchHistoryRepository>((ref) {
+  throw StateError('searchHistoryRepositoryProvider 必须在启动时 override');
 });
 
 /// 凭据读取器工厂：渠道实现通过它读取自己的凭据，而不接触存储细节。
@@ -47,6 +55,24 @@ final sourceRegistryProvider = Provider<SourceRegistry>((ref) {
   registry.register(
     LocalFileSource(
       credentialReader: createCredentialReader(LocalFileSource.id),
+    ),
+  );
+
+  registry.register(
+    QqMusicSource(
+      credentialReader: createCredentialReader(QqMusicSource.id),
+    ),
+  );
+
+  registry.register(
+    KugouSource(
+      credentialReader: createCredentialReader(KugouSource.id),
+    ),
+  );
+
+  registry.register(
+    YouTubeMusicSource(
+      credentialReader: createCredentialReader(YouTubeMusicSource.id),
     ),
   );
 

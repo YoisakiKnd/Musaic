@@ -36,6 +36,9 @@ dependencies:
   palette_generator: ^0.3.3+7      # 封面取色（官方包）
   window_manager: ^0.4.3          # 桌面窗口（最小尺寸等）
   xml: ^6.5.0                     # TTML 解析
+  encrypt: ^5.0.3
+  crypto: ^3.0.3                 # 网易云 weapi 登录加密
+  qr_flutter: ^4.1.0              # 登录二维码渲染
   meta: ^1.15.0
   path: ^1.9.0
 

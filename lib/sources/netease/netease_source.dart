@@ -1,6 +1,8 @@
 import 'dart:convert';
 
 import 'package:dio/dio.dart';
+
+import 'netease_crypto.dart';
 import 'package:flutter/foundation.dart';
 
 import '../../core/error/source_exception.dart';
@@ -108,6 +110,7 @@ class NeteaseSource extends MusicSource {
           'total': true,
           'limit': limit,
         },
+        options: Options(responseType: ResponseType.plain),
       );
       final result = _asMap(_decoded(response)['result']);
       final songs = result?['songs'] as List<dynamic>?;
@@ -133,6 +136,7 @@ class NeteaseSource extends MusicSource {
       final response = await _dio.get<dynamic>(
         '/api/song/detail',
         queryParameters: <String, dynamic>{'ids': '[$songId]'},
+        options: Options(responseType: ResponseType.plain),
       );
       final songs = _decoded(response)?['songs'] as List<dynamic>?;
       if (songs == null || songs.isEmpty) return track;
@@ -165,6 +169,7 @@ class NeteaseSource extends MusicSource {
           'br': 320000,
           'csrf_token': '',
         },
+        options: Options(responseType: ResponseType.plain),
       );
       final data = _asMap(_decoded(response))?['data'] as List<dynamic>?;
       if (data == null || data.isEmpty) {
@@ -210,6 +215,7 @@ class NeteaseSource extends MusicSource {
           'tv': -1,
           'rv': -1,
         },
+        options: Options(responseType: ResponseType.plain),
       );
       final data = _asMap(_decoded(response));
       if (data == null) return null;
@@ -244,6 +250,214 @@ class NeteaseSource extends MusicSource {
     }
   }
 
+  // ---------- 真实登录（weapi / 二维码） ----------
+
+  /// 手机号 + 密码登录（weapi 加密真实请求）。
+  /// 成功返回 [AuthSuccess]（含资料），凭据为 MUSIC_U。
+  Future<AuthResult> loginByPhone(
+    String phone,
+    String password, {
+    String countryCode = '86',
+  }) async {
+    final payload = <String, dynamic>{
+      'phone': phone,
+      'countrycode': countryCode,
+      'password': NeteaseCrypto.md5Hex(password),
+      'rememberLogin': 'true',
+    };
+    final (:params, :encSecKey) = NeteaseCrypto.encryptPayload(payload);
+    try {
+      final response = await _dio.post<dynamic>(
+        '/weapi/login',
+        options: Options(
+          contentType: Headers.formUrlEncodedContentType,
+          responseType: ResponseType.plain,
+          headers: <String, String>{
+            'Referer': 'https://music.163.com',
+            'Cookie': 'os=pc; appver=8.9.75',
+          },
+        ),
+        data: 'params=$params&encSecKey=$encSecKey',
+      );
+      final data = _asMap(_decoded(response));
+      final code = data?['code'] as int? ?? -1;
+      if (code != 200) {
+        final message =
+            data?['message'] as String? ?? data?['msg'] as String? ?? '';
+        return AuthFailure(
+          reason: AuthFailureReason.invalidCredentials,
+          message: message.isEmpty ? '手机号或密码错误（code $code）' : message,
+        );
+      }
+      final musicU = _extractMusicU(response) ??
+          _musicUFromBodyCookie(data?['cookie'] as String?);
+      if (musicU == null || musicU.isEmpty) {
+        return const AuthFailure(
+          reason: AuthFailureReason.serverError,
+          message: '登录成功但未返回凭据，请重试',
+        );
+      }
+      final profile = _asMap(data?['profile']);
+      final nickname = profile?['nickname'] as String? ?? '';
+      return AuthSuccess(
+        SourceAccount.markNow(
+          sourceId: sourceId,
+          status: AccountStatus.loggedIn,
+          userId: profile?['userId']?.toString(),
+          nickname: nickname.isEmpty ? '网易云用户' : nickname,
+          avatarUrl: profile?['avatarUrl'] as String?,
+        ),
+        credentials: {'MUSIC_U': musicU},
+      );
+    } on DioException {
+      return const AuthFailure(
+        reason: AuthFailureReason.network,
+        message: '网络异常，请稍后重试',
+      );
+    }
+  }
+
+  /// 创建二维码登录会话：返回 [key]（unikey）与二维码内容 URL。
+  Future<({String key, String qrContent})> createQrLogin() async {
+    final response = await _dio.post<dynamic>(
+      '/api/login/qrcode/unikey',
+      data: {'type': 1},
+      options: Options(
+        contentType: Headers.formUrlEncodedContentType,
+        responseType: ResponseType.plain,
+      ),
+    );
+    final data = _asMap(_decoded(response));
+    final key = data?['unikey'] as String? ?? '';
+    if (key.isEmpty) {
+      throw NetworkSourceException('获取登录二维码失败', sourceId: sourceId);
+    }
+    return (
+      key: key,
+      qrContent: 'https://music.163.com/login?codekey=$key',
+    );
+  }
+
+  /// 轮询二维码状态。
+  Future<QrLoginPoll> pollQrLogin(String key) async {
+    final response = await _dio.get<dynamic>(
+      '/api/login/qrcode/client/login',
+      queryParameters: <String, dynamic>{'key': key, 'type': 1},
+      options: Options(responseType: ResponseType.plain),
+    );
+    final data = _asMap(_decoded(response));
+    final code = data?['code'] as int? ?? -1;
+    switch (code) {
+      case 800:
+        return QrLoginPoll.expired();
+      case 802:
+        return QrLoginPoll.scanned();
+      case 803:
+        final musicU = _musicUFromBodyCookie(
+          data?['cookie'] as String? ?? '',
+        );
+        String? nickname;
+        if (musicU != null && musicU.isNotEmpty) {
+          try {
+            final profile = await _fetchProfile(cookie: 'MUSIC_U=\$musicU');
+            nickname = profile?['nickname'] as String?;
+          } catch (_) {}
+        }
+        return QrLoginPoll.success(
+          musicU: musicU ?? '',
+          nickname: nickname,
+        );
+      default:
+        return QrLoginPoll.waiting();
+    }
+  }
+
+  /// 当前登录账号的用户歌单（登录后调用）。
+  Future<List<NeteaseUserPlaylist>> fetchUserPlaylists(String uid) async {
+    final response = await _dio.get<dynamic>(
+      '/api/user/playlist',
+      queryParameters: <String, dynamic>{'uid': uid, 'limit': 100},
+      options: Options(responseType: ResponseType.plain),
+    );
+    final list =
+        _asMap(_decoded(response))?['playlist'] as List<dynamic>?;
+    if (list == null) return const <NeteaseUserPlaylist>[];
+    return list
+        .map(_parseUserPlaylist)
+        .whereType<NeteaseUserPlaylist>()
+        .toList(growable: false);
+  }
+
+  NeteaseUserPlaylist? _parseUserPlaylist(dynamic raw) {
+    final p = _asMap(raw);
+    if (p == null) return null;
+    final id = p['id'] as int?;
+    final name = p['name'] as String?;
+    if (id == null || name == null) return null;
+    return NeteaseUserPlaylist(
+      id: id,
+      name: name,
+      trackCount: p['trackCount'] as int? ?? 0,
+      coverUrl: p['coverImgUrl'] as String?,
+      playCount: p['playCount'] as int? ?? 0,
+    );
+  }
+
+  /// 歌单详情 → 统一曲目列表（登录 Cookie 越权可见 VIP 曲目信息）。
+  Future<List<Track>> fetchPlaylistTracks(int playlistId) async {
+    final response = await _dio.get<dynamic>(
+      '/api/playlist/detail',
+      queryParameters: <String, dynamic>{'id': playlistId},
+      options: Options(responseType: ResponseType.plain),
+    );
+    final tracks =
+        _asMap(_asMap(_decoded(response))?['result'])?['tracks']
+            as List<dynamic>?;
+    if (tracks == null) return const <Track>[];
+    return tracks.map(_trackFromDetailSong).whereType<Track>().toList();
+  }
+
+  Track? _trackFromDetailSong(dynamic raw) {
+    final song = _asMap(raw);
+    if (song == null) return null;
+    final songId = song['id'] as int?;
+    final name = song['name'] as String?;
+    if (songId == null || name == null) return null;
+    final artists = (song['artists'] as List<dynamic>? ?? const <dynamic>[])
+        .map((a) => _asMap(a)?['name'] as String?)
+        .whereType<String>()
+        .join('/');
+    final album = _asMap(song['album']);
+    final durationMs = song['duration'] as int?;
+    return Track(
+      id: '\$songId',
+      sourceId: NeteaseSource.id,
+      title: name,
+      artist: artists.isEmpty ? '未知歌手' : artists,
+      album: album?['name'] as String?,
+      duration:
+          durationMs == null ? null : Duration(milliseconds: durationMs),
+      coverUrl: album?['picUrl'] as String?,
+      sourceData: <String, dynamic>{'neteaseId': songId},
+    );
+  }
+
+  String? _extractMusicU(Response<dynamic> response) {
+    final cookies = response.headers['set-cookie'];
+    if (cookies == null) return null;
+    for (final cookie in cookies) {
+      final match = RegExp(r'MUSIC_U=([^;]+)').firstMatch(cookie);
+      if (match != null) return match.group(1);
+    }
+    return null;
+  }
+
+  String? _musicUFromBodyCookie(String? cookie) {
+    if (cookie == null) return null;
+    final match = RegExp(r'MUSIC_U=([^;]+)').firstMatch(cookie);
+    return match?.group(1);
+  }
+
   // ---------- 账号能力 ----------
 
   @override
@@ -273,6 +487,7 @@ class NeteaseSource extends MusicSource {
           nickname: nickname,
           avatarUrl: profile['avatarUrl'] as String?,
         ),
+        credentials: {'MUSIC_U': cookieValue},
       );
     } on DioException {
       return const AuthFailure(
@@ -327,7 +542,10 @@ class NeteaseSource extends MusicSource {
   }) async {
     final response = await _dio.get<dynamic>(
       '/api/nuser/account/get',
-      options: Options(headers: <String, String>{'Cookie': cookie}),
+      options: Options(
+        headers: <String, String>{'Cookie': cookie},
+        responseType: ResponseType.plain,
+      ),
     );
     final data = _asMap(_decoded(response));
     if (data == null || (data['code'] as int? ?? -1) != 200) return null;
@@ -365,4 +583,51 @@ class NeteaseSource extends MusicSource {
 
   Map<String, dynamic>? _asMap(dynamic value) =>
       value is Map ? Map<String, dynamic>.from(value) : null;
+}
+
+/// 网易云用户歌单（账号歌单）。
+class NeteaseUserPlaylist {
+  const NeteaseUserPlaylist({
+    required this.id,
+    required this.name,
+    required this.trackCount,
+    required this.playCount,
+    this.coverUrl,
+  });
+
+  final int id;
+  final String name;
+  final int trackCount;
+  final int playCount;
+  final String? coverUrl;
+}
+
+/// 二维码登录轮询状态。
+sealed class QrLoginPoll {
+  const QrLoginPoll();
+
+  factory QrLoginPoll.waiting() = QrLoginPollWaiting;
+  factory QrLoginPoll.scanned() = QrLoginPollScanned;
+  factory QrLoginPoll.expired() = QrLoginPollExpired;
+  factory QrLoginPoll.success({required String musicU, String? nickname}) =
+      QrLoginPollSuccess;
+}
+
+class QrLoginPollWaiting extends QrLoginPoll {
+  const QrLoginPollWaiting();
+}
+
+class QrLoginPollScanned extends QrLoginPoll {
+  const QrLoginPollScanned();
+}
+
+class QrLoginPollExpired extends QrLoginPoll {
+  const QrLoginPollExpired();
+}
+
+class QrLoginPollSuccess extends QrLoginPoll {
+  const QrLoginPollSuccess({required this.musicU, this.nickname});
+
+  final String musicU;
+  final String? nickname;
 }

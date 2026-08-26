@@ -3,7 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../core/theme/app_tokens.dart';
-import '../features/auth/presentation/account_center.dart';
+import '../features/settings/settings_page.dart';
 import '../features/home/home_page.dart';
 import '../features/library/library_page.dart';
 import '../features/library/playlist_detail_page.dart';
@@ -56,15 +56,12 @@ final routerProvider = Provider<GoRouter>((ref) {
               ),
             ],
           ),
-          StatefulShellBranch(
-            routes: [
-              GoRoute(
-                path: '/account',
-                builder: (_, _) => const AccountCenterPage(),
-              ),
-            ],
-          ),
         ],
+      ),
+      GoRoute(
+        path: '/settings',
+        parentNavigatorKey: rootNavigatorKey,
+        builder: (_, _) => const SettingsPage(),
       ),
       GoRoute(
         path: '/player',
