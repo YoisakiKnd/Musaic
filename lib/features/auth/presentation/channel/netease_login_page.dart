@@ -73,6 +73,9 @@ class _NeteaseLoginPageState extends ConsumerState<NeteaseLoginPage>
         (_) => _poll(source),
       );
     } catch (e) {
+      // 真机联调定位用；错误详情进调试输出，UI 只提示网络问题
+      debugPrint('MusaicNeteaseQR createQrLogin 失败: $e');
+      if (!mounted) return;
       setState(() => _qrStatus = '二维码获取失败，请检查网络');
     }
   }

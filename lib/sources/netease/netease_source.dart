@@ -355,13 +355,29 @@ class NeteaseSource extends MusicSource {
 
   /// 创建二维码登录会话：返回 [key]（unikey）与二维码内容 URL。
   Future<({String key, String qrContent})> createQrLogin() async {
-    final response = await _dio.post<dynamic>(
-      '/api/login/qrcode/unikey',
-      data: {'type': 1},
-      options: Options(
-        contentType: Headers.formUrlEncodedContentType,
-        responseType: ResponseType.plain,
-      ),
+    final Response<dynamic> response;
+    try {
+      response = await _dio.post<dynamic>(
+        '/api/login/qrcode/unikey',
+        data: {'type': 1},
+        options: Options(
+          contentType: Headers.formUrlEncodedContentType,
+          responseType: ResponseType.plain,
+        ),
+      );
+    } on DioException catch (e) {
+      developer.log(
+        'createQrLogin DioException: type=${e.type} '
+        'status=${e.response?.statusCode} msg=${e.message} '
+        'error=${e.error}',
+        name: 'MusaicNetease',
+      );
+      rethrow;
+    }
+    developer.log(
+      'createQrLogin status=${response.statusCode} '
+      'body=${response.data}',
+      name: 'MusaicNetease',
     );
     final data = _asMap(_decoded(response));
     final key = data?['unikey'] as String? ?? '';
