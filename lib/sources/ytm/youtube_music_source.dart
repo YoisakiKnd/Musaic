@@ -6,6 +6,7 @@ import 'package:dio/dio.dart';
 
 import '../../core/error/source_exception.dart';
 import '../../core/model/track.dart';
+import '../../core/network/network_config.dart';
 import '../../core/network/source_auth_interceptor.dart';
 import '../../core/source/capabilities.dart';
 import '../../core/source/music_source.dart';
@@ -63,8 +64,8 @@ class YouTubeMusicSource extends MusicSource implements WebLoginCapable {
   Dio _buildDio() {
     final dio = Dio(
       BaseOptions(
-        connectTimeout: const Duration(seconds: 10),
-        receiveTimeout: const Duration(seconds: 15),
+        connectTimeout: NetworkConfig.instance.connect,
+        receiveTimeout: NetworkConfig.instance.receive,
         headers: <String, String>{
           'Content-Type': 'application/json',
           'Origin': 'https://music.youtube.com',
@@ -84,6 +85,7 @@ class YouTubeMusicSource extends MusicSource implements WebLoginCapable {
         expiredBodyCodes: const <int>{},
       ),
     );
+    dio.interceptors.add(TimeoutInterceptor());
     return dio;
   }
 

@@ -1,5 +1,7 @@
+import 'dart:convert';
 import 'dart:io';
 
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -9,6 +11,7 @@ import 'package:path_provider/path_provider.dart';
 import '../../core/di/app_providers.dart';
 import '../../core/theme/app_tokens.dart';
 import '../auth/presentation/channel/account_manage_page.dart';
+import '../library/data/backup_service.dart';
 import 'local_music_settings_page.dart';
 import 'settings_providers.dart';
 
@@ -171,6 +174,10 @@ class PlaybackPage extends ConsumerWidget {
     final glass = ref.watch(enableGlassProvider);
     final quality = ref.watch(audioQualityProvider);
     final offsetMs = ref.watch(lyricOffsetMsProvider);
+    final rawTimeout = ref.watch(networkTimeoutSecondsProvider);
+    // 恢复值可能不在档位上，归到最近档展示
+    final timeoutSeconds = const [8, 14, 20]
+        .reduce((a, b) => (a - rawTimeout).abs() <= (b - rawTimeout).abs() ? a : b);
     return Scaffold(
       appBar: AppBar(title: const Text('播放与性能')),
       body: ListView(
@@ -252,6 +259,40 @@ class PlaybackPage extends ConsumerWidget {
             ),
           ),
           const SizedBox(height: 12),
+          // ---------- 请求超时 ----------
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text('网络请求超时',
+                      style: TextStyle(fontWeight: FontWeight.w600)),
+                  const SizedBox(height: 2),
+                  const Text(
+                    '受限网络 / 代理环境可调大档位，播放与搜索即时生效',
+                    style: TextStyle(fontSize: 12),
+                  ),
+                  const SizedBox(height: 10),
+                  SizedBox(
+                    width: double.infinity,
+                    child: SegmentedButton<int>(
+                      segments: const [
+                        ButtonSegment(value: 8, label: Text('标准 8s')),
+                        ButtonSegment(value: 14, label: Text('宽松 14s')),
+                        ButtonSegment(value: 20, label: Text('弱网 20s')),
+                      ],
+                      selected: {timeoutSeconds},
+                      onSelectionChanged: (selection) => ref
+                          .read(networkTimeoutSecondsProvider.notifier)
+                          .set(selection.first),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
           // ---------- 玻璃效果 ----------
           Card(
             child: SwitchListTile(
@@ -283,6 +324,33 @@ class DataPage extends ConsumerWidget {
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
+          // ---------- 备份：导出 / 导入 ----------
+          Card(
+            child: Column(
+              children: [
+                ListTile(
+                  leading: const Icon(Icons.file_download_outlined),
+                  title: const Text('导出资料库（JSON）'),
+                  subtitle: const Text(
+                    '收藏 / 歌单 / 最近播放 → 备份文件（不含任何渠道凭据）',
+                    style: TextStyle(fontSize: 12),
+                  ),
+                  onTap: () => _exportBackup(context, ref),
+                ),
+                const Divider(height: 1, indent: 56),
+                ListTile(
+                  leading: const Icon(Icons.file_upload_outlined),
+                  title: const Text('导入资料库（JSON）'),
+                  subtitle: const Text(
+                    '合并式导入：按曲目去重，不删除本地已有数据',
+                    style: TextStyle(fontSize: 12),
+                  ),
+                  onTap: () => _importBackup(context, ref),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 12),
           Card(
             child: Column(
               children: [
@@ -340,6 +408,87 @@ class DataPage extends ConsumerWidget {
         ],
       ),
     );
+  }
+
+  /// 导出：优先系统保存对话框；不支持/取消时落到文档目录。
+  Future<void> _exportBackup(BuildContext context, WidgetRef ref) async {
+    final service = ref.read(backupServiceProvider);
+    final json = service.snapshot().encodePretty();
+    final fileName =
+        'musaic-backup-${DateTime.now().toIso8601String().substring(0, 10)}.json';
+    try {
+      String? savedPath = await FilePicker.platform.saveFile(
+        dialogTitle: '导出资料库',
+        fileName: fileName,
+      );
+      if (savedPath == null) {
+        // 平台不支持保存对话框或用户取消：尝试静默写入文件
+        if (!context.mounted) return;
+        final confirmed = await showDialog<bool>(
+          context: context,
+          builder: (dialogContext) => AlertDialog(
+            title: const Text('导出资料库'),
+            content: const Text(
+                '未选择保存位置，将导出到应用文档目录（Musaic/ 下），继续？'),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(dialogContext).pop(false),
+                child: const Text('取消'),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.of(dialogContext).pop(true),
+                child: const Text('导出'),
+              ),
+            ],
+          ),
+        );
+        if (confirmed != true) return;
+        final documents = await getApplicationDocumentsDirectory();
+        final dir = Directory(p.join(documents.path, 'Musaic'));
+        if (!dir.existsSync()) dir.createSync(recursive: true);
+        final file = File(p.join(dir.path, fileName));
+        await file.writeAsString(json);
+        savedPath = file.path;
+      } else {
+        await File(savedPath).writeAsString(json);
+      }
+      if (!context.mounted) return;
+      _toast(context, '已导出：$savedPath');
+    } catch (e) {
+      if (!context.mounted) return;
+      _toast(context, '导出失败：$e');
+    }
+  }
+
+  /// 导入：选择 JSON 备份并合并。
+  Future<void> _importBackup(BuildContext context, WidgetRef ref) async {
+    try {
+      final picked = await FilePicker.platform.pickFiles(
+        dialogTitle: '选择 Musaic 备份文件',
+        type: FileType.custom,
+        allowedExtensions: const ['json'],
+      );
+      final fileBytes = picked?.files.single.bytes ??
+          (picked?.files.single.path == null
+              ? null
+              : await File(picked!.files.single.path!).readAsBytes());
+      if (fileBytes == null) return;
+      final service = ref.read(backupServiceProvider);
+      final backup = service.decode(utf8.decode(fileBytes));
+      final result = await service.importBackup(backup);
+      if (!context.mounted) return;
+      _toast(
+        context,
+        '导入完成：收藏 ${result.favorites} · 歌单 ${result.playlists} · '
+        '历史 ${result.history}',
+      );
+    } on FormatException catch (e) {
+      if (!context.mounted) return;
+      _toast(context, '文件格式不正确：${e.message}');
+    } catch (e) {
+      if (!context.mounted) return;
+      _toast(context, '导入失败：$e');
+    }
   }
 }
 

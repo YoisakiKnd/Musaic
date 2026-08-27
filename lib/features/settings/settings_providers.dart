@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 
+import '../../core/network/network_config.dart';
+
 /// 应用设置仓库：外观与性能偏好持久化（Hive）。
 class AppSettingsRepository {
   AppSettingsRepository({required this.box});
@@ -46,11 +48,19 @@ class AppSettingsRepository {
   Future<void> setAudioQuality(AudioQuality quality) =>
       box.put(_qualityKey, quality.name);
 
+  /// 渠道网络请求超时（秒）；null 表示用默认档位。
+  int? get networkTimeoutSeconds =>
+      int.tryParse(box.get(_timeoutKey) ?? '');
+
+  Future<void> setNetworkTimeoutSeconds(int seconds) =>
+      box.put(_timeoutKey, seconds.toString());
+
   static const String _themeModeKey = 'theme_mode';
   static const String _glassKey = 'enable_glass';
   static const String _oledKey = 'oled_black';
   static const String _lyricOffsetKey = 'lyric_offset_ms';
   static const String _qualityKey = 'audio_quality';
+  static const String _timeoutKey = 'network_timeout_seconds';
 }
 
 /// 播放音质档位（各渠道映射到自身支持的最接近码率）。
@@ -157,3 +167,26 @@ class AudioQualityNotifier extends Notifier<AudioQuality> {
 final audioQualityProvider =
     NotifierProvider<AudioQualityNotifier, AudioQuality>(
         AudioQualityNotifier.new);
+
+/// 渠道网络请求超时（秒）：写设置 + 即时覆写 [NetworkConfig]（请求级生效）。
+class NetworkTimeoutNotifier extends Notifier<int> {
+  @override
+  int build() {
+    final stored =
+        ref.watch(appSettingsRepositoryProvider).networkTimeoutSeconds;
+    NetworkConfig.instance.restore(stored);
+    return NetworkConfig.instance.seconds;
+  }
+
+  Future<void> set(int seconds) async {
+    NetworkConfig.instance.set(seconds);
+    state = NetworkConfig.instance.seconds;
+    await ref
+        .read(appSettingsRepositoryProvider)
+        .setNetworkTimeoutSeconds(state);
+  }
+}
+
+final networkTimeoutSecondsProvider =
+    NotifierProvider<NetworkTimeoutNotifier, int>(
+        NetworkTimeoutNotifier.new);

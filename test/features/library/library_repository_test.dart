@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hive/hive.dart';
 import 'package:musaic/core/model/track.dart';
+import 'package:musaic/features/library/data/backup_service.dart';
 import 'package:musaic/features/library/data/library_repository.dart';
 
 void main() {
@@ -86,6 +87,79 @@ void main() {
       // 最后加入的记录必须仍在
       expect(historyBox.containsKey(keys.last), isTrue);
       expect(repository.recentHistory(limit: 5).length, 5);
+    });
+  });
+
+  group('资料库备份（BackupService）', () {
+    test('快照 → JSON → 解析 往返一致', () async {
+      final service = BackupService(library: repository);
+      await repository.toggleFavorite(makeTrack('fav1'));
+      await repository.createPlaylist('晨跑');
+      await repository.addManyToPlaylist(
+          '晨跑', [makeTrack('p1'), makeTrack('p2')]);
+      await repository.addHistory(makeTrack('h1'));
+
+      final backup = service.snapshot();
+      final restored =
+          service.decode(backup.encodePretty());
+
+      expect(restored.favorites.map((t) => t.id), ['fav1']);
+      expect(restored.playlists['晨跑']?.map((t) => t.id), ['p1', 'p2']);
+      expect(restored.history.map((t) => t.id), contains('h1'));
+      expect(restored.schema, LibraryBackup.currentSchema);
+    });
+
+    test('合并式导入：按 key 去重，不覆盖本地已有数据', () async {
+      final service = BackupService(library: repository);
+      // 本地已有：收藏 a；歌单「本地」含 x
+      await repository.toggleFavorite(makeTrack('a'));
+      await repository.createPlaylist('本地');
+      await repository.addManyToPlaylist('本地', [makeTrack('x')]);
+
+      const raw = '''
+      {
+        "schema": 1,
+        "exportedAt": "2026-08-27T10:00:00.000",
+        "favorites": [
+          {"id": "a", "sourceId": "netease", "title": "A", "artist": "s"},
+          {"id": "b", "sourceId": "kugou", "title": "B", "artist": "s"}
+        ],
+        "playlists": {
+          "备份歌单": [
+            {"id": "y", "sourceId": "netease", "title": "Y", "artist": "s"}
+          ],
+          "本地": [
+            {"id": "x", "sourceId": "netease", "title": "X", "artist": "s"},
+            {"id": "z", "sourceId": "qqmusic", "title": "Z", "artist": "s"}
+          ]
+        },
+        "history": [
+          {"id": "b", "sourceId": "kugou", "title": "B", "artist": "s"}
+        ]
+      }''';
+      final result = await service.importBackup(service.decode(raw));
+
+      // 收藏并集去重
+      expect(
+        repository.favorites.map((t) => t.id).toSet(),
+        {'a', 'b'},
+      );
+      // 本地歌单保留 + 新增 z（按 key 去重）
+      expect(
+        repository.playlistTracks('本地').map((t) => t.id),
+        ['x', 'z'],
+      );
+      // 缺失歌单被创建
+      expect(repository.playlistNames, contains('备份歌单'));
+      expect(result.favorites, 2);
+      expect(result.playlists, 2);
+    });
+
+    test('非法 JSON 抛 FormatException 且不入库', () async {
+      final service = BackupService(library: repository);
+      expect(() => service.decode('{broken'), throwsFormatException);
+      expect(() => service.decode('[1,2]'), throwsFormatException);
+      expect(repository.favorites, isEmpty);
     });
   });
 }

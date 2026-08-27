@@ -35,8 +35,11 @@ final coverPaletteProvider =
     provider = NetworkImage(coverUrl);
   } else if (coverUrl.startsWith('file://')) {
     provider = FileImage(File(Uri.parse(coverUrl).toFilePath()));
+  } else if (!coverUrl.contains('://')) {
+    // 裸绝对路径（部分渠道实现直接返回文件路径）
+    provider = FileImage(File(coverUrl));
   } else {
-    return const CoverPalette(); // 本地路径等暂不支持
+    return const CoverPalette(); // 其他 scheme 暂不支持
   }
 
   try {

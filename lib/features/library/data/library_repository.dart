@@ -43,6 +43,31 @@ class LibraryRepository {
     return true;
   }
 
+  /// 批量导入收藏（一次 putAll，按 key 去重合并）。
+  Future<void> addAllFavorites(Iterable<Track> tracks) async {
+    await _favorites.putAll({
+      for (final t in tracks) t.key: jsonEncode(t.toJson()),
+    });
+  }
+
+  /// 全量歌单快照（备份导出用）。
+  Map<String, List<Track>> playlistSnapshot() => {
+        for (final name in playlistNames) name: playlistTracks(name),
+      };
+
+  /// 批量导入历史（跳过裁剪，导入场景一次到位）。
+  Future<void> bulkImportHistory(Iterable<Track> tracks) async {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    var i = 0;
+    await _history.putAll({
+      for (final t in tracks)
+        t.key: jsonEncode(<String, dynamic>{
+          'at': now - (i++),
+          'track': t.toJson(),
+        }),
+    });
+  }
+
   Stream<BoxEvent> watchFavorites() => _favorites.watch();
 
   Stream<BoxEvent> watchHistory() => _history.watch();

@@ -12,10 +12,12 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:window_manager/window_manager.dart';
 
 import 'app/router.dart';
+import 'core/network/network_config.dart';
 import 'core/theme/app_tokens.dart';
 import 'features/auth/data/account_repository.dart';
 import 'features/library/data/library_repository.dart';
 import 'features/player/audio_handler.dart';
+import 'features/player/data/resume_repository.dart';
 import 'features/search/data/search_history_repository.dart';
 import 'features/settings/data/local_music_settings_repository.dart';
 import 'features/settings/settings_providers.dart'
@@ -123,11 +125,16 @@ Future<void> main() async {
   final searchHistoryBox = boxes[4];
   final localMusicSettingsBox = boxes[5];
   final appSettingsBox = boxes[6];
+  final resumeBox = await Hive.openBox<String>(ResumeRepository.boxName);
 
   await _Bootstrap._configureAudioSession();
   await _Bootstrap._requestNotificationPermission();
   await _Bootstrap._configureDesktopWindow();
   final audioHandler = await _Bootstrap._initAudioHandler();
+
+  // 组合根：先建仓库，恢复网络超时配置（渠道 Dio 构建时读取），再注入 override
+  final appSettingsRepository = AppSettingsRepository(box: appSettingsBox);
+  NetworkConfig.instance.restore(appSettingsRepository.networkTimeoutSeconds);
 
   runApp(
     ProviderScope(
@@ -156,8 +163,9 @@ Future<void> main() async {
         localMusicSettingsRepositoryProvider.overrideWithValue(
           LocalMusicSettingsRepository(box: localMusicSettingsBox),
         ),
-        appSettingsRepositoryProvider.overrideWithValue(
-          AppSettingsRepository(box: appSettingsBox),
+        appSettingsRepositoryProvider.overrideWithValue(appSettingsRepository),
+        resumeRepositoryProvider.overrideWithValue(
+          ResumeRepository(box: resumeBox),
         ),
       ],
       child: const MusaicApp(),

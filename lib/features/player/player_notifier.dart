@@ -9,8 +9,10 @@ import '../../core/di/app_providers.dart';
 import '../../core/error/source_exception.dart';
 import '../../core/model/track.dart';
 import '../../core/source/music_source.dart' show ResolvedStream;
+import '../../core/network/network_config.dart';
 import '../../core/theme/app_tokens.dart';
 import 'audio_handler.dart';
+import 'data/resume_repository.dart';
 import 'domain/queue_logic.dart';
 
 /// 播放状态（前端文档 §6.2）。
@@ -117,12 +119,17 @@ class PlayerNotifier extends Notifier<PlayerState> {
   int _loadSeq = 0; // 加载序号：过期请求的状态更新一律丢弃
   final Random _random = Random();
 
+  /// 断点续播仓库与写入节流时间戳。
+  ResumeRepository? _resume;
+  DateTime _lastResumeWrite = DateTime.fromMillisecondsSinceEpoch(0);
+
   /// 随机模式洗牌序列（shuffleOn=false 时忽略）。
   List<int>? _shuffleOrder;
 
   @override
   PlayerState build() {
     _handler = ref.watch(audioHandlerProvider);
+    _resume = ref.read(resumeRepositoryProvider);
     _handler.onNext = _onSystemSkipToNext;
     _handler.onPrevious = _onSystemSkipToPrevious;
     _handler.onSkipToQueueIndex = playAt;
@@ -244,6 +251,7 @@ class PlayerNotifier extends Notifier<PlayerState> {
     if (result.queue.isEmpty) {
       _shuffleOrder = null;
       _sleepTimer?.cancel();
+      await _resume?.clear();
       await _handler.stop();
       state = state.copyWith(
         queue: const <Track>[],
@@ -444,7 +452,9 @@ class PlayerNotifier extends Notifier<PlayerState> {
       try {
         resolved = await source
             .resolveStream(track)
-            .timeout(const Duration(seconds: 15));
+            .timeout(
+                Duration(seconds: NetworkConfig.instance.seconds * 2),
+              );
       } on TimeoutException {
         throw NetworkSourceException('解析播放地址超时',
             sourceId: track.sourceId);
@@ -480,8 +490,9 @@ class PlayerNotifier extends Notifier<PlayerState> {
       if (seq != _loadSeq) return;
       state = state.copyWith(loading: false, playing: true);
 
-      // 记录最近播放（本地优先存储，失败静默）
+      // 记录最近播放与断点快照起点（本地优先存储，失败静默）
       unawaited(_recordHistory(track));
+      _persistResume(force: true);
     } on SourceException catch (e) {
       if (seq != _loadSeq) return;
       debugPrint('MusaicPlayer SourceException: ${e.message}');
@@ -518,6 +529,7 @@ class PlayerNotifier extends Notifier<PlayerState> {
     if (completed) return;
     if (!_autoAdvancing && playerState.playing != state.playing) {
       state = state.copyWith(playing: playerState.playing);
+      if (!playerState.playing) _persistResume(force: true);
     }
   }
 
@@ -575,9 +587,56 @@ class PlayerNotifier extends Notifier<PlayerState> {
       duration: dur ?? state.duration,
       buffered: buffered,
     );
+    if (state.playing) _persistResume();
+  }
+
+  // ---------- 断点续播 ----------
+
+  /// 节流快照：force 或距上次写入 ≥15s 才落盘。
+  void _persistResume({bool force = false}) {
+    final resume = _resume;
+    final current = state.current;
+    if (resume == null || current == null) return;
+    final now = DateTime.now();
+    if (!force && now.difference(_lastResumeWrite) < const Duration(seconds: 15)) {
+      return;
+    }
+    _lastResumeWrite = now;
+    unawaited(
+      resume.save(
+        ResumePlayback(
+          queue: state.queue,
+          index: state.currentIndex,
+          position: state.position,
+          mode: state.mode,
+          shuffleOn: state.shuffleOn,
+          savedAt: now,
+        ),
+      ),
+    );
+  }
+
+  /// 恢复上次会话（队列 + 进度 + 模式）；无快照返回 false。
+  Future<bool> restoreResume() async {
+    final r = _resume?.load();
+    if (r == null || r.queue.isEmpty) return false;
+    state = state.copyWith(mode: r.mode, shuffleOn: r.shuffleOn);
+    await playQueue(r.queue, startIndex: r.index);
+    if (r.position > const Duration(seconds: 2)) {
+      await seekTo(r.position);
+    }
+    return true;
   }
 }
 
 /// 全局播放状态 Provider。
 final playerNotifierProvider =
     NotifierProvider<PlayerNotifier, PlayerState>(PlayerNotifier.new);
+
+/// 断点续播快照：活跃播放中恒为 null（首页卡数据源）。
+final resumePlaybackProvider = Provider<ResumePlayback?>((ref) {
+  if (ref.watch(playerNotifierProvider.select((s) => s.current)) != null) {
+    return null;
+  }
+  return ref.watch(resumeRepositoryProvider).load();
+});

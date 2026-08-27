@@ -6,6 +6,7 @@ import '../../features/auth/application/account_notifier.dart';
 import '../../features/auth/data/account_repository.dart';
 import '../../features/library/data/library_repository.dart';
 import '../../features/player/audio_handler.dart';
+import '../../features/player/data/resume_repository.dart';
 import '../../features/search/data/search_history_repository.dart';
 import '../../features/settings/data/local_music_settings_repository.dart';
 import '../../features/settings/settings_providers.dart'
@@ -37,6 +38,11 @@ final audioHandlerProvider = Provider<MusaicAudioHandler>((ref) {
 
 final searchHistoryRepositoryProvider = Provider<SearchHistoryRepository>((ref) {
   throw StateError('searchHistoryRepositoryProvider 必须在启动时 override');
+});
+
+/// 断点续播仓库（独立 Hive Box）。
+final resumeRepositoryProvider = Provider<ResumeRepository>((ref) {
+  throw StateError('resumeRepositoryProvider 必须在启动时 override');
 });
 
 /// 凭据读取器工厂：渠道实现通过它读取自己的凭据，而不接触存储细节。

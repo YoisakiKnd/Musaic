@@ -6,6 +6,7 @@ import 'dart:typed_data';
 import 'package:dio/dio.dart';
 import '../../core/error/source_exception.dart';
 import '../../core/model/track.dart';
+import '../../core/network/network_config.dart';
 import '../../core/network/source_auth_interceptor.dart';
 import '../../core/source/capabilities.dart';
 import '../../core/source/music_source.dart';
@@ -49,8 +50,8 @@ class QqMusicSource extends MusicSource implements QrLoginCapable {
   Dio _buildDio() {
     final dio = Dio(
       BaseOptions(
-        connectTimeout: const Duration(seconds: 8),
-        receiveTimeout: const Duration(seconds: 10),
+        connectTimeout: NetworkConfig.instance.connect,
+        receiveTimeout: NetworkConfig.instance.receive,
         headers: <String, String>{
           'Referer': 'https://y.qq.com/',
           'User-Agent':
@@ -68,6 +69,7 @@ class QqMusicSource extends MusicSource implements QrLoginCapable {
         onSessionExpired: () => onSessionExpired?.call(),
       ),
     );
+    dio.interceptors.add(TimeoutInterceptor());
     return dio;
   }
 

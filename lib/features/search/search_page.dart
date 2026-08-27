@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/di/app_providers.dart';
 import '../../core/error/source_exception.dart';
+import '../../core/network/network_config.dart';
 import '../../core/model/track.dart';
 import '../../core/source/music_source.dart';
 import '../../core/theme/app_tokens.dart';
@@ -102,7 +103,9 @@ class _SearchPageState extends ConsumerState<SearchPage> {
           // 渠道级超时：单个渠道 hang 不再拖垮整页结果
           results[source.sourceId] = await source
               .search(query, limit: 20)
-              .timeout(const Duration(seconds: 12));
+              .timeout(
+                  Duration(seconds: NetworkConfig.instance.seconds + 4),
+                );
         } on SourceException catch (e) {
           results[source.sourceId] = e.message;
         } on TimeoutException {

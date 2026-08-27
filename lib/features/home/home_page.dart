@@ -1,3 +1,4 @@
+import 'dart:async' show unawaited;
 import 'dart:io' show File;
 
 import 'package:cached_network_image/cached_network_image.dart';
@@ -123,6 +124,8 @@ class _HomePageState extends ConsumerState<HomePage> {
                 ),
               ),
             ),
+            // ---------- 继续上次播放（断点续播） ----------
+            const _ResumeBanner(),
             // ---------- 最近播放 ----------
             historyAsync.when(
               loading: () => const SizedBox(
@@ -137,6 +140,69 @@ class _HomePageState extends ConsumerState<HomePage> {
                   : _RecentSection(tracks: history),
             ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+/// 断点续播横幅：上次会话中断的曲目（空闲时显示）。
+class _ResumeBanner extends ConsumerWidget {
+  const _ResumeBanner();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final snapshot = ref.watch(resumePlaybackProvider);
+    final track = snapshot?.track;
+    if (snapshot == null || track == null) {
+      return const SizedBox.shrink();
+    }
+    final remaining = track.duration == null
+        ? null
+        : track.duration! - snapshot.position;
+    final hasRemaining =
+        remaining != null && remaining > const Duration(seconds: 5);
+    final remainLabel = hasRemaining
+        ? '${remaining.inMinutes}:${(remaining.inSeconds % 60).toString().padLeft(2, '0')}'
+        : null;
+    final scheme = Theme.of(context).colorScheme;
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+      child: Card(
+        margin: EdgeInsets.zero,
+        child: ListTile(
+          leading: const Icon(Icons.play_circle_outline_rounded,
+              color: AppTokens.accent, size: 32),
+          title: Text(track.title,
+              maxLines: 1, overflow: TextOverflow.ellipsis),
+          subtitle: Text(
+            [
+              '继续上次播放 · ${track.artist}',
+              if (remainLabel != null) '剩 $remainLabel',
+            ].join(' · '),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+                fontSize: 12,
+                color: scheme.onSurface.withValues(alpha: 0.55)),
+          ),
+          trailing: IconButton(
+            tooltip: '忽略此记录',
+            icon: Icon(Icons.close_rounded,
+                size: 18,
+                color: scheme.onSurface.withValues(alpha: 0.45)),
+            onPressed: () async {
+              await ref.read(resumeRepositoryProvider).clear();
+              ref.invalidate(resumePlaybackProvider);
+            },
+          ),
+          onTap: () async {
+            final ok = await ref
+                .read(playerNotifierProvider.notifier)
+                .restoreResume();
+            if (ok && context.mounted) unawaited(context.push('/player'));
+          },
         ),
       ),
     );

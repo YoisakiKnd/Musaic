@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/di/app_providers.dart';
+import '../../core/network/network_config.dart';
 import '../../core/model/track.dart';
 import '../../core/theme/app_tokens.dart';
 import '../player/player_notifier.dart';
@@ -71,7 +72,9 @@ class _SearchResultsPageState extends ConsumerState<SearchResultsPage> {
     try {
       final next = await source
           .search(widget.query, limit: _pageSize, offset: current.length)
-          .timeout(const Duration(seconds: 12));
+          .timeout(
+              Duration(seconds: NetworkConfig.instance.seconds + 4),
+            );
       if (!mounted) return;
       setState(() {
         if (next.length < _pageSize) _exhausted.add(sourceId);
