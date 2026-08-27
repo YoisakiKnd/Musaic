@@ -7,8 +7,8 @@ import 'package:go_router/go_router.dart';
 
 import '../../core/di/app_providers.dart';
 import '../../core/model/track.dart';
+import '../../core/source/capabilities.dart';
 import '../../core/theme/app_tokens.dart';
-import '../../sources/local/local_file_source.dart';
 import '../library/data/library_providers.dart';
 import '../player/player_notifier.dart';
 
@@ -32,9 +32,11 @@ class _HomePageState extends ConsumerState<HomePage> {
   }
 
   Future<void> _scanLocalLibrary() async {
-    final registry = ref.read(sourceRegistryProvider);
-    final local =
-        registry.resolve(LocalFileSource.id) as LocalFileSource?;
+    final local = ref
+        .read(sourceRegistryProvider)
+        .all
+        .whereType<LibraryScanCapable>()
+        .firstOrNull;
     if (local == null) return;
     setState(() => _scanning = true);
     try {

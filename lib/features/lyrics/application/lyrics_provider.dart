@@ -2,7 +2,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/di/app_providers.dart';
 import '../../../core/model/track.dart';
-import '../domain/lyric_bundle.dart';
+import '../../../core/lyrics/lyric_bundle.dart';
 
 /// 歌词解析 Provider（Master Plan §3.3 歌词流）。
 ///

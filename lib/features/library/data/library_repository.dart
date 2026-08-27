@@ -144,6 +144,36 @@ class LibraryRepository {
     await _writePlaylist(name, tracks);
   }
 
+  /// 批量加入歌单：只做一次「读-改-写」，避免逐条 N 次全表重写。
+  Future<void> addManyToPlaylist(
+    String name,
+    Iterable<Track> tracks,
+  ) async {
+    final existing = playlistTracks(name);
+    final known = existing.map((t) => t.key).toSet();
+    var changed = false;
+    for (final track in tracks) {
+      if (known.add(track.key)) {
+        existing.add(track);
+        changed = true;
+      }
+    }
+    if (changed) await _writePlaylist(name, existing);
+  }
+
+  /// 用给定曲目列表整体替换歌单内容（不存在则创建）。
+  Future<void> replacePlaylistTracks(
+    String name,
+    Iterable<Track> tracks,
+  ) async {
+    final existing = <Track>[];
+    final known = <String>{};
+    for (final track in tracks) {
+      if (known.add(track.key)) existing.add(track);
+    }
+    await _writePlaylist(name, existing);
+  }
+
   Future<void> removeFromPlaylist(String name, int index) async {
     final tracks = playlistTracks(name);
     if (index < 0 || index >= tracks.length) return;

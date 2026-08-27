@@ -2,7 +2,7 @@ import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hive/hive.dart';
-import 'package:musaic/features/auth/domain/source_account.dart';
+import 'package:musaic/core/auth/source_account.dart';
 import 'package:musaic/core/model/track.dart';
 import 'package:musaic/features/auth/data/account_repository.dart';
 
@@ -10,8 +10,14 @@ import 'package:musaic/features/auth/data/account_repository.dart';
 class _InMemorySecureStore implements SecureCredentialStore {
   final Map<String, String> store = <String, String>{};
 
+  /// 全库读取次数（验证读缓存命中，热路径不应反复整库解密）。
+  int readAllCount = 0;
+
   @override
-  Future<Map<String, String>> readAll() async => Map.of(store);
+  Future<Map<String, String>> readAll() async {
+    readAllCount++;
+    return Map.of(store);
+  }
 
   @override
   Future<void> write(String key, String value) async => store[key] = value;
@@ -82,6 +88,32 @@ void main() {
       });
       final creds = await repository.readCredentials('netease');
       expect(creds['MUSIC_U'], 'abcdefghi');
+    });
+  });
+
+  group('凭据读取缓存（网络拦截器热路径）', () {
+    test('重复读取命中缓存：不再触发整库 readAll', () async {
+      await repository.saveCredentials('netease', {'MUSIC_U': 'abc'});
+      final before = secure.readAllCount;
+      await repository.readCredentials('netease');
+      await repository.readCredentials('netease');
+      expect(secure.readAllCount, before);
+    });
+
+    test('保存/删除凭据使缓存失效，读回最新值', () async {
+      await repository.saveCredentials('netease', {'MUSIC_U': 'old'});
+      expect((await repository.readCredentials('netease'))['MUSIC_U'], 'old');
+      await repository.saveCredentials('netease', {'MUSIC_U': 'new'});
+      expect((await repository.readCredentials('netease'))['MUSIC_U'], 'new');
+      await repository.deleteCredentials('netease');
+      expect(await repository.readCredentials('netease'), isEmpty);
+    });
+
+    test('clearAll 后缓存为空', () async {
+      await repository.saveCredentials('netease', {'MUSIC_U': 'a'});
+      await repository.readCredentials('netease');
+      await repository.clearAll();
+      expect(await repository.readCredentials('netease'), isEmpty);
     });
   });
 

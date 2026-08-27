@@ -17,6 +17,7 @@ class SourceAuthInterceptor extends Interceptor {
     required this.readCredentials,
     required this.onSessionExpired,
     this.headerName = 'Cookie',
+    this.injectCredentials = true,
     this.expiredBodyCodes = const <int>{301},
   });
 
@@ -27,6 +28,10 @@ class SourceAuthInterceptor extends Interceptor {
   /// 注入的头名；网易云用 Cookie。
   final String headerName;
 
+  /// 是否在请求前注入凭据头。
+  /// 关闭时仅做被动过期捕获（如 YTM 自行管理 Authorization 头的渠道）。
+  final bool injectCredentials;
+
   /// 响应体中代表「未登录/失效」的业务 code 集合。
   final Set<int> expiredBodyCodes;
 
@@ -35,16 +40,18 @@ class SourceAuthInterceptor extends Interceptor {
     RequestOptions options,
     RequestInterceptorHandler handler,
   ) async {
-    try {
-      final credentials = await readCredentials();
-      if (credentials.isNotEmpty) {
-        final cookie = credentials.entries
-            .map((e) => '${e.key}=${e.value}')
-            .join('; ');
-        options.headers[headerName] = cookie;
+    if (injectCredentials) {
+      try {
+        final credentials = await readCredentials();
+        if (credentials.isNotEmpty) {
+          final cookie = credentials.entries
+              .map((e) => '${e.key}=${e.value}')
+              .join('; ');
+          options.headers[headerName] = cookie;
+        }
+      } catch (_) {
+        // 凭据读取失败时按匿名请求继续，不打断播放主链路。
       }
-    } catch (_) {
-      // 凭据读取失败时按匿名请求继续，不打断播放主链路。
     }
     handler.next(options);
   }

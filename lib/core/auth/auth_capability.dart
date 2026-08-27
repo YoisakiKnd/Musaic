@@ -16,6 +16,9 @@ enum AuthType {
 
   /// Token 登录（V1.2 Subsonic 等预留）。
   token,
+
+  /// WebView 提取 Cookie 登录（YouTube Music）。
+  webview,
 }
 
 /// 登录表单字段声明。
@@ -24,6 +27,7 @@ class CredentialField {
     required this.key,
     required this.label,
     this.obscure = false,
+    this.numeric = false,
     this.placeholder,
     this.hint,
   });
@@ -36,6 +40,9 @@ class CredentialField {
 
   /// 是否密文显示。
   final bool obscure;
+
+  /// 是否数字键盘输入（手机号等）。
+  final bool numeric;
 
   final String? placeholder;
 

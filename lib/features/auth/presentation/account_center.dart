@@ -4,7 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/di/app_providers.dart';
 import '../../../core/theme/app_tokens.dart';
 import '../application/account_notifier.dart';
-import '../domain/source_account.dart';
+import '../../../core/auth/source_account.dart';
 import 'login_dialog.dart';
 
 /// 渠道账号卡片列表（设置页「账号」区块复用）。

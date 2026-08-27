@@ -6,7 +6,7 @@ import '../../../core/model/track.dart';
 import '../../../core/theme/app_tokens.dart';
 import '../../player/player_notifier.dart';
 import '../application/lyrics_provider.dart';
-import '../domain/lyric_bundle.dart';
+import '../../../core/lyrics/lyric_bundle.dart';
 
 /// 逐字歌词视图（前端文档 §8）。
 ///

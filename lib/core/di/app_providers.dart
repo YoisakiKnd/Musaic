@@ -7,8 +7,7 @@ import '../../features/auth/data/account_repository.dart';
 import '../../features/library/data/library_repository.dart';
 import '../../features/player/audio_handler.dart';
 import '../../features/search/data/search_history_repository.dart';
-import '../../features/settings/local_music_settings_page.dart'
-    show localMusicSettingsRepositoryProvider;
+import '../../features/settings/data/local_music_settings_repository.dart';
 import '../source/music_source.dart';
 import '../source/source_registry.dart';
 import '../../sources/kugou/kugou_source.dart';
@@ -50,6 +49,13 @@ final credentialReaderFactoryProvider = Provider<CredentialReaderFactory>(
   },
 );
 
+/// 会话过期回调工厂：把每个渠道网络层的被动捕获统一接到
+/// [AccountNotifier.markExpiredIfLoggedIn]。
+/// 所有需要过期感知的渠道都必须经它注入，
+/// 杜绝历史上「只给单一渠道接了回调」的不对称缺陷。
+void Function() expiredCallbackFor(Ref ref, String sourceId) =>
+    () => ref.read(accountsProvider.notifier).markExpiredIfLoggedIn(sourceId);
+
 /// 渠道注册中心（Master Plan §5.3：新渠道在此注册一行，UI 零改动）。
 final sourceRegistryProvider = Provider<SourceRegistry>((ref) {
   final createCredentialReader =
@@ -75,27 +81,28 @@ final sourceRegistryProvider = Provider<SourceRegistry>((ref) {
   registry.register(
     QqMusicSource(
       credentialReader: createCredentialReader(QqMusicSource.id),
+      onSessionExpired: expiredCallbackFor(ref, QqMusicSource.id),
     ),
   );
 
   registry.register(
     KugouSource(
       credentialReader: createCredentialReader(KugouSource.id),
+      onSessionExpired: expiredCallbackFor(ref, KugouSource.id),
     ),
   );
 
   registry.register(
     YouTubeMusicSource(
       credentialReader: createCredentialReader(YouTubeMusicSource.id),
+      onSessionExpired: expiredCallbackFor(ref, YouTubeMusicSource.id),
     ),
   );
 
   registry.register(
     NeteaseSource(
       credentialReader: createCredentialReader(NeteaseSource.id),
-      onSessionExpired: () => ref
-          .read(accountsProvider.notifier)
-          .markExpiredIfLoggedIn(NeteaseSource.id),
+      onSessionExpired: expiredCallbackFor(ref, NeteaseSource.id),
     ),
   );
 

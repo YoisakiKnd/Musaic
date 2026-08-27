@@ -6,11 +6,13 @@ import 'package:dio/dio.dart';
 
 import '../../core/error/source_exception.dart';
 import '../../core/model/track.dart';
+import '../../core/network/source_auth_interceptor.dart';
+import '../../core/source/capabilities.dart';
 import '../../core/source/music_source.dart';
-import '../../features/auth/domain/auth_capability.dart';
-import '../../features/auth/domain/auth_result.dart';
-import '../../features/auth/domain/source_account.dart';
-import '../../features/lyrics/domain/lyric_bundle.dart';
+import '../../core/auth/auth_capability.dart';
+import '../../core/auth/auth_result.dart';
+import '../../core/auth/source_account.dart';
+import '../../core/lyrics/lyric_bundle.dart';
 
 /// YouTube Music 渠道（V1 匿名能力：搜索 / 播放直链）。
 ///
@@ -20,11 +22,18 @@ import '../../features/lyrics/domain/lyric_bundle.dart';
 ///   googlevideo 直链；带 signatureCipher 的受限曲目暂不支持）
 /// - 歌词：V1 暂不提供（字幕接口后续版本接入）
 ///
+/// 登录：内嵌 Google 网页登录提取 Cookie（[WebLoginCapable]）。
 /// 注意：该渠道要求设备可直连 YouTube（在受限网络下需系统代理环境）。
-class YouTubeMusicSource extends MusicSource {
-  YouTubeMusicSource({required super.credentialReader});
+class YouTubeMusicSource extends MusicSource implements WebLoginCapable {
+  YouTubeMusicSource({
+    required super.credentialReader,
+    this.onSessionExpired,
+  });
 
   static const String id = 'ytmusic';
+
+  /// 会话过期回调（由组合根接 AccountNotifier）。
+  final void Function()? onSessionExpired;
 
   @override
   String get sourceId => YouTubeMusicSource.id;
@@ -33,21 +42,72 @@ class YouTubeMusicSource extends MusicSource {
   String get displayName => 'YouTube Music';
 
   @override
-  AuthCapability get authCapability => AuthCapability.noAuth;
+  AuthCapability get authCapability => const AuthCapability(
+        type: AuthType.webview,
+        guide: AuthGuide(
+          title: '如何登录 YouTube Music',
+          steps: [
+            '在登录页内嵌页面中完成 Google 账号登录。',
+            '登录成功后点击右上角「我已登录」按钮。',
+            '应用提取站点 Cookie（含 httpOnly）并校验后保存到本机安全存储。',
+          ],
+        ),
+      );
 
-  late final Dio _dio = Dio(
-    BaseOptions(
-      connectTimeout: const Duration(seconds: 10),
-      receiveTimeout: const Duration(seconds: 15),
-      headers: <String, String>{
-        'Content-Type': 'application/json',
-        'Origin': 'https://music.youtube.com',
-        'User-Agent':
-            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36',
-      },
-      validateStatus: (int? code) => code != null && code < 500,
-    ),
-  );
+  late final Dio _dio = _buildDio();
+
+  Dio _buildDio() {
+    final dio = Dio(
+      BaseOptions(
+        connectTimeout: const Duration(seconds: 10),
+        receiveTimeout: const Duration(seconds: 15),
+        headers: <String, String>{
+          'Content-Type': 'application/json',
+          'Origin': 'https://music.youtube.com',
+          'User-Agent':
+              'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36',
+        },
+        validateStatus: (int? code) => code != null && code < 500,
+      ),
+    );
+    // YTM 自行按接口注入 Authorization/Cookie 头，这里仅做被动的会话过期捕获。
+    dio.interceptors.add(
+      SourceAuthInterceptor(
+        sourceId: YouTubeMusicSource.id,
+        readCredentials: credentialReader,
+        onSessionExpired: () => onSessionExpired?.call(),
+        injectCredentials: false,
+        expiredBodyCodes: const <int>{},
+      ),
+    );
+    return dio;
+  }
+
+  // ---------- WebLoginCapable ----------
+
+  @override
+  Uri get webLoginUrl => Uri.parse('https://music.youtube.com/');
+
+  @override
+  String get webLoginActionLabel => '我已登录';
+
+  @override
+  String get webLoginHint =>
+      '在上方页面登录 Google 账号后，点击右上角「我已登录」。'
+      '凭据仅保存在本机安全存储。';
+
+  @override
+  Future<AuthResult> loginWithWebCookies(Map<String, String> cookies) async {
+    try {
+      final account = await loginWithCookies(cookies);
+      return AuthSuccess(account, credentials: cookies);
+    } on SourceException catch (e) {
+      return AuthFailure(
+        reason: AuthFailureReason.invalidCredentials,
+        message: e.message,
+      );
+    }
+  }
 
   static const String _webRemixVersion = '1.20240401.01.00';
   static const String _androidMusicVersion = '6.42.52';
@@ -210,8 +270,12 @@ class YouTubeMusicSource extends MusicSource {
   }
 
   /// youtubei get_account_info：返回 (昵称, accountId)；未登录返回 null。
+  ///
+  /// [strict] 为 true 时，连接层失败抛出 [NetworkSourceException]
+  /// （供 checkSession 区分「断网」与「凭据失效」）。
   Future<(String, String?)?> fetchAccountSummary({
     Map<String, String>? cookies,
+    bool strict = false,
   }) async {
     final cookieMap = cookies ?? await credentialReader();
     final sapisid = cookieMap['SAPISID'] ??
@@ -271,6 +335,12 @@ class YouTubeMusicSource extends MusicSource {
         'account_menu 失败: status=${e.response?.statusCode}',
         name: 'MusaicYTM',
       );
+      if (strict && e.response == null) {
+        throw NetworkSourceException(
+          '无法连接 YouTube Music：无法校验登录态',
+          sourceId: sourceId,
+        );
+      }
       return null;
     }
   }
@@ -308,11 +378,16 @@ class YouTubeMusicSource extends MusicSource {
 
   @override
   Future<bool> checkSession() async {
-    try {
-      return await fetchAccountSummary() != null;
-    } catch (_) {
-      return false;
-    }
+    final cookies = await credentialReader();
+    final hasAuthCookie = (cookies['SAPISID'] ??
+            cookies['__Secure-1PAPISID'] ??
+            cookies['__Secure-3PAPISID'] ??
+            '')
+        .isNotEmpty;
+    if (!hasAuthCookie) return false;
+    // strict：连接层失败抛出，上层保留乐观登录态；
+    // 仅「拿到响应但无有效账号信息」判定为过期。
+    return await fetchAccountSummary(strict: true) != null;
   }
 
   @override

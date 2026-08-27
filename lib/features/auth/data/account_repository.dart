@@ -3,7 +3,7 @@ import 'dart:convert';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:hive/hive.dart';
 
-import '../domain/source_account.dart';
+import '../../../core/auth/source_account.dart';
 
 /// 凭据存储的最小抽象（便于测试替身与未来后端替换）。
 abstract class SecureCredentialStore {
@@ -47,6 +47,11 @@ class AccountRepository {
   final SecureCredentialStore _secure;
   final Box<String> _accounts;
 
+  /// 按渠道缓存的凭据快照。
+  /// readAll() 在 Android 上需整库解密，而网络拦截器每个请求都会读取
+  /// 凭据，属于热路径；这里缓存最近一次读取结果，所有写路径负责失效。
+  final Map<String, Map<String, String>> _credentialCache = {};
+
   /// 输入清洗：去首尾空白与内部换行（Cookie 粘贴常带换行）。
   static String sanitizeCredentialValue(String raw) =>
       raw.trim().replaceAll(RegExp(r'[\r\n\t]'), '');
@@ -56,6 +61,8 @@ class AccountRepository {
 
   /// 读取某渠道全部凭据字段；未登录返回空 Map。
   Future<Map<String, String>> readCredentials(String sourceId) async {
+    final cached = _credentialCache[sourceId];
+    if (cached != null) return Map<String, String>.of(cached);
     final all = await _secure.readAll();
     final prefix = '$_credentialPrefix.$sourceId.';
     final result = <String, String>{};
@@ -64,6 +71,7 @@ class AccountRepository {
         result[entry.key.substring(prefix.length)] = entry.value;
       }
     }
+    _credentialCache[sourceId] = Map<String, String>.unmodifiable(result);
     return result;
   }
 
@@ -73,18 +81,22 @@ class AccountRepository {
     Map<String, String> credentials,
   ) async {
     await deleteCredentials(sourceId);
+    final stored = <String, String>{};
     for (final entry in credentials.entries) {
       final value = sanitizeCredentialValue(entry.value);
       if (value.isEmpty) continue;
+      stored[entry.key] = value;
       await _secure.write(
         _credentialKey(sourceId, entry.key),
         value,
       );
     }
+    _credentialCache[sourceId] = Map<String, String>.unmodifiable(stored);
   }
 
   /// 删除某渠道凭据。
   Future<void> deleteCredentials(String sourceId) async {
+    _credentialCache.remove(sourceId);
     final all = await _secure.readAll();
     final prefix = '$_credentialPrefix.$sourceId.';
     for (final key in all.keys) {
@@ -146,6 +158,7 @@ class AccountRepository {
 
   /// 一键清除所有账号数据（安全清单要求）。
   Future<void> clearAll() async {
+    _credentialCache.clear();
     final all = await _secure.readAll();
     for (final key in all.keys) {
       if (key.startsWith(_credentialPrefix)) {

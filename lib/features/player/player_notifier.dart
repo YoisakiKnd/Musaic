@@ -115,7 +115,11 @@ class PlayerNotifier extends Notifier<PlayerState> {
     _stateSub = _handler.player.playerStateStream.listen(_onPlayerStateChanged);
     _positionTimer = Timer.periodic(
       AppTokens.positionThrottle,
-      (_) => _tickPosition(),
+      (_) {
+        // 仅在播放/加载中轮询进度；暂停时 just_audio 不再推进 position，
+        // 空转定时器白白耗电（seek 由 seekTo 直接更新状态）。
+        if (state.playing || state.loading) _tickPosition();
+      },
     );
 
     ref.onDispose(() {

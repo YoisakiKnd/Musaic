@@ -4,8 +4,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/source/music_source.dart';
 import '../../../core/theme/app_tokens.dart';
 import '../application/account_notifier.dart';
-import '../domain/auth_capability.dart';
-import '../domain/auth_result.dart';
+import '../../../core/auth/auth_capability.dart';
+import '../../../core/auth/auth_result.dart';
 
 /// 声明式动态登录弹窗（账号文档 §7）。
 ///

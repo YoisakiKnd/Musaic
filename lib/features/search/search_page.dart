@@ -1,4 +1,4 @@
-import 'dart:async' show unawaited;
+import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -43,9 +43,9 @@ class _SearchPageState extends ConsumerState<SearchPage> {
       if (!mounted) return;
       final sources = ref.read(sourceRegistryProvider).all;
       setState(() {
-        // 单一模式默认选网易云，无则取第一个渠道
+        // 单一模式优先选渠道声明的默认渠道（preferredByDefault），无则取第一个
         _singleTarget = sources
-                .where((s) => s.sourceId == 'netease')
+                .where((s) => s.preferredByDefault)
                 .map((s) => s.sourceId)
                 .firstOrNull ??
             (sources.isNotEmpty ? sources.first.sourceId : null);
@@ -99,10 +99,14 @@ class _SearchPageState extends ConsumerState<SearchPage> {
     await Future.wait(
       sources.map((source) async {
         try {
-          results[source.sourceId] =
-              await source.search(query, limit: 20);
+          // 渠道级超时：单个渠道 hang 不再拖垮整页结果
+          results[source.sourceId] = await source
+              .search(query, limit: 20)
+              .timeout(const Duration(seconds: 12));
         } on SourceException catch (e) {
           results[source.sourceId] = e.message;
+        } on TimeoutException {
+          results[source.sourceId] = '响应超时';
         } catch (e) {
           debugPrint('MusaicSearch[${source.sourceId}] 异常: $e');
           results[source.sourceId] = '搜索失败';

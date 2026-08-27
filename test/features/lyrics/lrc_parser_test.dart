@@ -1,6 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:musaic/features/lyrics/domain/lrc_parser.dart';
-import 'package:musaic/features/lyrics/domain/lyric_bundle.dart';
+import 'package:musaic/core/lyrics/lrc_parser.dart';
+import 'package:musaic/core/lyrics/lyric_bundle.dart';
 
 void main() {
   test('解析基础 LRC：时间戳与文本', () {

@@ -1,6 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:musaic/features/lyrics/domain/lyric_bundle.dart';
-import 'package:musaic/features/lyrics/domain/ttml_parser.dart';
+import 'package:musaic/core/lyrics/lyric_bundle.dart';
+import 'package:musaic/core/lyrics/ttml_parser.dart';
 
 const _wordTtml = '''
 <tt xmlns="http://www.w3.org/ns/ttml">

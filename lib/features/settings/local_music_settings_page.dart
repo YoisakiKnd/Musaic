@@ -1,94 +1,14 @@
-import 'dart:convert';
 import 'dart:io';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:hive_flutter/hive_flutter.dart';
-import 'package:path/path.dart' as p;
-import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
 
 import '../../core/di/app_providers.dart';
+import '../../core/source/capabilities.dart';
 import '../../core/theme/app_tokens.dart';
-import '../../sources/local/local_file_source.dart';
-
-/// 本地音乐设置仓库：扫描文件夹列表 + 扫描偏好（Hive 持久化）。
-class LocalMusicSettingsRepository {
-  LocalMusicSettingsRepository({required this.box});
-
-  static const String boxName = 'local_music_settings';
-  static const String _foldersKey = 'folders';
-  static const String _autoScanKey = 'auto_scan';
-
-  final Box<String> box;
-
-  /// 用户添加的扫描文件夹（绝对路径）。
-  List<String> get folders {
-    final raw = box.get(_foldersKey);
-    if (raw == null || raw.isEmpty) return const <String>[];
-    try {
-      final list = jsonDecode(raw) as List<dynamic>;
-      return list.whereType<String>().toList(growable: false);
-    } catch (_) {
-      return const <String>[];
-    }
-  }
-
-  Future<void> addFolder(String path) async {
-    final trimmed = path.trim();
-    if (trimmed.isEmpty) return;
-    final current = folders;
-    if (current.contains(trimmed)) return;
-    await box.put(_foldersKey, jsonEncode([...current, trimmed]));
-  }
-
-  Future<void> removeFolder(String path) async {
-    final current = folders.where((f) => f != path).toList(growable: false);
-    await box.put(_foldersKey, jsonEncode(current));
-  }
-
-  /// 启动时自动扫描本地库。
-  bool get autoScanOnStartup => box.get(_autoScanKey) == 'true';
-
-  Future<void> setAutoScanOnStartup(bool value) =>
-      box.put(_autoScanKey, value ? 'true' : 'false');
-
-  /// 常见音乐目录预设（存在才展示）。
-  static Future<List<String>> presetCandidates() async {
-    final candidates = <String>[
-      '/storage/emulated/0/Music',
-      '/storage/emulated/0/Download',
-      '/storage/emulated/0/netease/cloudmusic-Music',
-      '/storage/emulated/0/kgmusic/download',
-      '/storage/emulated/0/qqmusic/song',
-      if (!Platform.isAndroid)
-        Platform.environment['HOME'] != null
-            ? p.join(Platform.environment['HOME']!, 'Music')
-            : '',
-    ];
-    return candidates
-        .where((path) => path.isNotEmpty && Directory(path).existsSync())
-        .toList(growable: false);
-  }
-
-  /// 应用文档目录下的 Musaic 文件夹（内置目录，无需权限）。
-  static Future<String?> defaultAppFolder() async {
-    try {
-      final documents = await getApplicationDocumentsDirectory();
-      final dir = Directory(p.join(documents.path, 'Musaic'));
-      if (!dir.existsSync()) dir.createSync(recursive: true);
-      return dir.path;
-    } catch (_) {
-      return null;
-    }
-  }
-}
-
-final localMusicSettingsRepositoryProvider =
-    Provider<LocalMusicSettingsRepository>((ref) {
-  throw StateError('localMusicSettingsRepositoryProvider 必须在启动时 override');
-});
+import 'data/local_music_settings_repository.dart';
 
 /// 本地音乐设置页：扫描文件夹管理 + 扫描偏好 + 立即扫描。
 class LocalMusicSettingsPage extends ConsumerStatefulWidget {
@@ -126,7 +46,9 @@ class _LocalMusicSettingsPageState
   Future<void> _scan() async {
     final local = ref
         .read(sourceRegistryProvider)
-        .resolve(LocalFileSource.id) as LocalFileSource?;
+        .all
+        .whereType<LibraryScanCapable>()
+        .firstOrNull;
     if (local == null) return;
     final permitted = await _ensurePermission();
     if (!mounted) return;

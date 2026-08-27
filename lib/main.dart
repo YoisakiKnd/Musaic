@@ -16,10 +16,7 @@ import 'features/auth/data/account_repository.dart';
 import 'features/library/data/library_repository.dart';
 import 'features/player/audio_handler.dart';
 import 'features/search/data/search_history_repository.dart';
-import 'features/settings/local_music_settings_page.dart'
-    show
-        LocalMusicSettingsRepository,
-        localMusicSettingsRepositoryProvider;
+import 'features/settings/data/local_music_settings_repository.dart';
 import 'features/settings/settings_providers.dart'
     show
         AppSettingsRepository,
@@ -97,20 +94,23 @@ Future<void> main() async {
   };
 
   await Hive.initFlutter();
-  final accountsBox =
-      await Hive.openBox<String>(AccountRepository.accountBoxName);
-  final favoritesBox =
-      await Hive.openBox<String>(LibraryRepository.favoritesBoxName);
-  final historyBox =
-      await Hive.openBox<String>(LibraryRepository.historyBoxName);
-  final playlistsBox =
-      await Hive.openBox<String>(LibraryRepository.playlistsBoxName);
-  final searchHistoryBox =
-      await Hive.openBox<String>(SearchHistoryRepository.boxName);
-  final localMusicSettingsBox =
-      await Hive.openBox<String>(LocalMusicSettingsRepository.boxName);
-  final appSettingsBox =
-      await Hive.openBox<String>(AppSettingsRepository.boxName);
+  // 并行打开全部 Box（串行 await 会拖慢冷启动首帧）
+  final boxes = await Future.wait<Box<String>>([
+    Hive.openBox<String>(AccountRepository.accountBoxName),
+    Hive.openBox<String>(LibraryRepository.favoritesBoxName),
+    Hive.openBox<String>(LibraryRepository.historyBoxName),
+    Hive.openBox<String>(LibraryRepository.playlistsBoxName),
+    Hive.openBox<String>(SearchHistoryRepository.boxName),
+    Hive.openBox<String>(LocalMusicSettingsRepository.boxName),
+    Hive.openBox<String>(AppSettingsRepository.boxName),
+  ]);
+  final accountsBox = boxes[0];
+  final favoritesBox = boxes[1];
+  final historyBox = boxes[2];
+  final playlistsBox = boxes[3];
+  final searchHistoryBox = boxes[4];
+  final localMusicSettingsBox = boxes[5];
+  final appSettingsBox = boxes[6];
 
   await _Bootstrap._configureAudioSession();
   await _Bootstrap._configureDesktopWindow();

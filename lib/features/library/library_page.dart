@@ -2,10 +2,12 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
-import '../../core/di/app_providers.dart' show libraryRepositoryProvider;
+import '../../core/di/app_providers.dart' show libraryRepositoryProvider, sourceRegistryProvider;
+import '../../core/model/remote_playlist.dart';
+import '../../core/source/capabilities.dart';
+import '../../core/source/music_source.dart';
 import '../../core/theme/app_tokens.dart';
-import 'data/netease_playlists_provider.dart';
-import '../../../sources/netease/netease_source.dart' show NeteaseUserPlaylist;
+import 'data/remote_playlists_provider.dart';
 import 'remote_playlist_page.dart';
 import '../shared/widgets/track_tile.dart';
 import 'data/library_providers.dart';
@@ -107,22 +109,24 @@ class _PlaylistsTab extends ConsumerWidget {
           loading: () => const Center(child: CircularProgressIndicator()),
           error: (e, _) => Center(child: Text('加载失败：$e')),
           data: (names) {
-            final neteaseAsync = ref.watch(neteaseUserPlaylistsProvider);
-            final neteasePlaylists =
-                neteaseAsync.value ?? const <NeteaseUserPlaylist>[];
-            final hasAccount = neteasePlaylists.isNotEmpty;
-            if (names.isEmpty && !hasAccount) {
+            // 所有实现 RemotePlaylistCapable 的渠道各渲染一个账号歌单区
+            final remoteSources = <MusicSource>[
+              for (final s in ref.watch(sourceRegistryProvider).all)
+                if (s is RemotePlaylistCapable) s,
+            ];
+            final hasAnyRemote = remoteSources.isNotEmpty;
+            if (names.isEmpty && !hasAnyRemote) {
               return const _EmptyHint(icon: Icons.queue_music_rounded, text: '创建你的第一个歌单');
             }
             return ListView(
               padding: AppTokens.pagePadding,
               children: [
-                if (hasAccount) ...[
-                  const _SectionTitle('账号歌单 · 网易云'),
-                  for (final pl in neteasePlaylists)
-                    _RemotePlaylistCard(playlist: pl),
-                  const SizedBox(height: 12),
-                ],
+                for (final source in remoteSources)
+                  _RemotePlaylistSection(
+                    key: ValueKey('remote-playlists-${source.sourceId}'),
+                    sourceId: source.sourceId,
+                    displayName: source.displayName,
+                  ),
                 if (names.isNotEmpty) ...[
                   const _SectionTitle('本地歌单'),
                   for (final name in names) _LocalPlaylistCard(name: name),
@@ -223,11 +227,38 @@ class _SectionTitle extends StatelessWidget {
   }
 }
 
-/// 网易云账号歌单卡片。
+/// 单个渠道的账号歌单分区（登录且非空才渲染）。
+class _RemotePlaylistSection extends ConsumerWidget {
+  const _RemotePlaylistSection({
+    super.key,
+    required this.sourceId,
+    required this.displayName,
+  });
+
+  final String sourceId;
+  final String displayName;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final playlistsAsync = ref.watch(remotePlaylistsProvider(sourceId));
+    final playlists = playlistsAsync.value ?? const <RemotePlaylist>[];
+    if (playlists.isEmpty) return const SizedBox.shrink();
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _SectionTitle('账号歌单 · $displayName'),
+        for (final pl in playlists) _RemotePlaylistCard(playlist: pl),
+        const SizedBox(height: 12),
+      ],
+    );
+  }
+}
+
+/// 渠道账号歌单卡片。
 class _RemotePlaylistCard extends ConsumerWidget {
   const _RemotePlaylistCard({required this.playlist});
 
-  final NeteaseUserPlaylist playlist;
+  final RemotePlaylist playlist;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -256,7 +287,9 @@ class _RemotePlaylistCard extends ConsumerWidget {
         title: Text(playlist.name,
             maxLines: 1, overflow: TextOverflow.ellipsis),
         subtitle: Text(
-          '${playlist.trackCount} 首 · ${playlist.playCount} 次播放',
+          playlist.playCount == null
+              ? '${playlist.trackCount} 首'
+              : '${playlist.trackCount} 首 · ${playlist.playCount} 次播放',
           style: const TextStyle(fontSize: 12),
         ),
         trailing: Icon(Icons.chevron_right_rounded,

@@ -1,6 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:musaic/features/lyrics/domain/lyric_bundle.dart';
-import 'package:musaic/features/lyrics/domain/yrc_parser.dart';
+import 'package:musaic/core/lyrics/lyric_bundle.dart';
+import 'package:musaic/core/lyrics/yrc_parser.dart';
 
 const _yrcSample = '''
 {"t":0,"c":[{"tx":"作词: "},{"tx":"某人"}]}

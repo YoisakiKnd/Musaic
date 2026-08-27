@@ -138,9 +138,7 @@ class _SearchResultsPageState extends ConsumerState<SearchResultsPage> {
         if (name == null || name.isEmpty) return;
       await repository.createPlaylist(name);
     }
-    for (final track in tracks) {
-      await repository.addToPlaylist(name, track);
-    }
+    await repository.addManyToPlaylist(name, tracks);
     if (!mounted) return;
     setState(() {
       _selected.clear();

@@ -1,26 +1,39 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../../core/auth/source_account.dart';
 import '../../../../core/di/app_providers.dart';
+import '../../../../core/source/capabilities.dart';
+import '../../../../core/source/music_source.dart';
 import '../../../../core/theme/app_tokens.dart';
 import '../../application/account_notifier.dart';
-import '../../domain/source_account.dart';
-import 'kugou_login_page.dart';
-import 'netease_login_page.dart';
-import 'qq_music_login_page.dart';
-import 'ytmusic_login_page.dart';
+import '../login_dialog.dart';
+import '../qr_login_page.dart';
+import '../web_login_page.dart';
 
-/// 账号管理（设置二级页）：各渠道状态一览，点进各渠道独立登录页。
+/// 渠道是否有值得在账号列表展示的登录能力（本地文件等免登录渠道不展示）。
+bool _hasAccountUi(MusicSource source) =>
+    source is QrLoginCapable ||
+    source is PasswordLoginCapable ||
+    source is WebLoginCapable ||
+    source.authCapability.requiresLogin;
+
+/// 账号管理（设置二级页）：各渠道状态一览，点进通用登录页。
+///
+/// 登录页的选择完全由渠道能力（[QrLoginCapable]/[PasswordLoginCapable]/
+/// [WebLoginCapable]/[AuthCapability]）驱动，不含任何渠道 id 硬编码；
+/// 新渠道注册即出现在此列表并可登录。
 class AccountManagePage extends ConsumerWidget {
   const AccountManagePage({super.key});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    // 本地文件渠道免登录，已独立到「设置 → 本地音乐」的文件夹管理，不在账号列表展示
+    // 免登录且无账号 UI 的渠道（如本地文件，已独立到「设置 → 本地音乐」）
+    // 不在账号列表展示
     final sources = ref
         .watch(sourceRegistryProvider)
         .all
-        .where((source) => source.sourceId != 'local')
+        .where(_hasAccountUi)
         .toList(growable: false);
 
     return Scaffold(
@@ -233,7 +246,7 @@ class _ChannelEntry extends ConsumerWidget {
                 ],
               )
             : const Icon(Icons.chevron_right_rounded),
-        onTap: () => _openChannelLogin(context, sourceId, account),
+        onTap: () => _openChannelLogin(context, source),
       ),
     );
   }
@@ -265,36 +278,27 @@ class _ChannelEntry extends ConsumerWidget {
 
   void _openChannelLogin(
     BuildContext context,
-    String sourceId,
-    SourceAccount account,
+    MusicSource source,
   ) {
-    switch (sourceId) {
-      case 'netease':
-        Navigator.of(context).push(
-          MaterialPageRoute<void>(
-            builder: (_) => const NeteaseLoginPage(),
-          ),
-        );
-      case 'qqmusic':
-        Navigator.of(context).push(
-          MaterialPageRoute<void>(
-            builder: (_) => const QqMusicLoginPage(),
-          ),
-        );
-      case 'kugou':
-        Navigator.of(context).push(
-          MaterialPageRoute<void>(
-            builder: (_) => const KugouLoginPage(),
-          ),
-        );
-      case 'ytmusic':
-        Navigator.of(context).push(
-          MaterialPageRoute<void>(
-            builder: (_) => const YtmusicLoginPage(),
-          ),
-        );
-      default:
-        _showComingSoon(context, sourceId, '账号登录');
+    final sourceId = source.sourceId;
+    final route = switch (source) {
+      QrLoginCapable() || PasswordLoginCapable() => MaterialPageRoute<void>(
+          builder: (_) => QrLoginPage(sourceId: sourceId),
+        ),
+      WebLoginCapable() => MaterialPageRoute<void>(
+          builder: (_) => WebLoginPage(sourceId: sourceId),
+        ),
+      _ => null,
+    };
+    if (route != null) {
+      Navigator.of(context).push(route);
+      return;
+    }
+    // 仅声明式凭据表单的渠道走动态弹窗；都没有则提示开发中。
+    if (source.authCapability.requiresLogin) {
+      showLoginDialog(context, source);
+    } else {
+      _showComingSoon(context, source.displayName, '账号登录');
     }
   }
 

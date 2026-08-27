@@ -1,7 +1,7 @@
-import '../../features/auth/domain/auth_capability.dart';
-import '../../features/auth/domain/auth_result.dart';
-import '../../features/auth/domain/source_account.dart';
-import '../../features/lyrics/domain/lyric_bundle.dart';
+import '../auth/auth_capability.dart';
+import '../auth/auth_result.dart';
+import '../auth/source_account.dart';
+import '../lyrics/lyric_bundle.dart';
 import '../model/track.dart';
 
 /// 解析出的播放流（Master Plan §7：每次播放实时解析，不缓存过期 URL）。
@@ -67,10 +67,17 @@ abstract class MusicSource {
   Future<void> logout() async {}
 
   /// 校验已存凭据是否仍然有效（供启动时后台校验）。
+  ///
+  /// 契约：**仅在凭据缺失或确认无效时返回 false**；网络异常 / 超时必须
+  /// 抛出（不吞），由 AccountNotifier 保留乐观登录态，避免把「断网」
+  /// 误标为「已过期」。
   Future<bool> checkSession() async => false;
 
   /// 刷新账号资料（昵称 / 会员状态）；不支持或未登录时返回 null。
   Future<SourceAccount?> refreshAccountInfo(SourceAccount account) async {
     return null;
   }
+
+  /// 聚合搜索等场景的默认首选渠道（替代 UI 层硬编码渠道 id）。
+  bool get preferredByDefault => false;
 }

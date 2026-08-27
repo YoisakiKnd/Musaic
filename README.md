@@ -4,7 +4,8 @@
 > 多渠道聚合 · 按渠道独立账号 · 逐字歌词 · 沉浸式播放体验（Flutter）
 
 架构灵感：[PicaComic](https://github.com/wgh136/PicaComic)（多源插件化、按源独立账号）
-体验灵感：Mei（Apple Music 风格、逐字歌词、流体玻璃）
+设计语言：双分区——全屏播放器/歌词沿用 Mei 的 Apple Music 沉浸风格（逐字歌词、封面取色、受控玻璃）；
+主 UI（首页/搜索/资料库/设置/登录）采用 Flutter Material 3 原生语言（迁移路线见 `musaic-improvement-plan.md` D/U 系列）
 
 ---
 
@@ -44,35 +45,45 @@ lib/
 ├── app/                  # AppShell 自适应骨架 + go_router 路由表
 ├── core/
 │   ├── theme/            # AppTokens 设计令牌（深色优先）
-│   ├── model/            # Track 统一曲目模型
-│   ├── source/           # MusicSource 抽象 + SourceRegistry 注册中心
+│   ├── model/            # Track / RemotePlaylist 统一模型
+│   ├── auth/             # 跨渠道契约：AuthCapability / SourceAccount / QrLoginPoll
+│   ├── lyrics/           # LyricBundle + TTML/YRC/LRC 解析器（渠道共用的领域层）
+│   ├── source/           # MusicSource 抽象 + SourceRegistry + 可选能力接口
 │   ├── network/          # SourceAuthInterceptor（凭据注入/过期捕获）
 │   ├── error/            # SourceException 异常族
 │   └── di/               # 组合根 Provider（override 注入）
 ├── features/
-│   ├── auth/             # 账号系统（domain/data/application/presentation）
+│   ├── auth/             # 账号系统（application/data/presentation）
+│   │   └── presentation/ # 通用登录 UI：QrLoginPage / WebLoginPage / 动态表单弹窗
 │   ├── player/           # PlayerNotifier + AudioHandler + MiniPlayer/PlayerPage
-│   ├── lyrics/           # LyricBundle + TTML/YRC/LRC 解析器 + LyricsView
-│   ├── library/          # 喜欢/历史/歌单（Hive 本地优先）
+│   ├── lyrics/           # 歌词应用层 + LyricsView 渲染
+│   ├── library/          # 喜欢/历史/歌单（Hive 本地优先）+ 通用账号歌单
+│   ├── settings/         # 设置（data/ 仓库与 presentation/ 页面分离）
 │   ├── theme/            # 封面取色动态配色
 │   └── shared/widgets/   # TrackTile 等复用组件
 └── sources/
     ├── netease/          # 网易云渠道实现
-    └── local/            # 本地文件渠道（含 ID3 解析器）
+    ├── qqmusic/  kugou/  ytm/  local/   # 其余渠道
 ```
 
 模块依赖铁律（Master Plan §3.2）：
 
 1. 表现层只依赖应用层；
 2. **UI 永不直接 import 渠道实现**——一切经 `SourceRegistry` 解析；
+   需要渠道的登录/歌单/扫描行为时，经 `core/source/capabilities.dart`
+   的可选能力接口（`QrLoginCapable` / `PasswordLoginCapable` /
+   `WebLoginCapable` / `RemotePlaylistCapable` / `LibraryScanCapable`）判定与消费；
 3. 渠道实现只依赖领域层；
 4. 凭据只能经 `AccountRepository` 进出安全存储。
 
 ## 新增一个渠道 = 三步
 
 1. 新建 `lib/sources/<id>/xxx_source.dart` 实现 `MusicSource`；
-2. 通过 `AuthCapability` 声明登录方式与表单字段（动态登录弹窗自动适配）；
-3. 在 `lib/core/di/app_providers.dart` 的 `sourceRegistryProvider` 中注册一行。
+2. 声明登录方式：`AuthCapability` 声明式表单自动渲染；扫码/密码/WebView 登录
+   只需 `implements` 对应能力接口并填好 `QrLoginFlow` 的 create/poll 闭包，
+   **通用登录页零改动复用**；
+3. 在 `lib/core/di/app_providers.dart` 的 `sourceRegistryProvider` 中注册一行
+   （务必带 `onSessionExpired: expiredCallbackFor(ref, id)`，401 被动捕获即全渠道生效）。
 
 ## 与 Master Plan 的实现差异说明
 
@@ -87,19 +98,20 @@ lib/
 
 ## 测试策略（Master Plan §15）
 
-- **单元**：Track 序列化、队列逻辑（模式/洗牌/回开头规则）、TTML/YRC/LRC 解析、ID3 解析、凭据存储命名空间隔离与输入清洗
-- **Widget**：登录弹窗动态表单渲染、失败提示、成功关闭路径
+- **单元**：Track 序列化、队列逻辑（模式/洗牌/回开头规则）、TTML/YRC/LRC 解析、ID3 解析、凭据存储命名空间隔离 / 输入清洗 / 读取缓存与失效、歌单批量写入与历史裁剪
+- **Widget**：登录弹窗动态表单渲染、失败提示、成功关闭路径、搜索结果页多渠道渲染
 
 ```bash
-flutter test   # 71 tests passing
+flutter test   # 77 tests passing
 ```
 
-> `flutter_inappwebview` 与 AGP 9 存在 proguard 配置不兼容，pub cache 清理后请执行 `bash tool/patch_inappwebview_gradle.sh`。
-```
+> 已知构建问题：`flutter_inappwebview_android` 1.1.3 与 AGP 9 的 proguard 配置不兼容，
+> 干净 pub cache 环境下构建 Android 前需执行 `bash tool/patch_inappwebview_gradle.sh`
+> （直接改本机 pub cache，**不可复现**，计划内替换为 `dependency_overrides` 指向已修 fork，见 TODO）。
 
 ## 路线图状态
 
-- [x] P0 地基（令牌/模型/CI 基线）
+- [x] P0 地基（令牌/模型；CI 暂未启用）
 - [x] P1 播放核心（本地渠道 + MiniPlayer + 骨架）
 - [x] P2 多渠道骨架（抽象/注册中心/网易云匿名能力）
 - [x] P3 账号系统（声明式登录/安全存储/生命周期）

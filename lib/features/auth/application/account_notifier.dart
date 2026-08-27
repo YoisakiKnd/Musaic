@@ -3,8 +3,8 @@ import 'dart:async';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/di/app_providers.dart';
-import '../domain/auth_result.dart';
-import '../domain/source_account.dart';
+import '../../../core/auth/auth_result.dart';
+import '../../../core/auth/source_account.dart';
 
 /// 全部渠道账号状态。
 class AccountsState {

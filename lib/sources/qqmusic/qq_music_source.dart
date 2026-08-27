@@ -7,20 +7,22 @@ import 'package:dio/dio.dart';
 import '../../core/error/source_exception.dart';
 import '../../core/model/track.dart';
 import '../../core/network/source_auth_interceptor.dart';
+import '../../core/source/capabilities.dart';
 import '../../core/source/music_source.dart';
-import '../../features/auth/domain/auth_capability.dart';
-import '../../features/auth/domain/auth_result.dart';
-import '../../features/auth/domain/qr_login_poll.dart';
-import '../../features/auth/domain/source_account.dart';
-import '../../features/lyrics/domain/lrc_parser.dart';
-import '../../features/lyrics/domain/lyric_bundle.dart';
+import '../../core/auth/auth_capability.dart';
+import '../../core/auth/auth_result.dart';
+import '../../core/auth/qr_login_poll.dart';
+import '../../core/auth/source_account.dart';
+import '../../core/lyrics/lrc_parser.dart';
+import '../../core/lyrics/lyric_bundle.dart';
 
 /// QQ 音乐渠道。
 ///
 /// 匿名能力：搜索 / LRC 歌词；
-/// 登录能力：ptlogin 扫码（QQ 互联 OAuth）→ musicu.fcg 凭据交换，
+/// 登录能力：ptlogin 扫码（QQ 互联 OAuth）与微信扫码双通道
+/// （[QrLoginCapable]，UI 零改动）→ musicu.fcg 凭据交换，
 /// 登录后 vkey 播放解锁 VIP 曲目试听与更高音质（视账号权益）。
-class QqMusicSource extends MusicSource {
+class QqMusicSource extends MusicSource implements QrLoginCapable {
   QqMusicSource({
     required super.credentialReader,
     this.onSessionExpired,
@@ -332,6 +334,37 @@ class QqMusicSource extends MusicSource {
   // 微信通道：open.weixin.qq.com 二维码（微信扫码）→ 长轮询 code →
   //          musicu.fcg music.login.LoginServer.Login 凭据交换。
   // 两通道均对照 luren-dc/QQMusicApi 参考实现。
+
+  @override
+  List<QrLoginFlow> get qrLoginFlows => [
+        QrLoginFlow(
+          id: 'qq',
+          label: 'QQ 扫码',
+          scanHint: '请使用手机 QQ「扫一扫」并确认登录',
+          create: () async {
+            final session = await createQrLogin();
+            return QrLoginSession(pollKey: session.qrsig, png: session.png);
+          },
+          poll: (session) => pollQrLogin(session.pollKey),
+          userIdCredentialKey: 'uin',
+          fallbackNickname: 'QQ 音乐用户',
+          footerHint: '扫码登录后可播放会员曲目并同步账号歌单',
+        ),
+        QrLoginFlow(
+          id: 'wechat',
+          label: '微信扫码',
+          scanHint: '请使用微信「扫一扫」并确认登录',
+          interval: const Duration(milliseconds: 1500),
+          create: () async {
+            final session = await createWxQrLogin();
+            return QrLoginSession(pollKey: session.uuid, png: session.png);
+          },
+          poll: (session) => pollWxQrLogin(session.pollKey),
+          userIdCredentialKey: 'uin',
+          fallbackNickname: 'QQ 音乐用户',
+          footerHint: '微信扫码登录后可同步会员权益与账号歌单',
+        ),
+      ];
 
   /// 创建 QQ 扫码登录会话（PNG 字节 + qrsig）。
   Future<({Uint8List png, String qrsig})> createQrLogin() async {
@@ -690,9 +723,13 @@ class QqMusicSource extends MusicSource {
   }
 
   /// 拉取 QQ 音乐账号昵称与会员状态。
+  ///
+  /// [strict] 为 true 时，主页头接口网络异常将抛出（供 checkSession
+  /// 区分「断网」与「凭据失效」）；默认吞掉保持资料展示不阻塞。
   Future<({String nickname, String? vipLabel})?>
       fetchAccountSummary({
     Map<String, String>? credentials,
+    bool strict = false,
   }) async {
     Map<String, String> cred;
     if (credentials != null) {
@@ -711,7 +748,7 @@ class QqMusicSource extends MusicSource {
     );
 
     String nickname = '';
-    try {
+    Future<String> readNickname() async {
       final header = await _musicuCgi(
         module: 'music.UnifiedHomepage.UnifiedHomepageSrv',
         method: 'GetHomepageHeader',
@@ -721,9 +758,17 @@ class QqMusicSource extends MusicSource {
         },
         comm: comm,
       );
-      nickname =
-          (_asMap(header?['Info'])?['BaseInfo']?['NickName'] as String?) ?? '';
-    } catch (_) {}
+      return (_asMap(header?['Info'])?['BaseInfo']?['NickName'] as String?) ??
+          '';
+    }
+
+    if (strict) {
+      nickname = await readNickname();
+    } else {
+      try {
+        nickname = await readNickname();
+      } catch (_) {}
+    }
 
     String? vipLabel;
     try {
@@ -791,12 +836,14 @@ class QqMusicSource extends MusicSource {
 
   @override
   Future<bool> checkSession() async {
-    try {
-      final info = await fetchAccountSummary();
-      return info != null;
-    } catch (_) {
-      return false;
-    }
+    final credentials = await credentialReader();
+    final uin = credentials['uin'] ?? credentials['qqmusic_u'] ?? '';
+    final musickey =
+        credentials['musickey'] ?? credentials['qqmusic_key'] ?? '';
+    if (uin.isEmpty || musickey.isEmpty) return false;
+    final info =
+        await fetchAccountSummary(credentials: credentials, strict: true);
+    return info != null;
   }
 
   // ---------- 工具 ----------

@@ -8,22 +8,27 @@ import 'netease_crypto.dart';
 
 import '../../core/error/source_exception.dart';
 import '../../core/utils/url_utils.dart';
+import '../../core/model/remote_playlist.dart';
 import '../../core/model/track.dart';
 import '../../core/network/source_auth_interceptor.dart';
+import '../../core/source/capabilities.dart';
 import '../../core/source/music_source.dart';
-import '../../features/auth/domain/auth_capability.dart';
-import '../../features/auth/domain/auth_result.dart';
-import '../../features/auth/domain/qr_login_poll.dart';
-import '../../features/auth/domain/source_account.dart';
-import '../../features/lyrics/domain/lrc_parser.dart';
-import '../../features/lyrics/domain/lyric_bundle.dart';
-import '../../features/lyrics/domain/yrc_parser.dart';
+import '../../core/auth/auth_capability.dart';
+import '../../core/auth/auth_result.dart';
+import '../../core/auth/qr_login_poll.dart';
+import '../../core/auth/source_account.dart';
+import '../../core/lyrics/lrc_parser.dart';
+import '../../core/lyrics/lyric_bundle.dart';
+import '../../core/lyrics/yrc_parser.dart';
 
 /// 网易云音乐渠道（Master Plan §5.2）。
 ///
 /// 匿名能力：搜索 / 播放地址 / 详情 / 歌词；
-/// 登录方式：MUSIC_U 纯值 Cookie（含输入清洗与获取指引）。
-class NeteaseSource extends MusicSource {
+/// 登录方式：二维码扫码（[QrLoginCapable]）、手机号密码
+/// （[PasswordLoginCapable]）、MUSIC_U 纯值 Cookie 声明式表单兜底；
+/// 登录后提供账号歌单（[RemotePlaylistCapable]）。
+class NeteaseSource extends MusicSource
+    implements QrLoginCapable, PasswordLoginCapable, RemotePlaylistCapable {
   NeteaseSource({
     required super.credentialReader,
     this.onSessionExpired,
@@ -36,6 +41,9 @@ class NeteaseSource extends MusicSource {
   final void Function()? onSessionExpired;
 
   final Random _random = Random.secure();
+
+  @override
+  bool get preferredByDefault => true;
 
   @override
   String get sourceId => NeteaseSource.id;
@@ -261,6 +269,44 @@ class NeteaseSource extends MusicSource {
   }
 
   // ---------- 真实登录（weapi / 二维码） ----------
+
+  /// 扫码登录流水线（供通用扫码页消费，UI 不感知网易云细节）。
+  @override
+  List<QrLoginFlow> get qrLoginFlows => [
+        QrLoginFlow(
+          id: 'qr',
+          label: '二维码登录',
+          scanHint: '请使用网易云音乐 App 扫码',
+          interval: const Duration(seconds: 2),
+          create: () async {
+            final session = await createQrLogin();
+            return QrLoginSession(
+              pollKey: session.key,
+              contentUrl: session.qrContent,
+            );
+          },
+          poll: (session) => pollQrLogin(session.pollKey),
+          fallbackNickname: '网易云用户',
+          footerHint: '扫码登录后可播放 VIP 曲目并同步账号歌单',
+        ),
+      ];
+
+  /// 手机号密码登录表单声明（通用登录页消费）。
+  @override
+  String get passwordTabLabel => '手机号登录';
+
+  @override
+  List<CredentialField> get passwordFields => const [
+        CredentialField(key: 'phone', label: '手机号', numeric: true, placeholder: '11 位手机号'),
+        CredentialField(key: 'password', label: '密码', obscure: true),
+      ];
+
+  @override
+  String get passwordSubmitHint => '密码经 weapi 标准加密后提交，本机不保存明文';
+
+  @override
+  Future<AuthResult> loginWithPassword(Map<String, String> values) =>
+      loginByPhone(values['phone'] ?? '', values['password'] ?? '');
 
   /// 游客指纹 Cookie（对照 NeteaseCloudMusicApi request.js 校准）。
   /// weapi 登录类接口缺这些字段会返回空响应体。
@@ -503,30 +549,34 @@ class NeteaseSource extends MusicSource {
     );
   }
 
-  /// 当前登录账号的用户歌单（登录后调用）。
-  Future<List<NeteaseUserPlaylist>> fetchUserPlaylists(String uid) async {
+  // ---------- 账号歌单能力（RemotePlaylistCapable） ----------
+
+  @override
+  Future<List<RemotePlaylist>> fetchRemotePlaylists(String userId) async {
+    // uid 传空串 = 网易云按当前 Cookie 返回本人歌单，保持原行为
     final response = await _dio.get<dynamic>(
       '/api/user/playlist',
-      queryParameters: <String, dynamic>{'uid': uid, 'limit': 100},
+      queryParameters: <String, dynamic>{'uid': userId, 'limit': 100},
       options: Options(responseType: ResponseType.plain),
     );
     final list =
         _asMap(_decoded(response))?['playlist'] as List<dynamic>?;
-    if (list == null) return const <NeteaseUserPlaylist>[];
+    if (list == null) return const <RemotePlaylist>[];
     return list
         .map(_parseUserPlaylist)
-        .whereType<NeteaseUserPlaylist>()
+        .whereType<RemotePlaylist>()
         .toList(growable: false);
   }
 
-  NeteaseUserPlaylist? _parseUserPlaylist(dynamic raw) {
+  RemotePlaylist? _parseUserPlaylist(dynamic raw) {
     final p = _asMap(raw);
     if (p == null) return null;
     final id = p['id'] as int?;
     final name = p['name'] as String?;
     if (id == null || name == null) return null;
-    return NeteaseUserPlaylist(
-      id: id,
+    return RemotePlaylist(
+      sourceId: sourceId,
+      id: '$id',
       name: name,
       trackCount: p['trackCount'] as int? ?? 0,
       coverUrl: p['coverImgUrl'] as String?,
@@ -535,10 +585,13 @@ class NeteaseSource extends MusicSource {
   }
 
   /// 歌单详情 → 统一曲目列表（登录 Cookie 越权可见 VIP 曲目信息）。
-  Future<List<Track>> fetchPlaylistTracks(int playlistId) async {
+  @override
+  Future<List<Track>> fetchRemotePlaylistTracks(String playlistId) async {
+    final id = int.tryParse(playlistId);
+    if (id == null) return const <Track>[];
     final response = await _dio.get<dynamic>(
       '/api/playlist/detail',
-      queryParameters: <String, dynamic>{'id': playlistId},
+      queryParameters: <String, dynamic>{'id': id},
       options: Options(responseType: ResponseType.plain),
     );
     final tracks =
@@ -630,16 +683,14 @@ class NeteaseSource extends MusicSource {
 
   @override
   Future<bool> checkSession() async {
-    try {
-      final credentials = await credentialReader();
-      final musicU = credentials['MUSIC_U'];
-      if (musicU == null || musicU.isEmpty) return false;
-      final profile = await _fetchProfile(cookie: 'MUSIC_U=$musicU');
-      return profile != null &&
-          ((profile['nickname'] as String?)?.isNotEmpty ?? false);
-    } catch (_) {
-      return false;
-    }
+    final credentials = await credentialReader();
+    final musicU = credentials['MUSIC_U'];
+    if (musicU == null || musicU.isEmpty) return false;
+    // 网络异常由 _fetchProfile 抛 DioException 向上传递：
+    // 上层据此保留乐观登录态，只有「确认无效」才返回 false。
+    final profile = await _fetchProfile(cookie: 'MUSIC_U=$musicU');
+    return profile != null &&
+        ((profile['nickname'] as String?)?.isNotEmpty ?? false);
   }
 
   // ---------- 工具 ----------
@@ -724,21 +775,4 @@ class NeteaseSource extends MusicSource {
 
   Map<String, dynamic>? _asMap(dynamic value) =>
       value is Map ? Map<String, dynamic>.from(value) : null;
-}
-
-/// 网易云用户歌单（账号歌单）。
-class NeteaseUserPlaylist {
-  const NeteaseUserPlaylist({
-    required this.id,
-    required this.name,
-    required this.trackCount,
-    required this.playCount,
-    this.coverUrl,
-  });
-
-  final int id;
-  final String name;
-  final int trackCount;
-  final int playCount;
-  final String? coverUrl;
 }

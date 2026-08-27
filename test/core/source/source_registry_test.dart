@@ -1,9 +1,9 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:musaic/features/lyrics/domain/lyric_bundle.dart';
+import 'package:musaic/core/lyrics/lyric_bundle.dart';
 import 'package:musaic/core/model/track.dart';
 import 'package:musaic/core/source/music_source.dart';
 import 'package:musaic/core/source/source_registry.dart';
-import 'package:musaic/features/auth/domain/auth_capability.dart';
+import 'package:musaic/core/auth/auth_capability.dart';
 
 class _StubSource extends MusicSource {
   _StubSource(this._id, this._name) : super(credentialReader: _noopReader);

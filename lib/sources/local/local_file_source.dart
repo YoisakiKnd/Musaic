@@ -7,18 +7,20 @@ import 'package:path_provider/path_provider.dart';
 
 import '../../core/error/source_exception.dart';
 import '../../core/model/track.dart';
+import '../../core/source/capabilities.dart';
 import '../../core/source/music_source.dart';
-import '../../features/auth/domain/auth_capability.dart';
-import '../../features/auth/domain/auth_result.dart';
-import '../../features/lyrics/domain/lrc_parser.dart';
-import '../../features/lyrics/domain/lyric_bundle.dart';
+import '../../core/auth/auth_capability.dart';
+import '../../core/auth/auth_result.dart';
+import '../../core/lyrics/lrc_parser.dart';
+import '../../core/lyrics/lyric_bundle.dart';
 import 'id3_parser.dart';
 
 /// 本地文件渠道（Master Plan §5.2，免登录）。
 ///
 /// 扫描目录：应用文档目录/Musaic 与系统音乐目录；
 /// 支持内嵌标签（ID3v2/v1）与内嵌封面；歌词优先同名 .lrc，其次 USLT。
-class LocalFileSource extends MusicSource {
+class LocalFileSource extends MusicSource
+    implements LibraryScanCapable {
   LocalFileSource({
     required super.credentialReader,
     Future<List<Directory>> Function()? directoryProvider,
@@ -76,6 +78,7 @@ class LocalFileSource extends MusicSource {
   // ---------- 音乐能力 ----------
 
   /// 扫描本地音乐库（结果缓存；force 重新扫描）。
+  @override
   Future<List<Track>> scanLibrary({bool force = false}) async {
     if (!force && _cache != null) return _cache!;
     final dirs = await _directoryProvider();
@@ -96,6 +99,7 @@ class LocalFileSource extends MusicSource {
     return tracks;
   }
 
+  @override
   void invalidateScanCache() => _cache = null;
 
   @override

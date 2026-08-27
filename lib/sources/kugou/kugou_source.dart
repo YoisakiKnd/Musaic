@@ -9,21 +9,22 @@ import 'package:dio/dio.dart';
 import '../../core/error/source_exception.dart';
 import '../../core/model/track.dart';
 import '../../core/network/source_auth_interceptor.dart';
+import '../../core/source/capabilities.dart';
 import '../../core/source/music_source.dart';
-import '../../features/auth/domain/auth_capability.dart';
-import '../../features/auth/domain/auth_result.dart';
-import '../../features/auth/domain/qr_login_poll.dart';
-import '../../features/auth/domain/source_account.dart';
+import '../../core/auth/auth_capability.dart';
+import '../../core/auth/auth_result.dart';
+import '../../core/auth/qr_login_poll.dart';
+import '../../core/auth/source_account.dart';
 import '../../core/utils/url_utils.dart';
-import '../../features/lyrics/domain/lrc_parser.dart';
-import '../../features/lyrics/domain/lyric_bundle.dart';
+import '../../core/lyrics/lrc_parser.dart';
+import '../../core/lyrics/lyric_bundle.dart';
 
 /// 酷狗音乐渠道。
 ///
 /// 匿名能力：搜索 / 播放直链 / LRC 歌词；
-/// 登录能力：h5 二维码扫码（web 签名 MD5 双盐），
+/// 登录能力：h5 二维码扫码（[QrLoginCapable]，web 签名 MD5 双盐），
 /// 成功后凭据为 token/userid，注入 Cookie 解锁完整试听。
-class KugouSource extends MusicSource {
+class KugouSource extends MusicSource implements QrLoginCapable {
   KugouSource({
     required super.credentialReader,
     this.onSessionExpired,
@@ -196,6 +197,27 @@ class KugouSource extends MusicSource {
 
   // ---------- 真实登录（h5 二维码扫码） ----------
 
+  @override
+  List<QrLoginFlow> get qrLoginFlows => [
+        QrLoginFlow(
+          id: 'qr',
+          label: '扫码登录',
+          scanHint: '请使用酷狗音乐 App 扫码',
+          create: () async {
+            final session = await createQrLogin();
+            return QrLoginSession(
+              pollKey: session.qrKey,
+              png: session.png,
+              contentUrl: session.qrContent,
+            );
+          },
+          poll: (session) => pollQrLogin(session.pollKey),
+          userIdCredentialKey: 'userid',
+          fallbackNickname: '酷狗用户',
+          footerHint: '扫码登录后可同步会员权益与账号歌单',
+        ),
+      ];
+
   /// 创建二维码登录会话：返回扫码内容与二维码 PNG。
   Future<({String qrKey, Uint8List png, String qrContent})>
       createQrLogin() async {
@@ -310,23 +332,28 @@ class KugouSource extends MusicSource {
 
   @override
   Future<bool> checkSession() async {
-    try {
-      final credentials = await credentialReader();
-      final token = credentials['token'];
-      final userid = credentials['userid'];
-      if (token == null || token.isEmpty || userid == null) return false;
-      return await _fetchNickname(token: token, userid: userid) != null;
-    } catch (_) {
-      return false;
-    }
+    final credentials = await credentialReader();
+    final token = credentials['token'];
+    final userid = credentials['userid'];
+    if (token == null || token.isEmpty || userid == null) return false;
+    // throwOnError：网络异常向上抛，AccountNotifier 保留乐观登录态，
+    // 只有「确认凭据无效」才返回 false。
+    final nickname = await _fetchNickname(
+      token: token,
+      userid: userid,
+      throwOnError: true,
+    );
+    return nickname != null;
   }
 
   Future<String?> _fetchNickname({
     required String token,
     required String userid,
+    bool throwOnError = false,
   }) async {
+    final Response<dynamic> response;
     try {
-      final response = await _dio.get<dynamic>(
+      response = await _dio.get<dynamic>(
         'https://userservice.kugou.com/rpc/v1/get_user_info',
         queryParameters: <String, dynamic>{
           'token': token,
@@ -334,15 +361,16 @@ class KugouSource extends MusicSource {
         },
         options: Options(responseType: ResponseType.plain),
       );
-      final data = _asMap(_decoded(response));
-      final userInfo =
-          _asMap(_asMap(_asMap(data)?['data'])?['userInfo']);
-      final nick = userInfo?['nickname'] as String? ??
-          userInfo?['username'] as String?;
-      return (nick == null || nick.isEmpty) ? null : nick;
     } catch (_) {
+      if (throwOnError) rethrow;
       return null;
     }
+    final data = _asMap(_decoded(response));
+    final userInfo =
+        _asMap(_asMap(_asMap(data)?['data'])?['userInfo']);
+    final nick = userInfo?['nickname'] as String? ??
+        userInfo?['username'] as String?;
+    return (nick == null || nick.isEmpty) ? null : nick;
   }
 
   /// 是否已有登录凭据（用于失败提示分级）。
