@@ -8,6 +8,8 @@ import '../../features/library/data/library_repository.dart';
 import '../../features/player/audio_handler.dart';
 import '../../features/search/data/search_history_repository.dart';
 import '../../features/settings/data/local_music_settings_repository.dart';
+import '../../features/settings/settings_providers.dart'
+    show audioQualityProvider, AudioQualityBits;
 import '../source/music_source.dart';
 import '../source/source_registry.dart';
 import '../../sources/kugou/kugou_source.dart';
@@ -96,6 +98,9 @@ final sourceRegistryProvider = Provider<SourceRegistry>((ref) {
     YouTubeMusicSource(
       credentialReader: createCredentialReader(YouTubeMusicSource.id),
       onSessionExpired: expiredCallbackFor(ref, YouTubeMusicSource.id),
+      // 音质档位 → googlevideo 码率上限（读取时求值，不触发 registry 重建）
+      maxBitrateProvider: () =>
+          ref.read(audioQualityProvider).ytmMaxBitrate,
     ),
   );
 
@@ -103,6 +108,8 @@ final sourceRegistryProvider = Provider<SourceRegistry>((ref) {
     NeteaseSource(
       credentialReader: createCredentialReader(NeteaseSource.id),
       onSessionExpired: expiredCallbackFor(ref, NeteaseSource.id),
+      // 音质档位 → weapi br 参数
+      bitrateProvider: () => ref.read(audioQualityProvider).neteaseBr,
     ),
   );
 

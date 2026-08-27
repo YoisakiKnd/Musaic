@@ -1,10 +1,13 @@
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
         <!-- 播放与渠道网络访问 -->
     <uses-permission android:name="android.permission.INTERNET"/>
     <!-- audio_service 前台媒体通知 -->
     <uses-permission android:name="android.permission.WAKE_LOCK"/>
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK"/>
+    <!-- Android 13+ 通知运行时权限：缺失则通知栏/锁屏播放控制被系统静默拒绝 -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
     <!-- 本地音乐扫描：Android 13+ 细分媒体权限；旧版本读存储 -->
     <uses-permission android:name="android.permission.READ_MEDIA_AUDIO"/>
     <uses-permission
@@ -43,6 +46,28 @@
         <meta-data
             android:name="flutterEmbedding"
             android:value="2" />
+
+        <!-- audio_service 必需的后台媒体服务与媒体按钮广播（缺失则锁屏/通知栏控制失效） -->
+        <service
+            android:name="com.ryanheise.audioservice.AudioService"
+            android:foregroundServiceType="mediaPlayback"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.media.browse.MediaBrowserService"/>
+            </intent-filter>
+        </service>
+        <receiver
+            android:name="com.ryanheise.audioservice.MediaButtonReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MEDIA_BUTTON"/>
+            </intent-filter>
+        </receiver>
+
+        <!-- Android Auto 媒体浏览入口 -->
+        <meta-data
+            android:name="com.google.android.gms.car.application"
+            android:resource="@xml/automotive_app_desc"/>
     </application>
     <!-- Required to query activities that can process text, see:
          https://developer.android.com/training/package-visibility and

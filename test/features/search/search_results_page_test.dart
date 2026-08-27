@@ -65,7 +65,8 @@ Future<void> _pumpPage(
       overrides: [
         sourceRegistryProvider.overrideWithValue(registry),
         playerNotifierProvider.overrideWith(_StubPlayerNotifier.new),
-        favoritesProvider.overrideWith((ref) => Stream.value(const <Track>[])),
+        // 收藏判定走 O(1) family provider，测试环境以桩替代（无 Hive）
+        isFavoriteProvider.overrideWith((ref, key) => false),
       ],
       child: MaterialApp(
         home: SearchResultsPage(

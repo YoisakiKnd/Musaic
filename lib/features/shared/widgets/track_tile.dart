@@ -1,3 +1,4 @@
+import 'dart:async' show unawaited;
 import 'dart:io' show File;
 
 import 'package:cached_network_image/cached_network_image.dart';
@@ -39,9 +40,7 @@ class TrackTile extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final registry = ref.watch(sourceRegistryProvider);
     final source = registry.resolve(track.sourceId);
-    final favorites =
-        ref.watch(favoritesProvider).value ?? const <Track>[];
-    final isFavorite = favorites.any((t) => t.key == track.key);
+    final isFavorite = ref.watch(isFavoriteProvider(track.key));
     final current = ref.watch(playerNotifierProvider.select((s) => s.current));
     final isCurrent = current?.key == track.key;
     final scheme = Theme.of(context).colorScheme;
@@ -57,7 +56,8 @@ class TrackTile extends ConsumerWidget {
             );
         context.push('/player');
       },
-      onLongPress: onLongPress ?? onRemove,
+      onLongPress: onLongPress ??
+          (onRemove ?? () => _quickPlayNext(context, ref)),
       leading: _TileCover(coverUrl: track.coverUrl),
       title: Text(
         track.title,
@@ -125,6 +125,15 @@ class TrackTile extends ConsumerWidget {
           ),
         ],
       ),
+    );
+  }
+
+  /// 无自定义长按行为的曲目：快捷「下一首播放」。
+  Future<void> _quickPlayNext(BuildContext context, WidgetRef ref) async {
+    unawaited(ref.read(playerNotifierProvider.notifier).insertNext(track));
+    if (!context.mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('下一首播放「${track.title}」')),
     );
   }
 }

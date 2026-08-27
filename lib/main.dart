@@ -8,6 +8,7 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:audio_session/audio_session.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 import 'package:just_audio/just_audio.dart';
+import 'package:permission_handler/permission_handler.dart';
 import 'package:window_manager/window_manager.dart';
 
 import 'app/router.dart';
@@ -54,6 +55,17 @@ class _Bootstrap {
       await windowManager.show();
       await windowManager.focus();
     });
+  }
+
+  static Future<void> _requestNotificationPermission() async {
+    // Android 13+：无 POST_NOTIFICATIONS 授权时 audio_service 前台通知静默失败，
+    // 通知栏/锁屏/耳机按键等核心播放能力整体不可用。启动期申请一次。
+    if (kIsWeb || !Platform.isAndroid) return;
+    try {
+      await Permission.notification.request();
+    } catch (_) {
+      // 授权流程异常不阻塞启动
+    }
   }
 
   static Future<MusaicAudioHandler> _initAudioHandler() async {
@@ -113,6 +125,7 @@ Future<void> main() async {
   final appSettingsBox = boxes[6];
 
   await _Bootstrap._configureAudioSession();
+  await _Bootstrap._requestNotificationPermission();
   await _Bootstrap._configureDesktopWindow();
   final audioHandler = await _Bootstrap._initAudioHandler();
 

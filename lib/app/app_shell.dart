@@ -2,6 +2,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../core/auth/source_account.dart';
+import '../core/di/app_providers.dart';
+import '../features/auth/application/account_notifier.dart';
+import '../features/auth/presentation/login_launcher.dart';
 import '../core/theme/app_tokens.dart';
 import '../features/player/mini_player.dart';
 import '../features/player/player_notifier.dart';
@@ -23,6 +27,33 @@ class AppShell extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final hasQueue = ref.watch(playerHasQueueProvider);
+
+    // 登录过期全局引导：任一渠道「已登录 → 已过期」迁移时提示并可一键重登
+    //（被动 401 捕获与启动后台校验共用此入口；每渠道只在迁移瞬间提醒一次）。
+    ref.listen(accountsProvider, (previous, next) {
+      if (previous == null) return;
+      for (final entry in next.bySource.entries) {
+        if (entry.value.status != AccountStatus.expired) continue;
+        if (previous.bySource[entry.key]?.status != AccountStatus.loggedIn) {
+          continue;
+        }
+        final source =
+            ref.read(sourceRegistryProvider).resolve(entry.key);
+        if (source == null) continue;
+        if (!context.mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('${source.displayName} 登录已过期'),
+            duration: const Duration(seconds: 6),
+            action: SnackBarAction(
+              label: '重新登录',
+              onPressed: () => launchChannelLogin(context, ref, source),
+            ),
+          ),
+        );
+        break; // 一次只提醒一条
+      }
+    });
 
     return LayoutBuilder(
       builder: (context, constraints) {

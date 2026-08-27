@@ -7,9 +7,7 @@ import '../../../../core/source/capabilities.dart';
 import '../../../../core/source/music_source.dart';
 import '../../../../core/theme/app_tokens.dart';
 import '../../application/account_notifier.dart';
-import '../login_dialog.dart';
-import '../qr_login_page.dart';
-import '../web_login_page.dart';
+import '../login_launcher.dart';
 
 /// 渠道是否有值得在账号列表展示的登录能力（本地文件等免登录渠道不展示）。
 bool _hasAccountUi(MusicSource source) =>
@@ -246,7 +244,7 @@ class _ChannelEntry extends ConsumerWidget {
                 ],
               )
             : const Icon(Icons.chevron_right_rounded),
-        onTap: () => _openChannelLogin(context, source),
+        onTap: () => _openChannelLogin(context, ref, source),
       ),
     );
   }
@@ -278,25 +276,14 @@ class _ChannelEntry extends ConsumerWidget {
 
   void _openChannelLogin(
     BuildContext context,
+    WidgetRef ref,
     MusicSource source,
   ) {
-    final sourceId = source.sourceId;
-    final route = switch (source) {
-      QrLoginCapable() || PasswordLoginCapable() => MaterialPageRoute<void>(
-          builder: (_) => QrLoginPage(sourceId: sourceId),
-        ),
-      WebLoginCapable() => MaterialPageRoute<void>(
-          builder: (_) => WebLoginPage(sourceId: sourceId),
-        ),
-      _ => null,
-    };
-    if (route != null) {
-      Navigator.of(context).push(route);
-      return;
-    }
-    // 仅声明式凭据表单的渠道走动态弹窗；都没有则提示开发中。
-    if (source.authCapability.requiresLogin) {
-      showLoginDialog(context, source);
+    if (source is QrLoginCapable ||
+        source is PasswordLoginCapable ||
+        source is WebLoginCapable ||
+        source.authCapability.requiresLogin) {
+      launchChannelLogin(context, ref, source);
     } else {
       _showComingSoon(context, source.displayName, '账号登录');
     }

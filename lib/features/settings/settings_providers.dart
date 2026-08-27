@@ -29,9 +29,57 @@ class AppSettingsRepository {
   Future<void> setOledBlack(bool value) =>
       box.put(_oledKey, value ? 'true' : 'false');
 
+  /// 歌词时间偏移（毫秒，正值=歌词提前显示/负值=延后）。
+  int get lyricOffsetMs =>
+      int.tryParse(box.get(_lyricOffsetKey) ?? '') ?? 0;
+
+  Future<void> setLyricOffsetMs(int value) =>
+      box.put(_lyricOffsetKey, value.toString());
+
+  /// 播放音质档位：low(128k) / normal(192k) / high(320k+)。
+  AudioQuality get audioQuality => switch (box.get(_qualityKey)) {
+        'low' => AudioQuality.low,
+        'high' => AudioQuality.high,
+        _ => AudioQuality.normal,
+      };
+
+  Future<void> setAudioQuality(AudioQuality quality) =>
+      box.put(_qualityKey, quality.name);
+
   static const String _themeModeKey = 'theme_mode';
   static const String _glassKey = 'enable_glass';
   static const String _oledKey = 'oled_black';
+  static const String _lyricOffsetKey = 'lyric_offset_ms';
+  static const String _qualityKey = 'audio_quality';
+}
+
+/// 播放音质档位（各渠道映射到自身支持的最接近码率）。
+enum AudioQuality {
+  /// 流畅优先（约 128kbps）。
+  low,
+
+  /// 标准（约 192kbps）。
+  normal,
+
+  /// 高品质保真（320kbps / 无损优先）。
+  high,
+}
+
+/// 档位 → 渠道码率（bps）映射。
+extension AudioQualityBits on AudioQuality {
+  /// 网易云 /api/song/enhance/player/url 的 br 参数。
+  int get neteaseBr => switch (this) {
+        AudioQuality.low => 128000,
+        AudioQuality.normal => 192000,
+        AudioQuality.high => 320000,
+      };
+
+  /// YTM googlevideo 格式的码率上限。
+  int get ytmMaxBitrate => switch (this) {
+        AudioQuality.low => 130000,
+        AudioQuality.normal => 260000,
+        AudioQuality.high => 0, // 0 = 不设上限，取最高
+      };
 }
 
 final appSettingsRepositoryProvider = Provider<AppSettingsRepository>((ref) {
@@ -79,3 +127,33 @@ class OledBlackNotifier extends Notifier<bool> {
 
 final oledBlackProvider =
     NotifierProvider<OledBlackNotifier, bool>(OledBlackNotifier.new);
+
+/// 歌词时间偏移（毫秒）。
+class LyricOffsetNotifier extends Notifier<int> {
+  @override
+  int build() => ref.watch(appSettingsRepositoryProvider).lyricOffsetMs;
+
+  Future<void> set(int ms) async {
+    final clamped = ms.clamp(-10000, 10000);
+    state = clamped;
+    await ref.read(appSettingsRepositoryProvider).setLyricOffsetMs(clamped);
+  }
+}
+
+final lyricOffsetMsProvider =
+    NotifierProvider<LyricOffsetNotifier, int>(LyricOffsetNotifier.new);
+
+/// 播放音质档位（对下次 resolveStream 生效，不打断当前播放）。
+class AudioQualityNotifier extends Notifier<AudioQuality> {
+  @override
+  AudioQuality build() => ref.watch(appSettingsRepositoryProvider).audioQuality;
+
+  Future<void> set(AudioQuality quality) async {
+    state = quality;
+    await ref.read(appSettingsRepositoryProvider).setAudioQuality(quality);
+  }
+}
+
+final audioQualityProvider =
+    NotifierProvider<AudioQualityNotifier, AudioQuality>(
+        AudioQualityNotifier.new);

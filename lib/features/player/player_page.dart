@@ -156,9 +156,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
             tooltip: '喜欢',
             onPressed: () => _toggleFavorite(track),
             icon: Consumer(builder: (context, ref, _) {
-              final favorites = ref.watch(favoritesProvider).value ??
-                  const <Track>[];
-              final isFav = favorites.any((t) => t.key == track.key);
+              final isFav = ref.watch(isFavoriteProvider(track.key));
               return Icon(
                 isFav
                     ? Icons.favorite_rounded
@@ -304,7 +302,9 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
                 label: Text('队列 ${state.queue.length}'),
               ),
               const SizedBox(width: 12),
-              _SleepTimerButton(endsAt: state.sleepTimerEndsAt),
+              _SleepTimerButton(state: state),
+              const SizedBox(width: 12),
+              _SpeedButton(speed: state.speed),
             ],
           ),
         ],
@@ -318,42 +318,93 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
     await showModalBottomSheet<void>(
       context: context,
       showDragHandle: true,
+      isScrollControlled: true,
       builder: (sheetContext) => Consumer(builder: (context, ref, _) {
         final state = ref.watch(playerNotifierProvider);
         final notifier = ref.read(playerNotifierProvider.notifier);
         return SafeArea(
-          child: ListView.builder(
-            shrinkWrap: true,
-            itemCount: state.queue.length,
-            itemBuilder: (itemContext, index) {
-              final t = state.queue[index];
-              final active = index == state.currentIndex;
-              return ListTile(
-                leading: Text('${index + 1}',
-                    style: TextStyle(color: schemeColor(sheetContext))),
-                title: Text(
-                  t.title,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    fontWeight:
-                        active ? FontWeight.w700 : FontWeight.w400,
-                    color: active
-                        ? AppTokens.accent
-                        : Theme.of(itemContext)
-                            .colorScheme
-                            .onSurface
-                            .withValues(alpha: 0.9),
+          child: SizedBox(
+            height: MediaQuery.sizeOf(context).height * 0.6,
+            child: Column(
+              children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 0, 8, 0),
+                  child: Row(
+                    children: [
+                      Text(
+                        '播放队列（${state.queue.length}）',
+                        style: const TextStyle(
+                            fontWeight: FontWeight.w700, fontSize: 15),
+                      ),
+                      const Spacer(),
+                      TextButton.icon(
+                        onPressed: state.queue.length > 1
+                            ? notifier.clearQueue
+                            : null,
+                        icon: const Icon(Icons.delete_sweep_rounded,
+                            size: 18),
+                        label: const Text('清空'),
+                      ),
+                    ],
                   ),
                 ),
-                subtitle: Text(t.artist,
-                    maxLines: 1, overflow: TextOverflow.ellipsis),
-                onTap: () {
-                  notifier.playAt(index);
-                  Navigator.of(sheetContext).pop();
-                },
-              );
-            },
+                const Divider(height: 1),
+                Expanded(
+                  child: ReorderableListView.builder(
+                    padding: const EdgeInsets.only(bottom: 96),
+                    itemCount: state.queue.length,
+                    // onReorderItem：newIndex 已按移除后语义给出，直接转发
+                    onReorderItem: notifier.moveInQueue,
+                    itemBuilder: (context, index) {
+                      final t = state.queue[index];
+                      final active = index == state.currentIndex;
+                      return ListTile(
+                        key: ValueKey('${t.key}@$index'),
+                        leading: active
+                            ? const Icon(Icons.equalizer_rounded,
+                                size: 20, color: AppTokens.accent)
+                            : Icon(Icons.drag_handle_rounded,
+                                size: 20,
+                                color: Theme.of(context)
+                                    .colorScheme
+                                    .onSurface
+                                    .withValues(alpha: 0.4)),
+                        title: Text(
+                          t.title,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontWeight: active
+                                ? FontWeight.w700
+                                : FontWeight.w400,
+                          ),
+                        ),
+                        subtitle: Text(
+                          '${t.artist} · ${t.sourceId}',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(fontSize: 12),
+                        ),
+                        trailing: IconButton(
+                          tooltip: '从队列移除',
+                          icon: Icon(Icons.close_rounded,
+                              size: 18,
+                              color: Theme.of(context)
+                                  .colorScheme
+                                  .onSurface
+                                  .withValues(alpha: 0.5)),
+                          onPressed: () => notifier.removeFromQueue(index),
+                        ),
+                        onTap: () {
+                          notifier.playAt(index);
+                          Navigator.of(sheetContext).pop();
+                        },
+                      );
+                    },
+                  ),
+                ),
+              ],
+            ),
           ),
         );
       }),
@@ -364,35 +415,61 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
 Color schemeColor(BuildContext context) =>
     Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.5);
 
-/// 定时关闭按钮（对齐 Mei 的定时播放）。
-class _SleepTimerButton extends StatelessWidget {
-  const _SleepTimerButton({required this.endsAt});
+/// 定时关闭按钮：倒计时 / 播完当前 / 再播 N 首。
+class _SleepTimerButton extends ConsumerWidget {
+  const _SleepTimerButton({required this.state});
 
-  final DateTime? endsAt;
+  final PlayerState state;
 
   @override
-  Widget build(BuildContext context) {
-    final notifier = ProviderScope.containerOf(context)
-        .read(playerNotifierProvider.notifier);
+  Widget build(BuildContext context, WidgetRef ref) {
+    final notifier = ref.read(playerNotifierProvider.notifier);
+    final endsAt = state.sleepTimerEndsAt;
+    final songs = state.sleepSongsRemaining;
+
     String label;
-    if (endsAt == null) {
-      label = '定时';
-    } else {
-      final remaining = endsAt!.difference(DateTime.now());
+    if (songs != null) {
+      label = '还剩 $songs 首';
+    } else if (endsAt != null) {
+      final remaining = endsAt.difference(DateTime.now());
       label = remaining.isNegative
           ? '定时'
           : '剩余 ${QueueLogic.formatSleepRemaining(remaining)}';
+    } else {
+      label = '定时';
     }
-    return PopupMenuButton<Duration?>(
+    final active = endsAt != null || songs != null;
+
+    return PopupMenuButton<String>(
       tooltip: '定时关闭',
-      initialValue: null,
-      onSelected: notifier.setSleepTimer,
+      onSelected: (value) {
+        switch (value) {
+          case 'current':
+            notifier.setSleepAfterSongs(1);
+          case 'after3':
+            notifier.setSleepAfterSongs(3);
+          case 'after5':
+            notifier.setSleepAfterSongs(5);
+          case 'm15':
+            notifier.setSleepTimer(const Duration(minutes: 15));
+          case 'm30':
+            notifier.setSleepTimer(const Duration(minutes: 30));
+          case 'm60':
+            notifier.setSleepTimer(const Duration(minutes: 60));
+          default:
+            notifier.clearSleep();
+        }
+      },
       itemBuilder: (context) => const [
-        PopupMenuItem(value: Duration(minutes: 15), child: Text('15 分钟')),
-        PopupMenuItem(value: Duration(minutes: 30), child: Text('30 分钟')),
-        PopupMenuItem(value: Duration(minutes: 60), child: Text('60 分钟')),
+        PopupMenuItem(value: 'current', child: Text('播完当前曲目后停止')),
+        PopupMenuItem(value: 'after3', child: Text('再播 3 首后停止')),
+        PopupMenuItem(value: 'after5', child: Text('再播 5 首后停止')),
         PopupMenuDivider(),
-        PopupMenuItem<Duration?>(value: null, child: Text('关闭定时')),
+        PopupMenuItem(value: 'm15', child: Text('15 分钟后停止')),
+        PopupMenuItem(value: 'm30', child: Text('30 分钟后停止')),
+        PopupMenuItem(value: 'm60', child: Text('60 分钟后停止')),
+        PopupMenuDivider(),
+        PopupMenuItem(value: 'off', child: Text('关闭定时')),
       ],
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
@@ -401,12 +478,60 @@ class _SleepTimerButton extends StatelessWidget {
             Icon(
               Icons.bedtime_rounded,
               size: 18,
-              color: endsAt != null
+              color: active
                   ? AppTokens.accent
-                  : Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.7),
+                  : Theme.of(context)
+                      .colorScheme
+                      .onSurface
+                      .withValues(alpha: 0.7),
             ),
             const SizedBox(width: 6),
             Text(label, style: const TextStyle(fontSize: 13)),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// 倍速播放按钮。
+class _SpeedButton extends ConsumerWidget {
+  const _SpeedButton({required this.speed});
+
+  final double speed;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final notifier = ref.read(playerNotifierProvider.notifier);
+    return PopupMenuButton<double>(
+      tooltip: '倍速播放',
+      onSelected: notifier.setSpeed,
+      itemBuilder: (context) => const [
+        PopupMenuItem(value: 0.75, child: Text('0.75×')),
+        PopupMenuItem(value: 1.0, child: Text('1.0×（标准）')),
+        PopupMenuItem(value: 1.25, child: Text('1.25×')),
+        PopupMenuItem(value: 1.5, child: Text('1.5×')),
+        PopupMenuItem(value: 2.0, child: Text('2.0×')),
+      ],
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        child: Row(
+          children: [
+            Icon(
+              Icons.speed_rounded,
+              size: 18,
+              color: speed != 1.0
+                  ? AppTokens.accent
+                  : Theme.of(context)
+                      .colorScheme
+                      .onSurface
+                      .withValues(alpha: 0.7),
+            ),
+            const SizedBox(width: 6),
+            Text(
+              speed == 1.0 ? '倍速' : '$speed×',
+              style: const TextStyle(fontSize: 13),
+            ),
           ],
         ),
       ),

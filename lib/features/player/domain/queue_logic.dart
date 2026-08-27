@@ -1,5 +1,7 @@
 import 'dart:math';
 
+import '../../../core/model/track.dart';
+
 /// 播放模式：顺序播放 / 列表循环 / 单曲循环；随机通过洗牌序列叠加实现。
 enum PlayMode { sequential, loopAll, loopOne }
 
@@ -128,5 +130,79 @@ abstract final class QueueLogic {
     final seconds = remaining.inSeconds.remainder(60).toString().padLeft(2, '0');
     final hours = remaining.inHours;
     return hours > 0 ? '$hours:$minutes:$seconds' : '$minutes:$seconds';
+  }
+
+  // ---------- 队列变更纯函数（供 PlayerNotifier 委托，可单测） ----------
+
+  /// 移除 [index] 处曲目，返回新队列 / 新当前下标 / 是否移除的正是当前曲。
+  ///
+  /// 移除当前曲时，[currentIndex] 指向「顺延到位」的曲目（末尾则回退一格），
+  /// 调用方据此决定是否续播；队列被移空时返回 -1。
+  static ({
+    List<Track> queue,
+    int currentIndex,
+    bool removedCurrent,
+  }) removeTrackAt({
+    required List<Track> queue,
+    required int index,
+    required int currentIndex,
+  }) {
+    if (index < 0 || index >= queue.length) {
+      return (queue: queue, currentIndex: currentIndex, removedCurrent: false);
+    }
+    final next = [...queue]..removeAt(index);
+    if (next.isEmpty) {
+      return (queue: next, currentIndex: -1, removedCurrent: index == currentIndex);
+    }
+    final removedCurrent = index == currentIndex;
+    final newCurrent = removedCurrent
+        ? index.clamp(0, next.length - 1)
+        : (index < currentIndex ? currentIndex - 1 : currentIndex);
+    return (queue: next, currentIndex: newCurrent, removedCurrent: removedCurrent);
+  }
+
+  /// 队列内移动（[newIndex] 为移除后语义，即 ReorderableListView.onReorderItem）。
+  /// 当前曲目以 key 追踪跟随自身位置。
+  static ({List<Track> queue, int currentIndex}) moveTrack({
+    required List<Track> queue,
+    required int oldIndex,
+    required int newIndex,
+    required int currentIndex,
+  }) {
+    if (oldIndex < 0 || oldIndex >= queue.length) {
+      return (queue: queue, currentIndex: currentIndex);
+    }
+    final target = newIndex.clamp(0, queue.length - 1);
+    if (target == oldIndex) {
+      return (queue: queue, currentIndex: currentIndex);
+    }
+    final currentKey = currentIndex >= 0 && currentIndex < queue.length
+        ? queue[currentIndex].key
+        : null;
+    final next = [...queue];
+    final item = next.removeAt(oldIndex);
+    next.insert(target, item);
+    final newCurrent = currentKey == null
+        ? currentIndex
+        : next.indexWhere((t) => t.key == currentKey);
+    return (queue: next, currentIndex: newCurrent);
+  }
+
+  /// 把 [track] 插入当前曲之后作为「下一首播放」；已在队列中则先去重再插入。
+  static ({List<Track> queue, int currentIndex}) insertAsNext({
+    required List<Track> queue,
+    required Track track,
+    required int currentIndex,
+  }) {
+    final next = [...queue];
+    var current = currentIndex;
+    final existing = next.indexWhere((t) => t.key == track.key);
+    if (existing >= 0) {
+      if (current >= 0 && existing < current) current--;
+      next.removeAt(existing);
+    }
+    final at = (current + 1).clamp(0, next.length);
+    next.insert(at, track);
+    return (queue: next, currentIndex: current);
   }
 }

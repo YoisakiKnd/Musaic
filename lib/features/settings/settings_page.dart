@@ -160,14 +160,99 @@ class AppearancePage extends ConsumerWidget {
 class PlaybackPage extends ConsumerWidget {
   const PlaybackPage({super.key});
 
+  static const _qualityLabels = <AudioQuality, String>{
+    AudioQuality.low: '流畅 128k',
+    AudioQuality.normal: '标准 192k',
+    AudioQuality.high: '高品质 320k',
+  };
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final glass = ref.watch(enableGlassProvider);
+    final quality = ref.watch(audioQualityProvider);
+    final offsetMs = ref.watch(lyricOffsetMsProvider);
     return Scaffold(
       appBar: AppBar(title: const Text('播放与性能')),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
+          // ---------- 播放音质 ----------
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text('播放音质',
+                      style: TextStyle(fontWeight: FontWeight.w600)),
+                  const SizedBox(height: 2),
+                  const Text(
+                    '下次播放生效；不支持档位切换的渠道按默认码率播放',
+                    style: TextStyle(fontSize: 12),
+                  ),
+                  const SizedBox(height: 10),
+                  SizedBox(
+                    width: double.infinity,
+                    child: SegmentedButton<AudioQuality>(
+                      segments: [
+                        for (final entry in _qualityLabels.entries)
+                          ButtonSegment(
+                            value: entry.key,
+                            label: Text(entry.value),
+                          ),
+                      ],
+                      selected: {quality},
+                      onSelectionChanged: (selection) => ref
+                          .read(audioQualityProvider.notifier)
+                          .set(selection.first),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
+          // ---------- 歌词时间偏移 ----------
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    '歌词时间偏移 ${offsetMs > 0 ? '+' : ''}'
+                    '${(offsetMs / 1000).toStringAsFixed(1)}s',
+                    style: const TextStyle(fontWeight: FontWeight.w600),
+                  ),
+                  const Text(
+                    '歌词显快调负、显慢调正（±10s）',
+                    style: TextStyle(fontSize: 12),
+                  ),
+                  Slider(
+                    value: offsetMs.toDouble().clamp(-10000, 10000),
+                    min: -10000,
+                    max: 10000,
+                    divisions: 100,
+                    label: '${(offsetMs / 1000).toStringAsFixed(1)}s',
+                    onChanged: (v) => ref
+                        .read(lyricOffsetMsProvider.notifier)
+                        .set(v.round()),
+                  ),
+                  if (offsetMs != 0)
+                    Align(
+                      alignment: Alignment.centerRight,
+                      child: TextButton(
+                        onPressed: () =>
+                            ref.read(lyricOffsetMsProvider.notifier).set(0),
+                        child: const Text('归零'),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
+          // ---------- 玻璃效果 ----------
           Card(
             child: SwitchListTile(
               title: const Text('玻璃模糊效果'),

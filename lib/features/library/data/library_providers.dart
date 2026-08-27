@@ -16,6 +16,22 @@ final favoritesProvider = StreamProvider<List<Track>>((ref) async* {
   }
 });
 
+/// 收藏 Box 变更信号（修订计数）：驱动 [isFavoriteProvider] 精确失效。
+final favoritesRevisionProvider = StreamProvider<int>((ref) async* {
+  final repository = ref.watch(libraryRepositoryProvider);
+  var revision = 0;
+  yield revision;
+  await for (final _ in repository.watchFavorites()) {
+    yield ++revision;
+  }
+});
+
+/// O(1) 收藏判定（Hive containsKey），替代「watch 全列表 + 线性扫描」。
+final isFavoriteProvider = Provider.family<bool, String>((ref, trackKey) {
+  ref.watch(favoritesRevisionProvider);
+  return ref.watch(libraryRepositoryProvider).isFavorite(trackKey);
+});
+
 final recentHistoryProvider = StreamProvider<List<Track>>((ref) async* {
   final repository = ref.watch(libraryRepositoryProvider);
   yield repository.recentHistory();

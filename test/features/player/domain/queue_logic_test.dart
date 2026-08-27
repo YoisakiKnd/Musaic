@@ -1,7 +1,11 @@
 import 'dart:math';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:musaic/core/model/track.dart';
 import 'package:musaic/features/player/domain/queue_logic.dart';
+
+Track _t(String id) =>
+    Track(id: id, sourceId: 'netease', title: id, artist: 'a');
 
 void main() {
   group('nextIndex', () {
@@ -196,5 +200,99 @@ void main() {
       QueueLogic.formatSleepRemaining(const Duration(hours: 1)),
       '1:00:00',
     );
+  });
+
+  group('removeTrackAt', () {
+    final queue = [_t('a'), _t('b'), _t('c'), _t('d')];
+
+    test('移除当前曲之前的项：current 前移一位', () {
+      final r = QueueLogic.removeTrackAt(
+          queue: queue, index: 0, currentIndex: 2);
+      expect(r.queue.map((t) => t.id), ['b', 'c', 'd']);
+      expect(r.currentIndex, 1); // 原 c(2) → 现 1
+      expect(r.removedCurrent, isFalse);
+    });
+
+    test('移除当前曲：指向顺延的下一曲，标记 removedCurrent', () {
+      final r = QueueLogic.removeTrackAt(
+          queue: queue, index: 2, currentIndex: 2);
+      expect(r.removedCurrent, isTrue);
+      expect(r.currentIndex, 2); // c 被删，d 顺延到 index 2
+      expect(r.queue[2].id, 'd');
+    });
+
+    test('移除末尾当前曲：current 回退一格', () {
+      final r = QueueLogic.removeTrackAt(
+          queue: queue, index: 3, currentIndex: 3);
+      expect(r.removedCurrent, isTrue);
+      expect(r.currentIndex, 2);
+    });
+
+    test('移除唯一曲目：队列空、current = -1', () {
+      final r = QueueLogic.removeTrackAt(
+          queue: [_t('x')], index: 0, currentIndex: 0);
+      expect(r.queue, isEmpty);
+      expect(r.currentIndex, -1);
+    });
+
+    test('越界索引：原样返回且 removedCurrent=false', () {
+      final r = QueueLogic.removeTrackAt(
+          queue: queue, index: 9, currentIndex: 1);
+      expect(identical(r.queue, queue), isTrue);
+      expect(r.removedCurrent, isFalse);
+    });
+  });
+
+  group('moveTrack', () {
+    final queue = [_t('a'), _t('b'), _t('c')];
+
+    test('下移非当前曲：当前曲目按 key 追踪', () {
+      final r = QueueLogic.moveTrack(
+          queue: queue, oldIndex: 0, newIndex: 2, currentIndex: 2);
+      expect(r.queue.map((t) => t.id), ['b', 'c', 'a']);
+      expect(r.queue[r.currentIndex].id, 'c');
+    });
+
+    test('移动当前曲自身：currentIndex 跟随落点', () {
+      final r = QueueLogic.moveTrack(
+          queue: queue, oldIndex: 0, newIndex: 1, currentIndex: 0);
+      expect(r.queue.map((t) => t.id), ['b', 'a', 'c']);
+      expect(r.currentIndex, 1);
+    });
+
+    test('原地移动 / 越界：不改队列', () {
+      final same = QueueLogic.moveTrack(
+          queue: queue, oldIndex: 1, newIndex: 1, currentIndex: 0);
+      expect(identical(same.queue, queue), isTrue);
+      final oob = QueueLogic.moveTrack(
+          queue: queue, oldIndex: 5, newIndex: 0, currentIndex: 0);
+      expect(identical(oob.queue, queue), isTrue);
+    });
+  });
+
+  group('insertAsNext', () {
+    test('空队列插入（current=-1）落队首，current 保持 -1', () {
+      final r = QueueLogic.insertAsNext(
+          queue: const [], track: _t('n'), currentIndex: -1);
+      expect(r.queue.map((t) => t.id), ['n']);
+      expect(r.currentIndex, -1); // 开播决策留给上层
+    });
+
+    test('插入到当前曲之后', () {
+      final r = QueueLogic.insertAsNext(
+          queue: [_t('a'), _t('b')], track: _t('n'), currentIndex: 0);
+      expect(r.queue.map((t) => t.id), ['a', 'n', 'b']);
+      expect(r.currentIndex, 0);
+    });
+
+    test('已在队列前部的曲目：去重移动且 current 不错位', () {
+      final r = QueueLogic.insertAsNext(
+          queue: [_t('n'), _t('a'), _t('b')],
+          track: _t('n'),
+          currentIndex: 2);
+      // n 从索引 0 移走 → current 2→1；再插到 current+1=2
+      expect(r.currentIndex, 1);
+      expect(r.queue[r.currentIndex + 1].id, 'n');
+    });
   });
 }

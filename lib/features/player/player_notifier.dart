@@ -25,7 +25,9 @@ class PlayerState {
     this.duration,
     this.mode = PlayMode.sequential,
     this.shuffleOn = false,
+    this.speed = 1.0,
     this.sleepTimerEndsAt,
+    this.sleepSongsRemaining,
     this.error,
   });
 
@@ -47,8 +49,14 @@ class PlayerState {
   final PlayMode mode;
   final bool shuffleOn;
 
+  /// 倍速播放（0.75 ~ 2.0；平台不支持时保持 1.0）。
+  final double speed;
+
   /// 定时关闭时间点；null 表示未启用。
   final DateTime? sleepTimerEndsAt;
+
+  /// 「剩余 N 首后停止」计数（与倒计时二选一）。
+  final int? sleepSongsRemaining;
 
   final String? error;
 
@@ -64,7 +72,9 @@ class PlayerState {
     Object? duration = _unset,
     PlayMode? mode,
     bool? shuffleOn,
+    double? speed,
     Object? sleepTimerEndsAt = _unset,
+    Object? sleepSongsRemaining = _unset,
     Object? error = _unset,
   }) {
     return PlayerState(
@@ -79,9 +89,13 @@ class PlayerState {
           identical(duration, _unset) ? this.duration : duration as Duration?,
       mode: mode ?? this.mode,
       shuffleOn: shuffleOn ?? this.shuffleOn,
+      speed: speed ?? this.speed,
       sleepTimerEndsAt: identical(sleepTimerEndsAt, _unset)
           ? this.sleepTimerEndsAt
           : sleepTimerEndsAt as DateTime?,
+      sleepSongsRemaining: identical(sleepSongsRemaining, _unset)
+          ? this.sleepSongsRemaining
+          : sleepSongsRemaining as int?,
       error: identical(error, _unset) ? this.error : error as String?,
     );
   }
@@ -111,6 +125,12 @@ class PlayerNotifier extends Notifier<PlayerState> {
     _handler = ref.watch(audioHandlerProvider);
     _handler.onNext = _onSystemSkipToNext;
     _handler.onPrevious = _onSystemSkipToPrevious;
+    _handler.onSkipToQueueIndex = playAt;
+    _handler.onRemoveQueueTrack = (key) {
+      final index = state.queue.indexWhere((t) => t.key == key);
+      if (index >= 0) return removeFromQueue(index);
+      return Future.value();
+    };
 
     _stateSub = _handler.player.playerStateStream.listen(_onPlayerStateChanged);
     _positionTimer = Timer.periodic(
@@ -123,6 +143,7 @@ class PlayerNotifier extends Notifier<PlayerState> {
     );
 
     ref.onDispose(() {
+      _disposed = true;
       _stateSub?.cancel();
       _positionTimer?.cancel();
       _sleepTimer?.cancel();
@@ -147,6 +168,7 @@ class PlayerNotifier extends Notifier<PlayerState> {
       currentIndex: index,
       error: null,
     );
+    _syncSystemQueue();
     await _loadAndPlay(index);
   }
 
@@ -158,7 +180,92 @@ class PlayerNotifier extends Notifier<PlayerState> {
           QueueLogic.shuffledOrder(queue.length, random: _random);
       _moveCurrentToShuffleHead(currentIndex: state.currentIndex);
     }
-    state = state.copyWith(queue: queue);
+    state = state.copyWith(queue: List<Track>.unmodifiable(queue));
+    _syncSystemQueue();
+  }
+
+  /// 插入到「下一首播放」位置（当前曲之后）。
+  /// 曲目已在队列中则先移除再插入（去重移动语义）；空队列时直接开播。
+  Future<void> insertNext(Track track) async {
+    final result = QueueLogic.insertAsNext(
+      queue: state.queue,
+      track: track,
+      currentIndex: state.currentIndex,
+    );
+    state = state.copyWith(
+      queue: List<Track>.unmodifiable(result.queue),
+      currentIndex: result.currentIndex,
+    );
+    if (state.shuffleOn) _reshuffleKeepingCurrent();
+    _syncSystemQueue();
+    if (result.currentIndex < 0 && result.queue.isNotEmpty) {
+      await playAt(0); // 原本无队列：直接开播这支
+    }
+  }
+
+  /// 清空队列：仅保留当前曲（Apple Music 语义）。
+  void clearQueue() {
+    final current = state.current;
+    if (current == null) return;
+    state = state.copyWith(
+      queue: List<Track>.unmodifiable([current]),
+      currentIndex: 0,
+    );
+    _shuffleOrder = null;
+    _syncSystemQueue();
+  }
+
+  /// 队列内移动（拖拽排序）。当前曲目跟随自身位置调整。
+  void moveInQueue(int oldIndex, int newIndex) {
+    final result = QueueLogic.moveTrack(
+      queue: state.queue,
+      oldIndex: oldIndex,
+      newIndex: newIndex,
+      currentIndex: state.currentIndex,
+    );
+    state = state.copyWith(
+      queue: List<Track>.unmodifiable(result.queue),
+      currentIndex: result.currentIndex,
+    );
+    if (state.shuffleOn) _reshuffleKeepingCurrent();
+    _syncSystemQueue();
+  }
+
+  /// 移除队列项。移除的是当前曲时自动播放顺延到位的下一曲；
+  /// 队列清空则停止播放。
+  Future<void> removeFromQueue(int index) async {
+    final result = QueueLogic.removeTrackAt(
+      queue: state.queue,
+      index: index,
+      currentIndex: state.currentIndex,
+    );
+    if (identical(result.queue, state.queue)) return; // 越界，无变更
+
+    if (result.queue.isEmpty) {
+      _shuffleOrder = null;
+      _sleepTimer?.cancel();
+      await _handler.stop();
+      state = state.copyWith(
+        queue: const <Track>[],
+        currentIndex: -1,
+        playing: false,
+        loading: false,
+        position: Duration.zero,
+        sleepTimerEndsAt: null,
+        sleepSongsRemaining: null,
+      );
+      _syncSystemQueue();
+      return;
+    }
+
+    state = state.copyWith(queue: List<Track>.unmodifiable(result.queue));
+    if (result.removedCurrent) {
+      await _loadAndPlay(result.currentIndex);
+    } else {
+      state = state.copyWith(currentIndex: result.currentIndex);
+      if (state.shuffleOn) _reshuffleKeepingCurrent();
+    }
+    _syncSystemQueue();
   }
 
   Future<void> toggle() async {
@@ -174,7 +281,7 @@ class PlayerNotifier extends Notifier<PlayerState> {
   }
 
   /// 上一首：超 3 秒先回开头（Mei 行为对齐，见 QueueLogic）。
-  Future<void> previous({bool manual = true}) async {
+  Future<void> previous() async {
     if (!state.hasQueue) return;
     if (QueueLogic.shouldRestartOnPrevious(position: state.position)) {
       await seekTo(Duration.zero);
@@ -191,7 +298,7 @@ class PlayerNotifier extends Notifier<PlayerState> {
     await _loadAndPlay(advance.index);
   }
 
-  Future<void> next({bool manual = true}) async {
+  Future<void> next() async {
     if (!state.hasQueue) return;
     final advance = QueueLogic.nextIndex(
       currentIndex: state.currentIndex,
@@ -237,7 +344,8 @@ class PlayerNotifier extends Notifier<PlayerState> {
     state = state.copyWith(shuffleOn: shuffleOn);
   }
 
-  /// 定时关闭：传 null 取消（对齐 Mei 的定时播放）。
+  /// 定时关闭（倒计时）：传 null 取消（对齐 Mei 的定时播放）。
+  /// 与「N 首后停止」互斥，设置一种会自动清除另一种。
   void setSleepTimer(Duration? remaining) {
     _sleepTimer?.cancel();
     if (remaining == null) {
@@ -246,6 +354,7 @@ class PlayerNotifier extends Notifier<PlayerState> {
     }
     state = state.copyWith(
       sleepTimerEndsAt: DateTime.now().add(remaining),
+      sleepSongsRemaining: null,
     );
     _sleepTimer = Timer(remaining, () async {
       try {
@@ -254,6 +363,34 @@ class PlayerNotifier extends Notifier<PlayerState> {
         state = state.copyWith(playing: false, sleepTimerEndsAt: null);
       }
     });
+  }
+
+  /// 「播完 N 首后停止」；N<=0 视为取消。播完当前曲=1。
+  void setSleepAfterSongs(int n) {
+    _sleepTimer?.cancel();
+    state = state.copyWith(
+      sleepTimerEndsAt: null,
+      sleepSongsRemaining: n <= 0 ? null : n,
+    );
+  }
+
+  /// 取消全部定时策略。
+  void clearSleep() {
+    _sleepTimer?.cancel();
+    state = state.copyWith(
+      sleepTimerEndsAt: null,
+      sleepSongsRemaining: null,
+    );
+  }
+
+  /// 倍速播放；平台不支持时置错误提示并保持原速。
+  Future<void> setSpeed(double value) async {
+    try {
+      await _handler.player.setSpeed(value);
+      state = state.copyWith(speed: value, error: null);
+    } catch (_) {
+      state = state.copyWith(error: '当前平台不支持倍速播放');
+    }
   }
 
   void clearError() => state = state.copyWith(error: null);
@@ -332,16 +469,13 @@ class PlayerNotifier extends Notifier<PlayerState> {
             .timeout(const Duration(seconds: 25));
       }
       if (seq != _loadSeq) return;
-      _handler.updateNowPlaying(
-        trackToMediaItem(
-          id: track.key,
-          title: track.title,
-          artist: track.artist,
-          album: track.album,
-          duration: track.duration,
-          artUri: track.coverUrl,
-        ),
-      );
+      _handler.updateNowPlaying(trackToMediaItem(track), queueIndex: index);
+      // 倍速跨曲目保持（部分平台 load 后重置）
+      if (state.speed != 1.0) {
+        try {
+          await player.setSpeed(state.speed);
+        } catch (_) {}
+      }
       await player.play();
       if (seq != _loadSeq) return;
       state = state.copyWith(loading: false, playing: true);
@@ -372,19 +506,55 @@ class PlayerNotifier extends Notifier<PlayerState> {
     }
   }
 
-  /// 播放器状态回调：自然完成时自动切下一曲。
+  /// 播放器状态回调：自然完成时自动切下一曲（含定时计数）。
   void _onPlayerStateChanged(ja.PlayerState playerState) {
     final completed =
         playerState.processingState == ja.ProcessingState.completed;
     if (completed && !_autoAdvancing && state.hasQueue) {
       _autoAdvancing = true;
-      unawaited(next());
+      unawaited(_advanceOnComplete());
       return;
     }
     if (completed) return;
     if (!_autoAdvancing && playerState.playing != state.playing) {
       state = state.copyWith(playing: playerState.playing);
     }
+  }
+
+  /// 自然播完推进：先消化「剩余 N 首」定时，再进入下一曲。
+  Future<void> _advanceOnComplete() async {
+    final remaining = state.sleepSongsRemaining;
+    if (remaining != null) {
+      if (remaining <= 1) {
+        state = state.copyWith(sleepSongsRemaining: null);
+        await _handler.pause();
+        if (!_disposed) {
+          state = state.copyWith(
+            playing: false,
+            position: state.duration ?? state.position,
+          );
+        }
+        return;
+      }
+      state = state.copyWith(sleepSongsRemaining: remaining - 1);
+    }
+    await next();
+  }
+
+  bool _disposed = false;
+
+  /// 同步队列镜像到系统媒体中心（通知栏 / 锁屏 / 车机 / Android Auto）。
+  void _syncSystemQueue() {
+    _handler.publishQueue([
+      for (final t in state.queue) trackToMediaItem(t),
+    ]);
+  }
+
+  /// 队列结构变更后重建洗牌序列（当前曲保持头部）。
+  void _reshuffleKeepingCurrent() {
+    _shuffleOrder =
+        QueueLogic.shuffledOrder(state.queue.length, random: _random);
+    _moveCurrentToShuffleHead(currentIndex: state.currentIndex);
   }
 
   /// 进度节流刷新（100ms，性能预算 Master Plan §10.2）。

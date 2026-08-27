@@ -32,6 +32,7 @@ class NeteaseSource extends MusicSource
   NeteaseSource({
     required super.credentialReader,
     this.onSessionExpired,
+    this.bitrateProvider,
   });
 
   /// 渠道唯一标识与展示信息。
@@ -39,6 +40,9 @@ class NeteaseSource extends MusicSource
 
   /// 会话过期回调（由组合根接 AccountNotifier）。
   final void Function()? onSessionExpired;
+
+  /// 音质档位（bitrate bps）：由组合根注入设置层映射，缺省 320k。
+  final int Function()? bitrateProvider;
 
   final Random _random = Random.secure();
 
@@ -180,7 +184,7 @@ class NeteaseSource extends MusicSource
         '/api/song/enhance/player/url',
         queryParameters: <String, dynamic>{
           'ids': '[$songId]',
-          'br': 320000,
+          'br': bitrateProvider?.call() ?? 320000,
           'csrf_token': '',
         },
         options: Options(responseType: ResponseType.plain),

@@ -36,12 +36,93 @@ class _SearchResultsPageState extends ConsumerState<SearchResultsPage> {
   bool _selecting = false;
   bool _grouped = false;
 
+  static const int _pageSize = 20;
+
+  /// 可变结果集（sourceId → List<Track> 或错误 String），分页追加。
+  late Map<String, Object> _results;
   late List<Track> _tracks;
+
+  /// 已到底 / 正在加载的渠道。
+  final Set<String> _exhausted = <String>{};
+  final Set<String> _loadingMore = <String>{};
 
   @override
   void initState() {
     super.initState();
     _tracks = widget.merged;
+    _results = Map<String, Object>.of(widget.results);
+    for (final entry in _results.entries) {
+      final v = entry.value;
+      if (v is List<Track> && v.length < _pageSize) {
+        _exhausted.add(entry.key);
+      }
+    }
+  }
+
+  /// 拉取指定渠道下一页并追加；merged 视图同步重建。
+  Future<void> _loadMore(String sourceId) async {
+    if (_loadingMore.contains(sourceId) || _exhausted.contains(sourceId)) {
+      return;
+    }
+    final source = ref.read(sourceRegistryProvider).resolve(sourceId);
+    final current = _results[sourceId];
+    if (source == null || current is! List<Track>) return;
+    setState(() => _loadingMore.add(sourceId));
+    try {
+      final next = await source
+          .search(widget.query, limit: _pageSize, offset: current.length)
+          .timeout(const Duration(seconds: 12));
+      if (!mounted) return;
+      setState(() {
+        if (next.length < _pageSize) _exhausted.add(sourceId);
+        _results[sourceId] = <Track>[...current, ...next];
+        _tracks = _rebuildMerged();
+      });
+    } catch (_) {
+      if (mounted) setState(() => _exhausted.add(sourceId));
+    } finally {
+      if (mounted) setState(() => _loadingMore.remove(sourceId));
+    }
+  }
+
+  List<Track> _rebuildMerged() {
+    final registry = ref.read(sourceRegistryProvider);
+    final merged = <Track>[];
+    for (final source in registry.all) {
+      final value = _results[source.sourceId];
+      if (value is List<Track>) merged.addAll(value);
+    }
+    return merged;
+  }
+
+  bool get _anySourceHasMore {
+    for (final key in _results.keys) {
+      if (_results[key] is List<Track> && !_exhausted.contains(key)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /// 分页页脚按钮。
+  Widget _loadMoreTile(String sourceId, ColorScheme scheme) {
+    final loading = _loadingMore.contains(sourceId);
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 8),
+        child: loading
+            ? const SizedBox(
+                width: 20,
+                height: 20,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              )
+            : TextButton.icon(
+                onPressed: () => _loadMore(sourceId),
+                icon: const Icon(Icons.expand_more_rounded, size: 18),
+                label: const Text('加载更多'),
+              ),
+      ),
+    );
   }
 
   void _toggleSelect(Track track) {
@@ -294,8 +375,38 @@ class _SearchResultsPageState extends ConsumerState<SearchResultsPage> {
                     padding: EdgeInsets.fromLTRB(
                       0, 8, 0, _selecting ? 120 : 160,
                     ),
-                    itemCount: _tracks.length,
+                    itemCount:
+                        _tracks.length + (_anySourceHasMore ? 1 : 0),
                     itemBuilder: (context, index) {
+                      // 末尾全局「加载更多」：为所有未穷尽渠道各取一页
+                      if (index == _tracks.length) {
+                        return Center(
+                          child: Padding(
+                            padding:
+                                const EdgeInsets.symmetric(vertical: 12),
+                            child: _loadingMore.isEmpty
+                                ? TextButton.icon(
+                                    onPressed: () {
+                                      for (final key in
+                                          _results.keys.toList()) {
+                                        _loadMore(key);
+                                      }
+                                    },
+                                    icon: const Icon(
+                                        Icons.expand_more_rounded,
+                                        size: 18),
+                                    label: const Text(
+                                        '加载更多（各渠道）'),
+                                  )
+                                : const SizedBox(
+                                    width: 20,
+                                    height: 20,
+                                    child: CircularProgressIndicator(
+                                        strokeWidth: 2),
+                                  ),
+                          ),
+                        );
+                      }
                       final track = _tracks[index];
                       final checked = _selected.contains(track.key);
                       return Row(
@@ -364,7 +475,7 @@ class _SearchResultsPageState extends ConsumerState<SearchResultsPage> {
     final registry = ref.read(sourceRegistryProvider);
     final children = <Widget>[];
     for (final source in registry.all) {
-      final value = widget.results[source.sourceId];
+      final value = _results[source.sourceId];
       if (value is List<Track>) {
         if (value.isEmpty) continue;
         // 分组节标题
@@ -421,6 +532,10 @@ class _SearchResultsPageState extends ConsumerState<SearchResultsPage> {
               ),
             ],
           ));
+        }
+        // 渠道分页页脚
+        if (!_exhausted.contains(source.sourceId)) {
+          children.add(_loadMoreTile(source.sourceId, scheme));
         }
       } else if (value is String) {
         // 渠道失败提示

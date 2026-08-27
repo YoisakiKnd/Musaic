@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/model/track.dart';
 import '../../../core/theme/app_tokens.dart';
+import '../../settings/settings_providers.dart';
 import '../../player/player_notifier.dart';
 import '../application/lyrics_provider.dart';
 import '../../../core/lyrics/lyric_bundle.dart';
@@ -46,8 +47,11 @@ class _LyricsViewState extends ConsumerState<LyricsView> {
   @override
   Widget build(BuildContext context) {
     final lyricsAsync = ref.watch(lyricsProvider(widget.track));
-    final position =
+    final positionRaw =
         ref.watch(playerNotifierProvider.select((s) => s.position));
+    // 歌词时间偏移（设置可调）：正值=歌词提前显示。
+    final offsetMs = ref.watch(lyricOffsetMsProvider);
+    final position = positionRaw + Duration(milliseconds: offsetMs);
 
     return NotificationListener<UserScrollNotification>(
       onNotification: (notification) {
@@ -68,13 +72,15 @@ class _LyricsViewState extends ConsumerState<LyricsView> {
         AsyncValue<LyricBundle?>(:final value?) => _buildLines(
             value,
             value.lineIndexAt(position),
+            offsetMs,
           ),
         _ => _hint('暂无歌词'),
       },
     );
   }
 
-  Widget _buildLines(LyricBundle bundle, int activeIndex) {
+  Widget _buildLines(
+      LyricBundle bundle, int activeIndex, int offsetMs) {
     if (activeIndex != _activeLineIndex &&
         !_userScrolling &&
         DateTime.now().difference(_lastUserScrollAt) >
@@ -114,9 +120,12 @@ class _LyricsViewState extends ConsumerState<LyricsView> {
         return GestureDetector(
           behavior: HitTestBehavior.opaque,
           onTap: () async {
+            var target =
+                line.start - Duration(milliseconds: offsetMs);
+            if (target.isNegative) target = Duration.zero;
             await ref
                 .read(playerNotifierProvider.notifier)
-                .seekTo(line.start);
+                .seekTo(target);
           },
           child: AnimatedPadding(
             duration: AppTokens.durationNormal,
@@ -131,6 +140,7 @@ class _LyricsViewState extends ConsumerState<LyricsView> {
                     line: line,
                     isActive: isActive,
                     baseStyle: baseStyle,
+                    offsetMs: offsetMs,
                   )
                 else
                   Text(line.text, style: baseStyle),
@@ -192,16 +202,20 @@ class _WordHighlightLine extends ConsumerWidget {
     required this.line,
     required this.isActive,
     required this.baseStyle,
+    this.offsetMs = 0,
   });
 
   final LyricLine line;
   final bool isActive;
   final TextStyle baseStyle;
+  final int offsetMs;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final position =
-        ref.watch(playerNotifierProvider.select((s) => s.position));
+    final position = ref.watch(playerNotifierProvider.select(
+              (s) => s.position,
+            )) +
+            Duration(milliseconds: offsetMs);
     const accent = AppTokens.accent;
 
     if (!isActive) {

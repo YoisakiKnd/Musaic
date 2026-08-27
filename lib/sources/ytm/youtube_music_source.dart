@@ -28,12 +28,16 @@ class YouTubeMusicSource extends MusicSource implements WebLoginCapable {
   YouTubeMusicSource({
     required super.credentialReader,
     this.onSessionExpired,
+    this.maxBitrateProvider,
   });
 
   static const String id = 'ytmusic';
 
   /// 会话过期回调（由组合根接 AccountNotifier）。
   final void Function()? onSessionExpired;
+
+  /// 音质上限（bps）；null 或不支持时取最高码率（原行为）。
+  final int? Function()? maxBitrateProvider;
 
   @override
   String get sourceId => YouTubeMusicSource.id;
@@ -233,7 +237,14 @@ class YouTubeMusicSource extends MusicSource implements WebLoginCapable {
         );
       }
       formats.sort((a, b) => b.$1.compareTo(a.$1)); // 最高码率优先
-      return ResolvedStream(url: formats.first.$2);
+      final cap = maxBitrateProvider?.call();
+      final picked = cap == null || cap <= 0
+          ? formats.first
+          : formats.firstWhere(
+              (f) => f.$1 <= cap,
+              orElse: () => formats.last, // 全部超限则取最低码率档
+            );
+      return ResolvedStream(url: picked.$2);
     } on DioException catch (e) {
       if (e.type == DioExceptionType.connectionError ||
           e.type == DioExceptionType.connectionTimeout) {
