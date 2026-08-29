@@ -13,12 +13,8 @@ void main() {
   late Box<String> playlistsBox;
   late LibraryRepository repository;
 
-  Track makeTrack(String id) => Track(
-        id: id,
-        sourceId: 'netease',
-        title: 't$id',
-        artist: 'a',
-      );
+  Track makeTrack(String id) =>
+      Track(id: id, sourceId: 'netease', title: 't$id', artist: 'a');
 
   setUpAll(() async {
     tempDir = await Directory.systemTemp.createTemp('musaic_library_test');
@@ -55,7 +51,10 @@ void main() {
         makeTrack('2'), // 批内重复
       ]);
       // 再补一条已存在的 + 一条新的
-      await repository.addManyToPlaylist('晨跑', [makeTrack('1'), makeTrack('3')]);
+      await repository.addManyToPlaylist('晨跑', [
+        makeTrack('1'),
+        makeTrack('3'),
+      ]);
 
       final tracks = repository.playlistTracks('晨跑');
       expect(tracks.map((t) => t.id), ['1', '2', '3']);
@@ -64,11 +63,13 @@ void main() {
     test('replacePlaylistTracks 整体替换且保留创建时间', () async {
       await repository.createPlaylist('下班');
       await repository.addManyToPlaylist('下班', [makeTrack('a')]);
-      final created =
-          (playlistsBox.get('下班')!.contains('"createdAt"'));
+      final created = (playlistsBox.get('下班')!.contains('"createdAt"'));
       expect(created, isTrue);
 
-      await repository.replacePlaylistTracks('下班', [makeTrack('x'), makeTrack('y')]);
+      await repository.replacePlaylistTracks('下班', [
+        makeTrack('x'),
+        makeTrack('y'),
+      ]);
       final tracks = repository.playlistTracks('下班');
       expect(tracks.map((t) => t.id), ['x', 'y']);
     });
@@ -88,6 +89,16 @@ void main() {
       expect(historyBox.containsKey(keys.last), isTrue);
       expect(repository.recentHistory(limit: 5).length, 5);
     });
+    test('bulkImportHistory 导入后仍裁剪到上限', () async {
+      await repository.bulkImportHistory(
+        List.generate(LibraryRepository.historyCap + 5, (index) {
+          return makeTrack('import-$index');
+        }),
+      );
+
+      expect(historyBox.length, LibraryRepository.historyCap);
+      expect(historyBox.containsKey(makeTrack('import-0').key), isTrue);
+    });
   });
 
   group('资料库备份（BackupService）', () {
@@ -95,13 +106,14 @@ void main() {
       final service = BackupService(library: repository);
       await repository.toggleFavorite(makeTrack('fav1'));
       await repository.createPlaylist('晨跑');
-      await repository.addManyToPlaylist(
-          '晨跑', [makeTrack('p1'), makeTrack('p2')]);
+      await repository.addManyToPlaylist('晨跑', [
+        makeTrack('p1'),
+        makeTrack('p2'),
+      ]);
       await repository.addHistory(makeTrack('h1'));
 
       final backup = service.snapshot();
-      final restored =
-          service.decode(backup.encodePretty());
+      final restored = service.decode(backup.encodePretty());
 
       expect(restored.favorites.map((t) => t.id), ['fav1']);
       expect(restored.playlists['晨跑']?.map((t) => t.id), ['p1', 'p2']);
@@ -140,15 +152,9 @@ void main() {
       final result = await service.importBackup(service.decode(raw));
 
       // 收藏并集去重
-      expect(
-        repository.favorites.map((t) => t.id).toSet(),
-        {'a', 'b'},
-      );
+      expect(repository.favorites.map((t) => t.id).toSet(), {'a', 'b'});
       // 本地歌单保留 + 新增 z（按 key 去重）
-      expect(
-        repository.playlistTracks('本地').map((t) => t.id),
-        ['x', 'z'],
-      );
+      expect(repository.playlistTracks('本地').map((t) => t.id), ['x', 'z']);
       // 缺失歌单被创建
       expect(repository.playlistNames, contains('备份歌单'));
       expect(result.favorites, 2);
@@ -160,6 +166,95 @@ void main() {
       expect(() => service.decode('{broken'), throwsFormatException);
       expect(() => service.decode('[1,2]'), throwsFormatException);
       expect(repository.favorites, isEmpty);
+    });
+
+    test('新版本 schema 拒绝导入', () async {
+      final service = BackupService(library: repository);
+      const raw = '{"schema": 999, "exportedAt": "2026-08-27T10:00:00.000"}';
+      expect(() => service.decode(raw), throwsFormatException);
+    });
+
+    test('导入中途失败：回滚到导入前状态（B17）', () async {
+      final service = BackupService(library: repository);
+      // 本地已有收藏 fav-keep
+      await repository.toggleFavorite(makeTrack('fav-keep'));
+
+      // 备份中含非法歌单名（trim 后为空）→ 在歌单步骤抛 ArgumentError
+      const raw = '''
+      {
+        "schema": 1,
+        "exportedAt": "2026-08-27T10:00:00.000",
+        "favorites": [
+          {"id": "fav-keep", "sourceId": "netease", "title": "A", "artist": "s"}
+        ],
+        "playlists": {
+          "   ": [
+            {"id": "p", "sourceId": "netease", "title": "P", "artist": "s"}
+          ]
+        },
+        "history": []
+      }''';
+
+      await expectLater(
+        service.importBackup(service.decode(raw)),
+        throwsArgumentError,
+      );
+
+      // 回滚生效：收藏恢复原样（新增的收藏被撤销），无残留歌单
+      expect(repository.favorites.map((t) => t.id), ['fav-keep']);
+      expect(repository.playlistNames, isEmpty);
+      expect(repository.recentHistory(), isEmpty);
+    });
+  });
+
+  group('歌单并发锁（迭代计划 §8.4）', () {
+    test('同名歌单并发写串行执行：两次批量加入互不覆盖', () async {
+      await repository.createPlaylist('并发');
+      // 并发触发两个「读-改-写」：无锁时后者会覆盖前者的写入
+      await Future.wait([
+        repository.addManyToPlaylist('并发', [makeTrack('lock-a')]),
+        repository.addManyToPlaylist('并发', [makeTrack('lock-b')]),
+      ]);
+      final ids = repository.playlistTracks('并发').map((t) => t.id).toSet();
+      expect(ids, {'lock-a', 'lock-b'});
+    });
+
+    test('歌单名 trim 规范化，空名拒绝', () async {
+      await repository.createPlaylist('  带空格  ');
+      expect(repository.playlistNames, contains('带空格'));
+      // trim 后同名歌单不会重复创建
+      await repository.createPlaylist(' 带空格 ');
+      expect(repository.playlistNames.where((n) => n == '带空格'), hasLength(1));
+      expect(() => repository.createPlaylist('   '), throwsArgumentError);
+    });
+
+    test('超长歌单名拒绝', () async {
+      final longName = '长' * (LibraryRepository.playlistNameMaxLength + 1);
+      expect(() => repository.createPlaylist(longName), throwsArgumentError);
+    });
+  });
+
+  group('全库快照回滚（迭代计划 §8.6）', () {
+    test('restoreSnapshot 完整还原三个 Box', () async {
+      await repository.toggleFavorite(makeTrack('snap-fav'));
+      await repository.createPlaylist('快照歌单');
+      await repository.addManyToPlaylist('快照歌单', [makeTrack('snap-p1')]);
+      await repository.addHistory(makeTrack('snap-h1'));
+      final snapshot = repository.captureSnapshot();
+
+      // 破坏现场
+      await repository.toggleFavorite(makeTrack('snap-fav'));
+      await repository.deletePlaylist('快照歌单');
+      await repository.addHistory(makeTrack('snap-h2'));
+
+      await repository.restoreSnapshot(snapshot);
+      expect(repository.isFavorite(makeTrack('snap-fav').key), isTrue);
+      expect(repository.playlistTracks('快照歌单').map((t) => t.id), ['snap-p1']);
+      expect(repository.recentHistory().map((t) => t.id), contains('snap-h1'));
+      expect(
+        repository.recentHistory().map((t) => t.id),
+        isNot(contains('snap-h2')),
+      );
     });
   });
 }

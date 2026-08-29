@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:hive/hive.dart';
 import 'dart:convert';
 
@@ -11,9 +13,9 @@ class LibraryRepository {
     required Box<String> favoritesBox,
     required Box<String> historyBox,
     required Box<String> playlistsBox,
-  })  : _favorites = favoritesBox,
-        _history = historyBox,
-        _playlists = playlistsBox;
+  }) : _favorites = favoritesBox,
+       _history = historyBox,
+       _playlists = playlistsBox;
 
   static const String favoritesBoxName = 'musaic_favorites';
   static const String historyBoxName = 'musaic_history';
@@ -21,9 +23,16 @@ class LibraryRepository {
 
   static const int historyCap = 200;
 
+  /// 歌单名长度上限（迭代计划 §8.4）。
+  static const int playlistNameMaxLength = 50;
+
   final Box<String> _favorites;
   final Box<String> _history;
   final Box<String> _playlists;
+
+  /// 同名歌单写操作的串行链（迭代计划 §8.4 异步互斥锁）：
+  /// 「读-改-写」期间其他协程不得插入，避免并发互相覆盖。
+  final Map<String, Future<void>> _playlistOps = {};
 
   // ---------- 喜欢 ----------
 
@@ -52,10 +61,10 @@ class LibraryRepository {
 
   /// 全量歌单快照（备份导出用）。
   Map<String, List<Track>> playlistSnapshot() => {
-        for (final name in playlistNames) name: playlistTracks(name),
-      };
+    for (final name in playlistNames) name: playlistTracks(name),
+  };
 
-  /// 批量导入历史（跳过裁剪，导入场景一次到位）。
+  /// 批量导入历史（一次到位后统一裁剪）。
   Future<void> bulkImportHistory(Iterable<Track> tracks) async {
     final now = DateTime.now().millisecondsSinceEpoch;
     var i = 0;
@@ -66,6 +75,7 @@ class LibraryRepository {
           'track': t.toJson(),
         }),
     });
+    await _trimHistory();
   }
 
   Stream<BoxEvent> watchFavorites() => _favorites.watch();
@@ -95,8 +105,9 @@ class LibraryRepository {
       try {
         final map = jsonDecode(value) as Map<String, dynamic>;
         final at = map['at'] as int;
-        final track =
-            Track.fromJson(Map<String, dynamic>.from(map['track'] as Map));
+        final track = Track.fromJson(
+          Map<String, dynamic>.from(map['track'] as Map),
+        );
         entries.add((at, track));
       } catch (_) {
         // 忽略损坏记录
@@ -138,72 +149,107 @@ class LibraryRepository {
     if (raw == null) return const <Track>[];
     try {
       final map = jsonDecode(raw) as Map<String, dynamic>;
-      final tracks = (map['tracks'] as List<dynamic>)
-          .map((t) =>
-              Track.fromJson(Map<String, dynamic>.from(t as Map)))
-          .toList();
+      final tracks =
+          (map['tracks'] as List<dynamic>)
+              .map((t) => Track.fromJson(Map<String, dynamic>.from(t as Map)))
+              .toList();
       return tracks;
     } catch (_) {
       return const <Track>[];
     }
   }
 
-  Future<void> createPlaylist(String name) async {
-    assert(name.trim().isNotEmpty, '歌单名不能为空');
-    if (_playlists.containsKey(name)) return;
-    await _playlists.put(
-      name,
-      jsonEncode(<String, dynamic>{
-        'createdAt': DateTime.now().millisecondsSinceEpoch,
-        'tracks': <dynamic>[],
-      }),
-    );
+  /// 歌单名规范化：trim、空值与长度校验（迭代计划 §8.4）。
+  String _normalizePlaylistName(String name) {
+    final trimmed = name.trim();
+    if (trimmed.isEmpty) {
+      throw ArgumentError.value(name, 'name', '歌单名不能为空');
+    }
+    if (trimmed.length > playlistNameMaxLength) {
+      throw ArgumentError.value(
+        trimmed.length,
+        'name',
+        '歌单名过长（≤$playlistNameMaxLength 字符）',
+      );
+    }
+    return trimmed;
   }
 
-  Future<void> deletePlaylist(String name) => _playlists.delete(name);
+  /// 同名歌单写操作串行化：先入队再执行，保证读-改-写不被并发打断。
+  Future<T> _withPlaylistLock<T>(String name, Future<T> Function() action) {
+    final previous = _playlistOps[name] ?? Future<void>.value();
+    final current = Completer<void>();
+    _playlistOps[name] = current.future;
+    return previous.then((_) => action()).whenComplete(current.complete);
+  }
 
-  Future<void> addToPlaylist(String name, Track track) async {
-    final tracks = playlistTracks(name);
-    if (tracks.any((t) => t.key == track.key)) return;
-    tracks.add(track);
-    await _writePlaylist(name, tracks);
+  Future<void> createPlaylist(String rawName) {
+    final name = _normalizePlaylistName(rawName);
+    return _withPlaylistLock(name, () async {
+      if (_playlists.containsKey(name)) return;
+      await _playlists.put(
+        name,
+        jsonEncode(<String, dynamic>{
+          'createdAt': DateTime.now().millisecondsSinceEpoch,
+          'tracks': <dynamic>[],
+        }),
+      );
+    });
+  }
+
+  Future<void> deletePlaylist(String rawName) {
+    final name = _normalizePlaylistName(rawName);
+    return _withPlaylistLock(name, () => _playlists.delete(name));
+  }
+
+  Future<void> addToPlaylist(String rawName, Track track) {
+    final name = _normalizePlaylistName(rawName);
+    return _withPlaylistLock(name, () async {
+      final tracks = playlistTracks(name);
+      if (tracks.any((t) => t.key == track.key)) return;
+      tracks.add(track);
+      await _writePlaylist(name, tracks);
+    });
   }
 
   /// 批量加入歌单：只做一次「读-改-写」，避免逐条 N 次全表重写。
-  Future<void> addManyToPlaylist(
-    String name,
-    Iterable<Track> tracks,
-  ) async {
-    final existing = playlistTracks(name);
-    final known = existing.map((t) => t.key).toSet();
-    var changed = false;
-    for (final track in tracks) {
-      if (known.add(track.key)) {
-        existing.add(track);
-        changed = true;
+  Future<void> addManyToPlaylist(String rawName, Iterable<Track> tracks) {
+    final name = _normalizePlaylistName(rawName);
+    return _withPlaylistLock(name, () async {
+      final existing = playlistTracks(name);
+      final known = existing.map((t) => t.key).toSet();
+      var changed = false;
+      for (final track in tracks) {
+        if (known.add(track.key)) {
+          existing.add(track);
+          changed = true;
+        }
       }
-    }
-    if (changed) await _writePlaylist(name, existing);
+      if (changed) await _writePlaylist(name, existing);
+    });
   }
 
   /// 用给定曲目列表整体替换歌单内容（不存在则创建）。
-  Future<void> replacePlaylistTracks(
-    String name,
-    Iterable<Track> tracks,
-  ) async {
-    final existing = <Track>[];
-    final known = <String>{};
-    for (final track in tracks) {
-      if (known.add(track.key)) existing.add(track);
-    }
-    await _writePlaylist(name, existing);
+  Future<void> replacePlaylistTracks(String rawName, Iterable<Track> tracks) {
+    final name = _normalizePlaylistName(rawName);
+    return _withPlaylistLock(name, () async {
+      final existing = <Track>[];
+      final known = <String>{};
+      for (final track in tracks) {
+        if (known.add(track.key)) existing.add(track);
+      }
+      await _writePlaylist(name, existing);
+    });
   }
 
-  Future<void> removeFromPlaylist(String name, int index) async {
-    final tracks = playlistTracks(name);
-    if (index < 0 || index >= tracks.length) return;
-    tracks.removeAt(index);
-    await _writePlaylist(name, tracks);
+  Future<void> removeFromPlaylist(String rawName, int index) {
+    final name = _normalizePlaylistName(rawName);
+    return _withPlaylistLock(name, () async {
+      final tracks = playlistTracks(name);
+      if (index < 0 || index >= tracks.length) return;
+      tracks.removeAt(index);
+      await _writePlaylist(name, tracks);
+    });
   }
 
   Future<void> _writePlaylist(String name, List<Track> tracks) {
@@ -234,4 +280,39 @@ class LibraryRepository {
       return null;
     }
   }
+
+  // ---------- 全库快照（备份导入事务回滚用，迭代计划 §8.6） ----------
+
+  /// 捕获三个 Box 的原始 JSON 快照（key → 原始字符串）。
+  LibrarySnapshot captureSnapshot() => LibrarySnapshot(
+    favorites: Map<String, String>.from(_favorites.toMap()),
+    history: Map<String, String>.from(_history.toMap()),
+    playlists: Map<String, String>.from(_playlists.toMap()),
+  );
+
+  /// 整库回滚：清空后按快照原样写回。
+  ///
+  /// 快照在导入前已完整载入内存，写回阶段不再读取外部数据，
+  /// 失败时本地数据要么是导入前状态、要么是完整导入结果。
+  Future<void> restoreSnapshot(LibrarySnapshot snapshot) async {
+    await _favorites.clear();
+    await _favorites.putAll(snapshot.favorites);
+    await _history.clear();
+    await _history.putAll(snapshot.history);
+    await _playlists.clear();
+    await _playlists.putAll(snapshot.playlists);
+  }
+}
+
+/// 全库原始快照：收藏 / 历史 / 歌单三个 Box 的 key → 原始 JSON 值。
+class LibrarySnapshot {
+  const LibrarySnapshot({
+    required this.favorites,
+    required this.history,
+    required this.playlists,
+  });
+
+  final Map<String, String> favorites;
+  final Map<String, String> history;
+  final Map<String, String> playlists;
 }
