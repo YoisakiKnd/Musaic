@@ -15,7 +15,7 @@
         android:maxSdkVersion="32"/>
 
     <application
-        android:label="musaic"
+        android:label="Musaic"
         android:name="${applicationName}"
         android:networkSecurityConfig="@xml/network_security_config"
         android:icon="@mipmap/ic_launcher">

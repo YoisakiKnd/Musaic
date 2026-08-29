@@ -1,0 +1,6 @@
+# Copy to android/key.properties for local release builds.
+# Never commit the real file or keystore.
+storePassword=CHANGE_ME
+keyPassword=CHANGE_ME
+keyAlias=musaic
+storeFile=/absolute/path/to/musaic-release.jks
