@@ -2,6 +2,7 @@ import 'package:audio_service/audio_service.dart';
 import 'package:just_audio/just_audio.dart';
 
 import '../../core/model/track.dart';
+import '../../core/utils/cover_network.dart';
 
 /// 系统媒体集成处理器（Master Plan §7）。
 ///
@@ -32,9 +33,10 @@ class MusaicAudioHandler extends BaseAudioHandler with SeekHandler {
   // ---------- 队列镜像 ----------
 
   /// 全量刷新系统队列（媒体项 id 使用 track.key，供回查下标）。
-  void publishQueue(List<MediaItem> items) {
+  void publishQueue(List<MediaItem> items, {int queueIndex = -1}) {
     queue.add(items);
-    if (_queueIndex >= items.length) _queueIndex = -1;
+    _queueIndex =
+        queueIndex >= 0 && queueIndex < items.length ? queueIndex : -1;
     playbackState.add(playbackState.value.copyWith(queueIndex: _queueIndex));
   }
 
@@ -85,8 +87,7 @@ class MusaicAudioHandler extends BaseAudioHandler with SeekHandler {
 
   @override
   Future<void> removeQueueItem(dynamic mediaItem) async {
-    final key =
-        mediaItem is String ? mediaItem : mediaItem?.toString();
+    final key = mediaItem is String ? mediaItem : mediaItem?.toString();
     if (key != null) await onRemoveQueueTrack?.call(key);
   }
 
@@ -138,6 +139,12 @@ MediaItem trackToMediaItem(Track track) {
     artist: track.artist,
     album: track.album,
     duration: track.duration,
-    artUri: track.coverUrl == null ? null : Uri.tryParse(track.coverUrl!),
+    artUri:
+        track.coverUrl == null
+            ? null
+            : Uri.tryParse(normalizeCoverUrl(track.coverUrl!)),
+    // 通知栏 / 锁屏拉取封面时的请求头（CDN 反盗链）
+    artHeaders:
+        track.coverUrl == null ? null : coverHttpHeaders(track.coverUrl!),
   );
 }

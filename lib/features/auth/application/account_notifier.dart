@@ -14,10 +14,7 @@ class AccountsState {
 
   SourceAccount of(String sourceId) =>
       bySource[sourceId] ??
-      SourceAccount(
-        sourceId: sourceId,
-        status: AccountStatus.loggedOut,
-      );
+      SourceAccount(sourceId: sourceId, status: AccountStatus.loggedOut);
 
   AccountsState withAccount(SourceAccount account) {
     final next = Map<String, SourceAccount>.of(bySource);
@@ -33,8 +30,7 @@ class AccountsState {
 class AccountNotifier extends Notifier<AccountsState> {
   @override
   AccountsState build() {
-    final restored =
-        ref.read(accountRepositoryProvider).restoreAll();
+    final restored = ref.read(accountRepositoryProvider).restoreAll();
     unawaited(Future.microtask(() => _verifyAll(restored)));
     return AccountsState(bySource: restored);
   }
@@ -57,8 +53,7 @@ class AccountNotifier extends Notifier<AccountsState> {
     String sourceId,
     Map<String, String> credentials,
   ) async {
-    final source =
-        ref.read(sourceRegistryProvider).resolve(sourceId);
+    final source = ref.read(sourceRegistryProvider).resolve(sourceId);
     if (source == null) {
       return const AuthFailure(
         reason: AuthFailureReason.unsupported,
@@ -76,8 +71,7 @@ class AccountNotifier extends Notifier<AccountsState> {
   }
 
   Future<void> logout(String sourceId) async {
-    final source =
-        ref.read(sourceRegistryProvider).resolve(sourceId);
+    final source = ref.read(sourceRegistryProvider).resolve(sourceId);
     try {
       await source?.logout();
     } catch (_) {
@@ -116,20 +110,24 @@ class AccountNotifier extends Notifier<AccountsState> {
   }
 
   Future<void> _verifyAll(Map<String, SourceAccount> restored) async {
+    // 错峰校验（迭代计划 §7.5 / B28）：登录渠道逐个错开 600ms，
+    // 避免启动期同时打满网络；每个校验自带 8s 超时。
+    var slot = 0;
     for (final entry in restored.entries) {
       if (entry.value.status != AccountStatus.loggedIn) continue;
-      unawaited(_verify(entry.key));
+      final delay = Duration(milliseconds: 600 * ++slot);
+      unawaited(Future.delayed(delay, () => _verify(entry.key)));
     }
   }
 
   /// 后台校验：无效则标记过期；网络异常保持乐观状态不打扰用户。
   Future<void> _verify(String sourceId) async {
-    final source =
-        ref.read(sourceRegistryProvider).resolve(sourceId);
+    final source = ref.read(sourceRegistryProvider).resolve(sourceId);
     if (source == null) return;
     try {
-      final valid =
-          await source.checkSession().timeout(const Duration(seconds: 8));
+      final valid = await source.checkSession().timeout(
+        const Duration(seconds: 8),
+      );
       if (!valid && state.of(sourceId).status == AccountStatus.loggedIn) {
         await _markExpired(sourceId);
       }
@@ -147,8 +145,9 @@ class AccountNotifier extends Notifier<AccountsState> {
   }
 }
 
-final accountsProvider =
-    NotifierProvider<AccountNotifier, AccountsState>(AccountNotifier.new);
+final accountsProvider = NotifierProvider<AccountNotifier, AccountsState>(
+  AccountNotifier.new,
+);
 
 /// 单个渠道账号状态的便捷选择器。
 final sourceAccountProvider = Provider.family<SourceAccount, String>(

@@ -11,6 +11,7 @@ import '../../core/model/track.dart';
 import '../../core/source/music_source.dart' show ResolvedStream;
 import '../../core/network/network_config.dart';
 import '../../core/theme/app_tokens.dart';
+import '../../app/lifecycle/app_lifecycle.dart';
 import 'audio_handler.dart';
 import 'data/resume_repository.dart';
 import 'domain/queue_logic.dart';
@@ -80,8 +81,7 @@ class PlayerState {
     Object? error = _unset,
   }) {
     return PlayerState(
-      queue:
-          identical(queue, _unset) ? this.queue : queue! as List<Track>,
+      queue: identical(queue, _unset) ? this.queue : queue! as List<Track>,
       currentIndex: currentIndex ?? this.currentIndex,
       playing: playing ?? this.playing,
       loading: loading ?? this.loading,
@@ -92,12 +92,14 @@ class PlayerState {
       mode: mode ?? this.mode,
       shuffleOn: shuffleOn ?? this.shuffleOn,
       speed: speed ?? this.speed,
-      sleepTimerEndsAt: identical(sleepTimerEndsAt, _unset)
-          ? this.sleepTimerEndsAt
-          : sleepTimerEndsAt as DateTime?,
-      sleepSongsRemaining: identical(sleepSongsRemaining, _unset)
-          ? this.sleepSongsRemaining
-          : sleepSongsRemaining as int?,
+      sleepTimerEndsAt:
+          identical(sleepTimerEndsAt, _unset)
+              ? this.sleepTimerEndsAt
+              : sleepTimerEndsAt as DateTime?,
+      sleepSongsRemaining:
+          identical(sleepSongsRemaining, _unset)
+              ? this.sleepSongsRemaining
+              : sleepSongsRemaining as int?,
       error: identical(error, _unset) ? this.error : error as String?,
     );
   }
@@ -114,10 +116,17 @@ class PlayerNotifier extends Notifier<PlayerState> {
   late MusaicAudioHandler _handler;
   StreamSubscription<ja.PlayerState>? _stateSub;
   Timer? _positionTimer;
+  Duration _positionTimerPeriod = AppTokens.positionThrottle;
   Timer? _sleepTimer;
   bool _autoAdvancing = false;
   int _loadSeq = 0; // 加载序号：过期请求的状态更新一律丢弃
   final Random _random = Random();
+
+  /// 应用不可见（息屏/后台/桌面最小化）时降级标志（功耗计划 PW-03）。
+  bool _uiDegraded = false;
+
+  /// 后台播放时的进度采样周期：仅维持断点快照（功耗计划 PW-03）。
+  static const Duration _backgroundPositionThrottle = Duration(seconds: 1);
 
   /// 断点续播仓库与写入节流时间戳。
   ResumeRepository? _resume;
@@ -140,24 +149,70 @@ class PlayerNotifier extends Notifier<PlayerState> {
     };
 
     _stateSub = _handler.player.playerStateStream.listen(_onPlayerStateChanged);
-    _positionTimer = Timer.periodic(
-      AppTokens.positionThrottle,
-      (_) {
-        // 仅在播放/加载中轮询进度；暂停时 just_audio 不再推进 position，
-        // 空转定时器白白耗电（seek 由 seekTo 直接更新状态）。
-        if (state.playing || state.loading) _tickPosition();
-      },
-    );
+
+    // 功耗计划 PW-03：应用不可见时进度采样降为 1Hz（仅供断点快照），
+    // 回前台恢复 100ms UI 预算并立即校正一次进度。
+    // 直连 [AppUiVisibility]：经 Provider.listen 会把生命周期变化
+    // 升级为 Notifier 重建，播放状态会被无谓重置。
+    _onVisibilityChanged = _handleVisibilityChanged;
+    AppUiVisibility.addListener(_onVisibilityChanged!);
 
     ref.onDispose(() {
       _disposed = true;
       _stateSub?.cancel();
       _positionTimer?.cancel();
+      _positionTimer = null;
       _sleepTimer?.cancel();
+      if (_onVisibilityChanged != null) {
+        AppUiVisibility.removeListener(_onVisibilityChanged!);
+        _onVisibilityChanged = null;
+      }
     });
 
     return const PlayerState();
   }
+
+  void Function(bool degraded)? _onVisibilityChanged;
+
+  void _handleVisibilityChanged(bool degraded) {
+    _uiDegraded = degraded;
+    if (!degraded) _tickPosition();
+    _syncPositionTimer();
+  }
+
+  /// 位置轮询定时器生命周期（功耗计划 PW-01 / B21）：
+  /// 仅在播放/加载期间存活，任何状态变更后即时同步；
+  /// 暂停与空闲状态零周期唤醒。
+  @override
+  set state(PlayerState value) {
+    super.state = value;
+    _syncPositionTimer();
+  }
+
+  void _syncPositionTimer() {
+    final shouldRun = state.playing || state.loading;
+    if (!shouldRun) {
+      _positionTimer?.cancel();
+      _positionTimer = null;
+      return;
+    }
+    final period =
+        _uiDegraded ? _backgroundPositionThrottle : AppTokens.positionThrottle;
+    if (_positionTimer != null && _positionTimerPeriod == period) return;
+    _positionTimer?.cancel();
+    _positionTimerPeriod = period;
+    _positionTimer = Timer.periodic(period, (_) => _tickPosition());
+  }
+
+  // ---------- 仅供测试观察（PW-04 空闲纪律断言） ----------
+
+  /// 位置轮询定时器是否存活。
+  @visibleForTesting
+  bool get debugIsPositionTimerActive => _positionTimer != null;
+
+  /// _tickPosition 实际执行次数（排除降级跳过）。
+  @visibleForTesting
+  int debugPositionTicks = 0;
 
   // ---------- 对外操作 ----------
 
@@ -166,8 +221,7 @@ class PlayerNotifier extends Notifier<PlayerState> {
     if (tracks.isEmpty) return;
     final index = startIndex.clamp(0, tracks.length - 1);
     if (tracks.length != state.queue.length || !_sameQueue(tracks)) {
-      _shuffleOrder =
-          QueueLogic.shuffledOrder(tracks.length, random: _random);
+      _shuffleOrder = QueueLogic.shuffledOrder(tracks.length, random: _random);
       _moveCurrentToShuffleHead(currentIndex: index);
     }
     state = state.copyWith(
@@ -183,8 +237,7 @@ class PlayerNotifier extends Notifier<PlayerState> {
   void addToQueue(Track track) {
     final queue = [...state.queue, track];
     if (state.shuffleOn) {
-      _shuffleOrder =
-          QueueLogic.shuffledOrder(queue.length, random: _random);
+      _shuffleOrder = QueueLogic.shuffledOrder(queue.length, random: _random);
       _moveCurrentToShuffleHead(currentIndex: state.currentIndex);
     }
     state = state.copyWith(queue: List<Track>.unmodifiable(queue));
@@ -316,6 +369,9 @@ class PlayerNotifier extends Notifier<PlayerState> {
       shuffleOrder: _shuffleOrder,
     );
     if (advance == null) {
+      // 队列尽头：必须暂停 just_audio，让系统会话/通知同步为暂停态。
+      // 否则通知栏停留在过期的 PLAYING，前台服务也一直挂着（EMU 实测）。
+      await _handler.pause();
       state = state.copyWith(
         playing: false,
         position: state.duration ?? state.position,
@@ -323,8 +379,10 @@ class PlayerNotifier extends Notifier<PlayerState> {
       return;
     }
     if (advance.wrapped && state.shuffleOn) {
-      _shuffleOrder =
-          QueueLogic.shuffledOrder(state.queue.length, random: _random);
+      _shuffleOrder = QueueLogic.shuffledOrder(
+        state.queue.length,
+        random: _random,
+      );
       _moveCurrentToShuffleHead(currentIndex: state.currentIndex);
     }
     await _loadAndPlay(advance.index);
@@ -345,8 +403,10 @@ class PlayerNotifier extends Notifier<PlayerState> {
   void toggleShuffle() {
     final shuffleOn = !state.shuffleOn;
     if (shuffleOn) {
-      _shuffleOrder =
-          QueueLogic.shuffledOrder(state.queue.length, random: _random);
+      _shuffleOrder = QueueLogic.shuffledOrder(
+        state.queue.length,
+        random: _random,
+      );
       _moveCurrentToShuffleHead(currentIndex: state.currentIndex);
     }
     state = state.copyWith(shuffleOn: shuffleOn);
@@ -385,10 +445,7 @@ class PlayerNotifier extends Notifier<PlayerState> {
   /// 取消全部定时策略。
   void clearSleep() {
     _sleepTimer?.cancel();
-    state = state.copyWith(
-      sleepTimerEndsAt: null,
-      sleepSongsRemaining: null,
-    );
+    state = state.copyWith(sleepTimerEndsAt: null, sleepSongsRemaining: null);
   }
 
   /// 倍速播放；平台不支持时置错误提示并保持原速。
@@ -452,18 +509,17 @@ class PlayerNotifier extends Notifier<PlayerState> {
       try {
         resolved = await source
             .resolveStream(track)
-            .timeout(
-                Duration(seconds: NetworkConfig.instance.seconds * 2),
-              );
+            .timeout(Duration(seconds: NetworkConfig.instance.seconds * 2));
       } on TimeoutException {
-        throw NetworkSourceException('解析播放地址超时',
-            sourceId: track.sourceId);
+        throw NetworkSourceException('解析播放地址超时', sourceId: track.sourceId);
       }
       if (seq != _loadSeq) return; // 已被更新的加载请求取代
-      debugPrint(
-        'MusaicPlayer stream: ${resolved.url} '
-        '(local=${resolved.isLocalFile})',
-      );
+      if (kDebugMode) {
+        debugPrint(
+          'MusaicPlayer stream: source=${track.sourceId} '
+          '(local=${resolved.isLocalFile})',
+        );
+      }
 
       final player = _handler.player;
       if (resolved.isLocalFile) {
@@ -500,7 +556,9 @@ class PlayerNotifier extends Notifier<PlayerState> {
     } catch (e, st) {
       if (seq != _loadSeq) return;
       debugPrint('MusaicPlayer 播放异常: $e');
-      debugPrint('MusaicPlayer 堆栈首行: ${st.toString().split('\n').take(4).join(' | ')}');
+      debugPrint(
+        'MusaicPlayer 堆栈首行: ${st.toString().split('\n').take(4).join(' | ')}',
+      );
       state = state.copyWith(
         loading: false,
         playing: false,
@@ -519,6 +577,9 @@ class PlayerNotifier extends Notifier<PlayerState> {
 
   /// 播放器状态回调：自然完成时自动切下一曲（含定时计数）。
   void _onPlayerStateChanged(ja.PlayerState playerState) {
+    // idle（未加载任何来源）事件不驱动 UI 状态：平台初始化期间的
+    // 合成事件会把用户可见状态误重置（功耗测试中暴露）。
+    if (playerState.processingState == ja.ProcessingState.idle) return;
     final completed =
         playerState.processingState == ja.ProcessingState.completed;
     if (completed && !_autoAdvancing && state.hasQueue) {
@@ -559,24 +620,27 @@ class PlayerNotifier extends Notifier<PlayerState> {
   void _syncSystemQueue() {
     _handler.publishQueue([
       for (final t in state.queue) trackToMediaItem(t),
-    ]);
+    ], queueIndex: state.currentIndex);
   }
 
   /// 队列结构变更后重建洗牌序列（当前曲保持头部）。
   void _reshuffleKeepingCurrent() {
-    _shuffleOrder =
-        QueueLogic.shuffledOrder(state.queue.length, random: _random);
+    _shuffleOrder = QueueLogic.shuffledOrder(
+      state.queue.length,
+      random: _random,
+    );
     _moveCurrentToShuffleHead(currentIndex: state.currentIndex);
   }
 
-  /// 进度节流刷新（100ms，性能预算 Master Plan §10.2）。
+  /// 进度节流刷新（可见 100ms / 不可见 1s，性能预算 §10.2 + 功耗 PW-03）。
   void _tickPosition() {
+    debugPositionTicks++;
     final player = _handler.player;
     final pos = player.position;
     final dur = player.duration;
     final buffered = player.bufferedPosition;
-    final durationUnchanged = (dur?.inMilliseconds ?? -1) ==
-        (state.duration?.inMilliseconds ?? -1);
+    final durationUnchanged =
+        (dur?.inMilliseconds ?? -1) == (state.duration?.inMilliseconds ?? -1);
     if (pos.inMilliseconds == state.position.inMilliseconds &&
         durationUnchanged &&
         buffered.inMilliseconds == state.buffered.inMilliseconds) {
@@ -598,7 +662,8 @@ class PlayerNotifier extends Notifier<PlayerState> {
     final current = state.current;
     if (resume == null || current == null) return;
     final now = DateTime.now();
-    if (!force && now.difference(_lastResumeWrite) < const Duration(seconds: 15)) {
+    if (!force &&
+        now.difference(_lastResumeWrite) < const Duration(seconds: 15)) {
       return;
     }
     _lastResumeWrite = now;
@@ -630,8 +695,9 @@ class PlayerNotifier extends Notifier<PlayerState> {
 }
 
 /// 全局播放状态 Provider。
-final playerNotifierProvider =
-    NotifierProvider<PlayerNotifier, PlayerState>(PlayerNotifier.new);
+final playerNotifierProvider = NotifierProvider<PlayerNotifier, PlayerState>(
+  PlayerNotifier.new,
+);
 
 /// 断点续播快照：活跃播放中恒为 null（首页卡数据源）。
 final resumePlaybackProvider = Provider<ResumePlayback?>((ref) {

@@ -10,7 +10,7 @@ import '../../features/player/data/resume_repository.dart';
 import '../../features/search/data/search_history_repository.dart';
 import '../../features/settings/data/local_music_settings_repository.dart';
 import '../../features/settings/settings_providers.dart'
-    show audioQualityProvider, AudioQualityBits;
+    show AudioQualityBits, effectiveAudioQualityProvider;
 import '../source/music_source.dart';
 import '../source/source_registry.dart';
 import '../../sources/kugou/kugou_source.dart';
@@ -36,7 +36,9 @@ final audioHandlerProvider = Provider<MusaicAudioHandler>((ref) {
   throw StateError('audioHandlerProvider 必须在启动时 override');
 });
 
-final searchHistoryRepositoryProvider = Provider<SearchHistoryRepository>((ref) {
+final searchHistoryRepositoryProvider = Provider<SearchHistoryRepository>((
+  ref,
+) {
   throw StateError('searchHistoryRepositoryProvider 必须在启动时 override');
 });
 
@@ -48,14 +50,14 @@ final resumeRepositoryProvider = Provider<ResumeRepository>((ref) {
 /// 凭据读取器工厂：渠道实现通过它读取自己的凭据，而不接触存储细节。
 typedef CredentialReaderFactory = CredentialReader Function(String sourceId);
 
-final credentialReaderFactoryProvider = Provider<CredentialReaderFactory>(
-  (ref) {
-    final repository = ref.watch(accountRepositoryProvider);
-    CredentialReader readerFor(String sourceId) =>
-        () => repository.readCredentials(sourceId);
-    return readerFor;
-  },
-);
+final credentialReaderFactoryProvider = Provider<CredentialReaderFactory>((
+  ref,
+) {
+  final repository = ref.watch(accountRepositoryProvider);
+  CredentialReader readerFor(String sourceId) =>
+      () => repository.readCredentials(sourceId);
+  return readerFor;
+});
 
 /// 会话过期回调工厂：把每个渠道网络层的被动捕获统一接到
 /// [AccountNotifier.markExpiredIfLoggedIn]。
@@ -66,8 +68,7 @@ void Function() expiredCallbackFor(Ref ref, String sourceId) =>
 
 /// 渠道注册中心（Master Plan §5.3：新渠道在此注册一行，UI 零改动）。
 final sourceRegistryProvider = Provider<SourceRegistry>((ref) {
-  final createCredentialReader =
-      ref.watch(credentialReaderFactoryProvider);
+  final createCredentialReader = ref.watch(credentialReaderFactoryProvider);
   final registry = SourceRegistry();
 
   registry.register(
@@ -104,9 +105,9 @@ final sourceRegistryProvider = Provider<SourceRegistry>((ref) {
     YouTubeMusicSource(
       credentialReader: createCredentialReader(YouTubeMusicSource.id),
       onSessionExpired: expiredCallbackFor(ref, YouTubeMusicSource.id),
-      // 音质档位 → googlevideo 码率上限（读取时求值，不触发 registry 重建）
-      maxBitrateProvider: () =>
-          ref.read(audioQualityProvider).ytmMaxBitrate,
+      // 音质档位（含蜂窝降档）→ googlevideo 码率上限（读取时求值，不触发 registry 重建）
+      maxBitrateProvider:
+          () => ref.read(effectiveAudioQualityProvider).ytmMaxBitrate,
     ),
   );
 
@@ -114,8 +115,8 @@ final sourceRegistryProvider = Provider<SourceRegistry>((ref) {
     NeteaseSource(
       credentialReader: createCredentialReader(NeteaseSource.id),
       onSessionExpired: expiredCallbackFor(ref, NeteaseSource.id),
-      // 音质档位 → weapi br 参数
-      bitrateProvider: () => ref.read(audioQualityProvider).neteaseBr,
+      // 音质档位（含蜂窝降档）→ weapi br 参数
+      bitrateProvider: () => ref.read(effectiveAudioQualityProvider).neteaseBr,
     ),
   );
 
