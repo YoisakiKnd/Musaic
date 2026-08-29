@@ -58,26 +58,26 @@ class NeteaseSource extends MusicSource
 
   @override
   AuthCapability get authCapability => const AuthCapability(
-        type: AuthType.cookie,
-        fields: [
-          CredentialField(
-            key: 'MUSIC_U',
-            label: 'MUSIC_U',
-            obscure: false,
-            placeholder: '粘贴 MUSIC_U 的纯值',
-            hint: '仅本机安全存储，永不明文上传',
-          ),
-        ],
-        guide: AuthGuide(
-          title: '如何获取 MUSIC_U',
-          steps: [
-            '在浏览器登录网页版网易云（music.163.com）。',
-            '按 F12 打开开发者工具，切换到「应用 → Cookie」。',
-            '找到名为 MUSIC_U 的条目并复制它的值（一长串字母数字）。',
-            '回到本页粘贴该纯值即可登录；不要带上「MUSIC_U=」前缀。',
-          ],
-        ),
-      );
+    type: AuthType.cookie,
+    fields: [
+      CredentialField(
+        key: 'MUSIC_U',
+        label: 'MUSIC_U',
+        obscure: false,
+        placeholder: '粘贴 MUSIC_U 的纯值',
+        hint: '仅本机安全存储，永不明文上传',
+      ),
+    ],
+    guide: AuthGuide(
+      title: '如何获取 MUSIC_U',
+      steps: [
+        '在浏览器登录网页版网易云（music.163.com）。',
+        '按 F12 打开开发者工具，切换到「应用 → Cookie」。',
+        '找到名为 MUSIC_U 的条目并复制它的值（一长串字母数字）。',
+        '回到本页粘贴该纯值即可登录；不要带上「MUSIC_U=」前缀。',
+      ],
+    ),
+  );
 
   late final Dio _dio = _buildDio();
 
@@ -134,10 +134,12 @@ class NeteaseSource extends MusicSource
       final result = _asMap(_decoded(response)['result']);
       final songs = result?['songs'] as List<dynamic>?;
       if (songs == null) return const <Track>[];
-      return songs
-          .map(_trackFromSearchSong)
-          .whereType<Track>()
-          .toList(growable: false);
+      final tracks =
+          songs.map(_trackFromSearchSong).whereType<Track>().toList();
+      // 搜索接口的 result.songs[].album.picUrl 实测恒为 null（EMU/线上验证）：
+      // 用 /api/song/detail 批量接口一次补全封面，失败静默不影响结果
+      await _fillCoversFromDetail(tracks);
+      return List.unmodifiable(tracks);
     } on DioException catch (e) {
       developer.log(
         'search 失败: type=${e.type} '
@@ -165,10 +167,11 @@ class NeteaseSource extends MusicSource
       final album = _asMap(detail['album']);
       return track.copyWith(
         album: (album?['name'] as String?) ?? track.album,
-        coverUrl: (album?['picUrl'] as String?) ?? track.coverUrl,
-        duration: detail['duration'] is int
-            ? Duration(milliseconds: detail['duration'] as int)
-            : track.duration,
+        coverUrl: (album?['picUrl'] as String?)?.toHttps() ?? track.coverUrl,
+        duration:
+            detail['duration'] is int
+                ? Duration(milliseconds: detail['duration'] as int)
+                : track.duration,
       );
     } catch (_) {
       return track; // 详情失败不影响播放
@@ -209,16 +212,16 @@ class NeteaseSource extends MusicSource
         );
       }
       // 强制 HTTPS（安全清单）
-      final secureUrl = url.startsWith('http://')
-          ? url.replaceFirst('http://', 'https://')
-          : url;
+      final secureUrl =
+          url.startsWith('http://')
+              ? url.replaceFirst('http://', 'https://')
+              : url;
       return ResolvedStream(
         url: secureUrl,
         headers: <String, String>{'Referer': 'https://music.163.com'},
       );
     } on DioException {
-      throw NetworkSourceException('获取播放地址失败：网络异常',
-          sourceId: sourceId);
+      throw NetworkSourceException('获取播放地址失败：网络异常', sourceId: sourceId);
     }
   }
 
@@ -279,23 +282,23 @@ class NeteaseSource extends MusicSource
   /// 扫码登录流水线（供通用扫码页消费，UI 不感知网易云细节）。
   @override
   List<QrLoginFlow> get qrLoginFlows => [
-        QrLoginFlow(
-          id: 'qr',
-          label: '二维码登录',
-          scanHint: '请使用网易云音乐 App 扫码',
-          interval: const Duration(seconds: 2),
-          create: () async {
-            final session = await createQrLogin();
-            return QrLoginSession(
-              pollKey: session.key,
-              contentUrl: session.qrContent,
-            );
-          },
-          poll: (session) => pollQrLogin(session.pollKey),
-          fallbackNickname: '网易云用户',
-          footerHint: '扫码登录后可播放 VIP 曲目并同步账号歌单',
-        ),
-      ];
+    QrLoginFlow(
+      id: 'qr',
+      label: '二维码登录',
+      scanHint: '请使用网易云音乐 App 扫码',
+      interval: const Duration(seconds: 2),
+      create: () async {
+        final session = await createQrLogin();
+        return QrLoginSession(
+          pollKey: session.key,
+          contentUrl: session.qrContent,
+        );
+      },
+      poll: (session) => pollQrLogin(session.pollKey),
+      fallbackNickname: '网易云用户',
+      footerHint: '扫码登录后可播放 VIP 曲目并同步账号歌单',
+    ),
+  ];
 
   /// 手机号密码登录表单声明（通用登录页消费）。
   @override
@@ -303,9 +306,14 @@ class NeteaseSource extends MusicSource
 
   @override
   List<CredentialField> get passwordFields => const [
-        CredentialField(key: 'phone', label: '手机号', numeric: true, placeholder: '11 位手机号'),
-        CredentialField(key: 'password', label: '密码', obscure: true),
-      ];
+    CredentialField(
+      key: 'phone',
+      label: '手机号',
+      numeric: true,
+      placeholder: '11 位手机号',
+    ),
+    CredentialField(key: 'password', label: '密码', obscure: true),
+  ];
 
   @override
   String get passwordSubmitHint => '密码经 weapi 标准加密后提交，本机不保存明文';
@@ -317,10 +325,11 @@ class NeteaseSource extends MusicSource
   /// 游客指纹 Cookie（对照 NeteaseCloudMusicApi request.js 校准）。
   /// weapi 登录类接口缺这些字段会返回空响应体。
   String _guestCookie() {
-    final hex = List.generate(
-      32,
-      (_) => '0123456789abcdef'[_random.nextInt(16)],
-    ).join();
+    final hex =
+        List.generate(
+          32,
+          (_) => '0123456789abcdef'[_random.nextInt(16)],
+        ).join();
     final ts = DateTime.now().millisecondsSinceEpoch;
     return <String, String>{
       '__remember_me': 'true',
@@ -328,13 +337,37 @@ class NeteaseSource extends MusicSource
       '_ntes_nuid': hex,
       '_ntes_nnid': '$hex,$ts',
       'WEVNSM': '1.0.0',
-      'osver':
-          'Microsoft-Windows-10-Professional-build-22631-64bit',
+      'osver': 'Microsoft-Windows-10-Professional-build-22631-64bit',
       'deviceId': hex,
       'os': 'pc',
       'channel': 'netease',
       'appver': '3.0.18.203152',
     }.entries.map((e) => '${e.key}=${e.value}').join('; ');
+  }
+
+  /// weapi POST；[skipAuth] 避免过期 MUSIC_U 盖掉游客 Cookie。
+  Future<Response<dynamic>> _weapiPost(
+    String path,
+    Map<String, dynamic> payload, {
+    bool skipAuth = false,
+    Map<String, String>? headers,
+  }) async {
+    final (:params, :encSecKey) = NeteaseCrypto.encryptPayload(payload);
+    var options = Options(
+      contentType: Headers.formUrlEncodedContentType,
+      responseType: ResponseType.plain,
+      headers: <String, String>{'Cookie': _guestCookie(), ...?headers},
+    );
+    if (skipAuth) {
+      options = SourceAuthInterceptor.skipAuth(options);
+    }
+    return _dio.post<dynamic>(
+      path,
+      options: options,
+      data:
+          'params=${Uri.encodeQueryComponent(params)}'
+          '&encSecKey=${Uri.encodeQueryComponent(encSecKey)}',
+    );
   }
 
   /// 手机号 + 密码登录（weapi 加密真实请求）。
@@ -353,24 +386,17 @@ class NeteaseSource extends MusicSource
       'rememberLogin': 'true',
       'csrf_token': '',
     };
-    final (:params, :encSecKey) = NeteaseCrypto.encryptPayload(payload);
     try {
-      final response = await _dio.post<dynamic>(
+      final response = await _weapiPost(
         '/weapi/w/login/cellphone',
-        options: Options(
-          contentType: Headers.formUrlEncodedContentType,
-          responseType: ResponseType.plain,
-          headers: <String, String>{
-            'Referer': 'https://music.163.com',
-            'User-Agent':
-                'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) '
-                'AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 '
-                'Safari/537.36 Edg/124.0.0.0',
-            'Cookie': _guestCookie(),
-          },
-        ),
-        data: 'params=${Uri.encodeQueryComponent(params)}'
-            '&encSecKey=${Uri.encodeQueryComponent(encSecKey)}',
+        payload,
+        skipAuth: true,
+        headers: <String, String>{
+          'User-Agent':
+              'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) '
+              'AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 '
+              'Safari/537.36 Edg/124.0.0.0',
+        },
       );
       final data = _asMap(_decoded(response));
       final code = data?['code'] as int? ?? -1;
@@ -382,7 +408,8 @@ class NeteaseSource extends MusicSource
           message: message.isEmpty ? '手机号或密码错误（code $code）' : message,
         );
       }
-      final musicU = _extractMusicU(response) ??
+      final musicU =
+          _extractMusicU(response) ??
           _musicUFromBodyCookie(data?['cookie'] as String?);
       if (musicU == null || musicU.isEmpty) {
         return const AuthFailure(
@@ -414,13 +441,10 @@ class NeteaseSource extends MusicSource
   Future<({String key, String qrContent})> createQrLogin() async {
     final Response<dynamic> response;
     try {
-      response = await _dio.post<dynamic>(
-        '/api/login/qrcode/unikey',
-        data: {'type': 1},
-        options: Options(
-          contentType: Headers.formUrlEncodedContentType,
-          responseType: ResponseType.plain,
-        ),
+      response = await _weapiPost(
+        '/weapi/login/qrcode/unikey',
+        <String, dynamic>{'type': 1},
+        skipAuth: true,
       );
     } on DioException catch (e) {
       developer.log(
@@ -441,10 +465,7 @@ class NeteaseSource extends MusicSource
     if (key.isEmpty) {
       throw NetworkSourceException('获取登录二维码失败', sourceId: sourceId);
     }
-    return (
-      key: key,
-      qrContent: 'https://music.163.com/login?codekey=$key',
-    );
+    return (key: key, qrContent: 'https://music.163.com/login?codekey=$key');
   }
 
   /// 轮询二维码状态。
@@ -452,10 +473,10 @@ class NeteaseSource extends MusicSource
   /// 803 授权成功：MUSIC_U 可能出现在 Set-Cookie 头或响应体 cookie 字段，
   /// 两路都取，避免只读 body 漏凭据导致「扫码后无动静」。
   Future<QrLoginPoll> pollQrLogin(String key) async {
-    final response = await _dio.get<dynamic>(
-      '/api/login/qrcode/client/login',
-      queryParameters: <String, dynamic>{'key': key, 'type': 1},
-      options: Options(responseType: ResponseType.plain),
+    final response = await _weapiPost(
+      '/weapi/login/qrcode/client/login',
+      <String, dynamic>{'key': key, 'type': 1},
+      skipAuth: true,
     );
     final data = _asMap(_decoded(response));
     final code = data?['code'] as int? ?? -1;
@@ -465,17 +486,15 @@ class NeteaseSource extends MusicSource
       case 802:
         return QrLoginPoll.scanned();
       case 803:
-        final musicU = _extractMusicU(response) ??
+        final musicU =
+            _extractMusicU(response) ??
             _musicUFromBodyCookie(data?['cookie'] as String? ?? '');
         developer.log(
           '二维码授权成功：musicU=${musicU == null ? '缺失' : '已取得(${musicU.length}字符)'}',
           name: 'MusaicNetease',
         );
         if (musicU == null || musicU.isEmpty) {
-          throw NetworkSourceException(
-            '授权成功但未取得登录凭据，请重试',
-            sourceId: sourceId,
-          );
+          throw NetworkSourceException('授权成功但未取得登录凭据，请重试', sourceId: sourceId);
         }
         String? nickname;
         try {
@@ -514,24 +533,20 @@ class NeteaseSource extends MusicSource
     // 会员状态：weapi openvip v2（vipType 10=VIP 20/40=黑胶 11=学生）
     String? vipLabel;
     try {
-      final (:params, :encSecKey) =
-          NeteaseCrypto.encryptPayload(<String, dynamic>{'csrf_token': ''});
-      final vipResp = await _dio.post<dynamic>(
+      final vipResp = await _weapiPost(
         '/weapi/openvip/v2/info',
-        options: Options(
-          contentType: Headers.formUrlEncodedContentType,
-          responseType: ResponseType.plain,
-          headers: <String, String>{'Cookie': cookieHeader},
-        ),
-        data: 'params=${Uri.encodeQueryComponent(params)}'
-            '&encSecKey=${Uri.encodeQueryComponent(encSecKey)}',
+        <String, dynamic>{'csrf_token': ''},
+        skipAuth: true,
+        headers: <String, String>{'Cookie': cookieHeader},
       );
       final vipData = _asMap(_decoded(vipResp))?['data'];
       final redPlus = _asMap(vipData)?['redplus'];
-      final vipType = _asMap(redPlus)?['vipType'] as int? ??
+      final vipType =
+          _asMap(redPlus)?['vipType'] as int? ??
           _asMap(vipData)?['vipType'] as int? ??
           0;
-      final level = _asMap(redPlus)?['redVipLevel'] as int? ??
+      final level =
+          _asMap(redPlus)?['redVipLevel'] as int? ??
           _asMap(vipData)?['redVipLevel'] as int?;
       vipLabel = switch (vipType) {
         10 => 'VIP${level != null ? ' Lv$level' : ''}',
@@ -549,10 +564,7 @@ class NeteaseSource extends MusicSource
   Future<SourceAccount?> refreshAccountInfo(SourceAccount account) async {
     final info = await fetchAccountSummary();
     if (info == null) return null;
-    return account.copyWith(
-      nickname: info.nickname,
-      vipLabel: info.vipLabel,
-    );
+    return account.copyWith(nickname: info.nickname, vipLabel: info.vipLabel);
   }
 
   // ---------- 账号歌单能力（RemotePlaylistCapable） ----------
@@ -565,8 +577,7 @@ class NeteaseSource extends MusicSource
       queryParameters: <String, dynamic>{'uid': userId, 'limit': 100},
       options: Options(responseType: ResponseType.plain),
     );
-    final list =
-        _asMap(_decoded(response))?['playlist'] as List<dynamic>?;
+    final list = _asMap(_decoded(response))?['playlist'] as List<dynamic>?;
     if (list == null) return const <RemotePlaylist>[];
     return list
         .map(_parseUserPlaylist)
@@ -585,7 +596,7 @@ class NeteaseSource extends MusicSource
       id: '$id',
       name: name,
       trackCount: p['trackCount'] as int? ?? 0,
-      coverUrl: p['coverImgUrl'] as String?,
+      coverUrl: (p['coverImgUrl'] as String?)?.toHttps(),
       playCount: p['playCount'] as int? ?? 0,
     );
   }
@@ -625,8 +636,7 @@ class NeteaseSource extends MusicSource
       title: name,
       artist: artists.isEmpty ? '未知歌手' : artists,
       album: album?['name'] as String?,
-      duration:
-          durationMs == null ? null : Duration(milliseconds: durationMs),
+      duration: durationMs == null ? null : Duration(milliseconds: durationMs),
       coverUrl: (album?['picUrl'] as String?)?.toHttps(),
       sourceData: <String, dynamic>{'neteaseId': songId},
     );
@@ -725,14 +735,14 @@ class NeteaseSource extends MusicSource
     return value;
   }
 
-  Future<Map<String, dynamic>?> _fetchProfile({
-    required String cookie,
-  }) async {
+  Future<Map<String, dynamic>?> _fetchProfile({required String cookie}) async {
     final response = await _dio.get<dynamic>(
       '/api/nuser/account/get',
-      options: Options(
-        headers: <String, String>{'Cookie': cookie},
-        responseType: ResponseType.plain,
+      options: SourceAuthInterceptor.skipAuth(
+        Options(
+          headers: <String, String>{'Cookie': cookie},
+          responseType: ResponseType.plain,
+        ),
       ),
     );
     final data = _asMap(_decoded(response));
@@ -754,6 +764,52 @@ class NeteaseSource extends MusicSource
       (track.sourceData?['neteaseId'] as num?)?.toInt() ??
       int.tryParse(track.id);
 
+  /// 用 /api/song/detail 批量补全搜索结果的封面与专辑名（一次请求）。
+  ///
+  /// 搜索接口（/api/search/get/web）返回的 album.picUrl 实测恒为 null；
+  /// 详情接口带完整 picUrl。任一失败静默返回，不影响搜索结果本身。
+  Future<void> _fillCoversFromDetail(List<Track> tracks) async {
+    if (tracks.isEmpty) return;
+    final ids = tracks
+        .map((t) => int.tryParse(t.id))
+        .whereType<int>()
+        .toList(growable: false);
+    if (ids.isEmpty) return;
+    try {
+      final response = await _dio.get<dynamic>(
+        '/api/song/detail',
+        queryParameters: <String, dynamic>{'ids': '[${ids.join(',')}]'},
+        options: Options(responseType: ResponseType.plain),
+      );
+      final songs = _decoded(response)?['songs'] as List<dynamic>?;
+      if (songs == null) return;
+      final picById = <int, String>{};
+      final albumById = <int, String>{};
+      for (final raw in songs) {
+        final song = _asMap(raw);
+        final id = song?['id'] as int?;
+        final album = _asMap(song?['album']);
+        final pic = (album?['picUrl'] as String?)?.toHttps();
+        if (song == null || id == null || pic == null) continue;
+        picById[id] = pic;
+        final albumName = album?['name'] as String?;
+        if (albumName != null) albumById[id] = albumName;
+      }
+      if (picById.isEmpty) return;
+      for (var i = 0; i < tracks.length; i++) {
+        final id = int.tryParse(tracks[i].id);
+        final pic = id == null ? null : picById[id];
+        if (pic == null) continue;
+        tracks[i] = tracks[i].copyWith(
+          coverUrl: pic,
+          album: tracks[i].album ?? (id == null ? null : albumById[id]),
+        );
+      }
+    } catch (_) {
+      // 封面补全失败不影响搜索结果
+    }
+  }
+
   Track? _trackFromSearchSong(dynamic raw) {
     final song = _asMap(raw);
     if (song == null) return null;
@@ -772,8 +828,7 @@ class NeteaseSource extends MusicSource
       title: name,
       artist: artists.isEmpty ? '未知歌手' : artists,
       album: album?['name'] as String?,
-      duration:
-          durationMs == null ? null : Duration(milliseconds: durationMs),
+      duration: durationMs == null ? null : Duration(milliseconds: durationMs),
       coverUrl: (album?['picUrl'] as String?)?.toHttps(),
       sourceData: <String, dynamic>{'neteaseId': songId},
     );

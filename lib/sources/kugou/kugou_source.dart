@@ -26,10 +26,7 @@ import '../../core/lyrics/lyric_bundle.dart';
 /// 登录能力：h5 二维码扫码（[QrLoginCapable]，web 签名 MD5 双盐），
 /// 成功后凭据为 token/userid，注入 Cookie 解锁完整试听。
 class KugouSource extends MusicSource implements QrLoginCapable {
-  KugouSource({
-    required super.credentialReader,
-    this.onSessionExpired,
-  });
+  KugouSource({required super.credentialReader, this.onSessionExpired});
 
   static const String id = 'kugou';
 
@@ -43,7 +40,7 @@ class KugouSource extends MusicSource implements QrLoginCapable {
   String get displayName => '酷狗音乐';
 
   @override
-  AuthCapability get authCapability => AuthCapability.noAuth;
+  AuthCapability get authCapability => AuthCapability.qr;
 
   final Random _random = Random.secure();
 
@@ -101,8 +98,9 @@ class KugouSource extends MusicSource implements QrLoginCapable {
           'platform': 'WebFilter',
         },
       );
-      final lists = _asMap(_asMap(_decoded(response))?['data'])?['lists']
-          as List<dynamic>?;
+      final lists =
+          _asMap(_asMap(_decoded(response))?['data'])?['lists']
+              as List<dynamic>?;
       if (lists == null) return const <Track>[];
       return lists
           .map(_trackFromSearchSong)
@@ -123,11 +121,20 @@ class KugouSource extends MusicSource implements QrLoginCapable {
       throw UnavailableStreamException('曲目缺少渠道标识', sourceId: sourceId);
     }
     try {
+      String token = '';
+      String userid = '';
+      try {
+        final credentials = await credentialReader();
+        token = credentials['token'] ?? '';
+        userid = credentials['userid'] ?? '';
+      } catch (_) {}
       final response = await _dio.get<dynamic>(
         'https://m.kugou.com/app/i/getSongInfo.php',
         queryParameters: <String, dynamic>{
           'cmd': 'playInfo',
           'hash': hash,
+          if (token.isNotEmpty) 'token': token,
+          if (userid.isNotEmpty) 'userid': userid,
         },
       );
       final data = _asMap(_decoded(response));
@@ -137,16 +144,13 @@ class KugouSource extends MusicSource implements QrLoginCapable {
         // 分级提示：未登录引导登录；已登录则说明版权限制
         final loggedIn = await _hasCredentials();
         throw UnavailableStreamException(
-          loggedIn
-              ? '受版权方限制，该曲目暂不可播放'
-              : '该曲目需要版权授权，请先在「设置 → 账号管理」登录酷狗后尝试播放',
+          loggedIn ? '受版权方限制，该曲目暂不可播放' : '该曲目需要版权授权，请先在「设置 → 账号管理」登录酷狗后尝试播放',
           sourceId: sourceId,
         );
       }
       return ResolvedStream(url: url, isLocalFile: false);
     } on DioException {
-      throw NetworkSourceException('获取播放地址失败：网络异常',
-          sourceId: sourceId);
+      throw NetworkSourceException('获取播放地址失败：网络异常', sourceId: sourceId);
     }
   }
 
@@ -187,10 +191,15 @@ class KugouSource extends MusicSource implements QrLoginCapable {
           'accesskey': accessKey,
         },
       );
-      final content =
-          _asMap(_decoded(download))?['content'] as String?;
+      final content = _asMap(_decoded(download))?['content'] as String?;
       if (content == null || content.trim().isEmpty) return null;
-      final bundle = LrcParser.parse(content);
+      var lrcText = content;
+      if (!content.trimLeft().startsWith('[')) {
+        try {
+          lrcText = utf8.decode(base64.decode(content.trim()));
+        } catch (_) {}
+      }
+      final bundle = LrcParser.parse(lrcText);
       return bundle.isEmpty ? null : bundle;
     } catch (_) {
       return null;
@@ -201,28 +210,28 @@ class KugouSource extends MusicSource implements QrLoginCapable {
 
   @override
   List<QrLoginFlow> get qrLoginFlows => [
-        QrLoginFlow(
-          id: 'qr',
-          label: '扫码登录',
-          scanHint: '请使用酷狗音乐 App 扫码',
-          create: () async {
-            final session = await createQrLogin();
-            return QrLoginSession(
-              pollKey: session.qrKey,
-              png: session.png,
-              contentUrl: session.qrContent,
-            );
-          },
-          poll: (session) => pollQrLogin(session.pollKey),
-          userIdCredentialKey: 'userid',
-          fallbackNickname: '酷狗用户',
-          footerHint: '扫码登录后可同步会员权益与账号歌单',
-        ),
-      ];
+    QrLoginFlow(
+      id: 'qr',
+      label: '扫码登录',
+      scanHint: '请使用酷狗音乐 App 扫码',
+      create: () async {
+        final session = await createQrLogin();
+        return QrLoginSession(
+          pollKey: session.qrKey,
+          png: session.png,
+          contentUrl: session.qrContent,
+        );
+      },
+      poll: (session) => pollQrLogin(session.pollKey),
+      userIdCredentialKey: 'userid',
+      fallbackNickname: '酷狗用户',
+      footerHint: '扫码登录后可同步会员权益与账号歌单',
+    ),
+  ];
 
   /// 创建二维码登录会话：返回扫码内容与二维码 PNG。
   Future<({String qrKey, Uint8List png, String qrContent})>
-      createQrLogin() async {
+  createQrLogin() async {
     final data = await _signedGet(
       'https://login-user.kugou.com/v2/qrcode',
       <String, String>{
@@ -292,10 +301,7 @@ class KugouSource extends MusicSource implements QrLoginCapable {
           throw NetworkSourceException('登录凭据缺失，请重试', sourceId: sourceId);
         }
         return QrLoginPoll.success(
-          credentials: <String, String>{
-            'token': token,
-            'userid': '$userid',
-          },
+          credentials: <String, String>{'token': token, 'userid': '$userid'},
           nickname: _asMap(payload)?['nickname'] as String?,
         );
       default:
@@ -357,10 +363,7 @@ class KugouSource extends MusicSource implements QrLoginCapable {
     try {
       response = await _dio.get<dynamic>(
         'https://userservice.kugou.com/rpc/v1/get_user_info',
-        queryParameters: <String, dynamic>{
-          'token': token,
-          'userid': userid,
-        },
+        queryParameters: <String, dynamic>{'token': token, 'userid': userid},
         options: Options(responseType: ResponseType.plain),
       );
     } catch (_) {
@@ -368,10 +371,9 @@ class KugouSource extends MusicSource implements QrLoginCapable {
       return null;
     }
     final data = _asMap(_decoded(response));
-    final userInfo =
-        _asMap(_asMap(_asMap(data)?['data'])?['userInfo']);
-    final nick = userInfo?['nickname'] as String? ??
-        userInfo?['username'] as String?;
+    final userInfo = _asMap(_asMap(_asMap(data)?['data'])?['userInfo']);
+    final nick =
+        userInfo?['nickname'] as String? ?? userInfo?['username'] as String?;
     return (nick == null || nick.isEmpty) ? null : nick;
   }
 
@@ -404,10 +406,8 @@ class KugouSource extends MusicSource implements QrLoginCapable {
 
   /// web 签名：MD5(salt + 排序后 k=v 拼接 + salt)。
   String _webSignature(Map<String, String> params) {
-    final joined = params.entries
-        .map((e) => '${e.key}=${e.value}')
-        .toList()
-      ..sort();
+    final joined =
+        params.entries.map((e) => '${e.key}=${e.value}').toList()..sort();
     final raw = '$_salt${joined.join()}$_salt';
     return crypto.md5.convert(utf8.encode(raw)).toString();
   }
@@ -433,27 +433,25 @@ class KugouSource extends MusicSource implements QrLoginCapable {
     if (song == null) return null;
     final hash = song['FileHash'] as String?;
     if (hash == null || hash.isEmpty) return null;
-    String cleanName(String rawName) => rawName
-        .replaceAll('<em>', '')
-        .replaceAll('</em>', '')
-        .trim();
+    String cleanName(String rawName) =>
+        rawName.replaceAll('<em>', '').replaceAll('</em>', '').trim();
     final name = cleanName(song['SongName'] as String? ?? '');
     if (name.isEmpty) return null;
     final singer = (song['SingerName'] as String? ?? '').trim();
     final image = song['Image'] as String?;
     final durationSec = song['Duration'] as int?;
     final albumId = song['AlbumID'] as String?;
-    final coverUrl = (image == null || image.isEmpty)
-        ? null
-        : image.replaceAll('{size}', '240').toHttps();
+    final coverUrl =
+        (image == null || image.isEmpty)
+            ? null
+            : image.replaceAll('{size}', '240').toHttps();
     return Track(
       id: hash,
       sourceId: sourceId,
       title: name,
       artist: singer.isEmpty ? '未知歌手' : singer,
       album: (song['AlbumName'] as String? ?? '').trim(),
-      duration:
-          durationSec == null ? null : Duration(seconds: durationSec),
+      duration: durationSec == null ? null : Duration(seconds: durationSec),
       coverUrl: coverUrl,
       sourceData: <String, dynamic>{
         'hash': hash,
