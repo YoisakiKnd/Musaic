@@ -4,8 +4,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/di/app_providers.dart';
-import '../../core/error/source_exception.dart';
-import '../../core/network/network_config.dart';
 import '../../core/model/track.dart';
 import '../../core/source/music_source.dart';
 import '../../core/theme/app_tokens.dart';
@@ -34,8 +32,8 @@ class _SearchPageState extends ConsumerState<SearchPage> {
   _AggregateMode _mode = _AggregateMode.grouped;
   _SortMode _sort = _SortMode.relevance;
   List<String> _history = const <String>[];
-  bool _searching = false;
   bool _uiReady = false;
+  int _searchGeneration = 0;
 
   @override
   void initState() {
@@ -45,7 +43,8 @@ class _SearchPageState extends ConsumerState<SearchPage> {
       final sources = ref.read(sourceRegistryProvider).all;
       setState(() {
         // 单一模式优先选渠道声明的默认渠道（preferredByDefault），无则取第一个
-        _singleTarget = sources
+        _singleTarget =
+            sources
                 .where((s) => s.preferredByDefault)
                 .map((s) => s.sourceId)
                 .firstOrNull ??
@@ -66,15 +65,16 @@ class _SearchPageState extends ConsumerState<SearchPage> {
 
   Future<void> _submit(String rawQuery) async {
     final query = rawQuery.trim();
-    if (query.isEmpty || _searching) return;
+    if (query.isEmpty) return;
+    final generation = ++_searchGeneration;
     final registry = ref.read(sourceRegistryProvider);
     final List<MusicSource> sources;
     if (_scope == _ScopeMode.single) {
       final single = registry.resolve(_singleTarget ?? '');
       if (single == null) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('请选择一个搜索渠道')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('请选择一个搜索渠道')));
         return;
       }
       sources = [single];
@@ -84,92 +84,45 @@ class _SearchPageState extends ConsumerState<SearchPage> {
           .toList(growable: false);
     }
     if (sources.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('请至少选择一个目标渠道')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('请至少选择一个目标渠道')));
       return;
     }
 
-    setState(() => _searching = true);
-
+    // 历史记录异步落库，不阻塞进结果页
     final historyRepo = ref.read(searchHistoryRepositoryProvider);
-    final nextHistory = await historyRepo.add(query);
-    if (mounted) setState(() => _history = nextHistory);
-
-    final results = <String, Object>{};
-    await Future.wait(
-      sources.map((source) async {
-        try {
-          // 渠道级超时：单个渠道 hang 不再拖垮整页结果
-          results[source.sourceId] = await source
-              .search(query, limit: 20)
-              .timeout(
-                  Duration(seconds: NetworkConfig.instance.seconds + 4),
-                );
-        } on SourceException catch (e) {
-          results[source.sourceId] = e.message;
-        } on TimeoutException {
-          results[source.sourceId] = '响应超时';
-        } catch (e) {
-          debugPrint('MusaicSearch[${source.sourceId}] 异常: $e');
-          results[source.sourceId] = '搜索失败';
+    unawaited(
+      historyRepo.add(query).then((nextHistory) {
+        if (mounted && generation == _searchGeneration) {
+          setState(() => _history = nextHistory);
         }
       }),
     );
 
+    // 立即进入结果页，由结果页按渠道流式接收结果（迭代计划 §10.6 / B19：
+    // 搜索首屏不再等待最慢渠道，先到先展示）
     if (!mounted) return;
-    setState(() => _searching = false);
-
-    // 合并成功渠道的结果（按排序规则）
-    final merged = <Track>[];
-    for (final source in sources) {
-      final value = results[source.sourceId];
-      if (value is List<Track>) merged.addAll(value);
-    }
-    final sorted = _applySort(merged);
-
-    if (sorted.isEmpty) {
-      final errors = results.values.whereType<String>().toList();
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(errors.isEmpty
-              ? '所有渠道均无结果'
-              : '搜索失败：${errors.join('；')}'),
-        ),
-      );
-      return;
-    }
-
     unawaited(
       Navigator.of(context, rootNavigator: true).push(
         MaterialPageRoute<void>(
-          builder: (_) => SearchResultsPage(
-            query: query,
-            results: results,
-            merged: sorted,
-          ),
+          builder:
+              (_) => SearchResultsPage(
+                query: query,
+                results: const <String, Object>{},
+                merged: const <Track>[],
+                pendingSources: sources
+                    .map((s) => s.sourceId)
+                    .toList(growable: false),
+                sortMode: switch (_sort) {
+                  _SortMode.relevance => SearchSortMode.relevance,
+                  _SortMode.durationAsc => SearchSortMode.durationAsc,
+                  _SortMode.durationDesc => SearchSortMode.durationDesc,
+                },
+              ),
         ),
       ),
     );
-  }
-
-  List<Track> _applySort(List<Track> input) {
-    final sorted = [...input];
-    switch (_sort) {
-      case _SortMode.relevance:
-        break;
-      case _SortMode.durationAsc:
-        sorted.sort(
-          (a, b) => (a.duration ?? const Duration(days: 1))
-              .compareTo(b.duration ?? const Duration(days: 1)),
-        );
-      case _SortMode.durationDesc:
-        sorted.sort(
-          (a, b) => (b.duration ?? Duration.zero)
-              .compareTo(a.duration ?? Duration.zero),
-        );
-    }
-    return sorted;
   }
 
   @override
@@ -187,13 +140,14 @@ class _SearchPageState extends ConsumerState<SearchPage> {
           onSubmitted: _submit,
           decoration: InputDecoration(
             hintText: '搜索 / 链接 / ID',
-            prefixIcon:
-                const Icon(Icons.search_rounded, color: AppTokens.accent),
+            prefixIcon: const Icon(
+              Icons.search_rounded,
+              color: AppTokens.accent,
+            ),
             filled: true,
-            fillColor: Theme.of(context)
-                .colorScheme
-                .surfaceContainerHighest
-                .withValues(alpha: 0.55),
+            fillColor: Theme.of(
+              context,
+            ).colorScheme.surfaceContainerHighest.withValues(alpha: 0.55),
             border: OutlineInputBorder(
               borderRadius: BorderRadius.circular(26),
               borderSide: BorderSide.none,
@@ -202,23 +156,11 @@ class _SearchPageState extends ConsumerState<SearchPage> {
           ),
         ),
         actions: [
-          if (_searching)
-            const Padding(
-              padding: EdgeInsets.only(right: 16),
-              child: Center(
-                child: SizedBox(
-                  width: 20,
-                  height: 20,
-                  child: CircularProgressIndicator(strokeWidth: 2),
-                ),
-              ),
-            )
-          else
-            IconButton(
-              icon: const Icon(Icons.arrow_upward_rounded),
-              tooltip: '搜索',
-              onPressed: () => _submit(_controller.text),
-            ),
+          IconButton(
+            icon: const Icon(Icons.arrow_upward_rounded),
+            tooltip: '搜索',
+            onPressed: () => _submit(_controller.text),
+          ),
         ],
       ),
       body: ListView(
@@ -248,9 +190,10 @@ class _SearchPageState extends ConsumerState<SearchPage> {
               children: [
                 Expanded(child: _sectionLabel('搜索渠道')),
                 TextButton(
-                  onPressed: () => setState(() {
-                    _targets = sources.map((s) => s.sourceId).toSet();
-                  }),
+                  onPressed:
+                      () => setState(() {
+                        _targets = sources.map((s) => s.sourceId).toSet();
+                      }),
                   child: const Text('全选'),
                 ),
                 TextButton(
@@ -319,8 +262,7 @@ class _SearchPageState extends ConsumerState<SearchPage> {
               children: [
                 for (final keyword in _history)
                   ActionChip(
-                    label:
-                        Text(keyword, style: const TextStyle(fontSize: 13)),
+                    label: Text(keyword, style: const TextStyle(fontSize: 13)),
                     onPressed: () {
                       _controller.text = keyword;
                       _submit(keyword);
@@ -335,11 +277,12 @@ class _SearchPageState extends ConsumerState<SearchPage> {
   }
 
   Widget _sectionLabel(String text) => Padding(
-        padding: const EdgeInsets.only(top: 14, bottom: 8),
-        child: Text(text,
-            style: const TextStyle(
-                fontSize: 15, fontWeight: FontWeight.w700)),
-      );
+    padding: const EdgeInsets.only(top: 14, bottom: 8),
+    child: Text(
+      text,
+      style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700),
+    ),
+  );
 
   /// 单一模式：渠道单选（点谁搜谁）。
   Widget _buildSingleTargetChips(List<MusicSource> sources) {
@@ -367,21 +310,22 @@ class _SearchPageState extends ConsumerState<SearchPage> {
           FilterChip(
             label: Text(source.displayName),
             selected: _targets.contains(source.sourceId),
-            onSelected: (selected) => setState(() {
-              selected
-                  ? _targets.add(source.sourceId)
-                  : _targets.remove(source.sourceId);
-            }),
+            onSelected:
+                (selected) => setState(() {
+                  selected
+                      ? _targets.add(source.sourceId)
+                      : _targets.remove(source.sourceId);
+                }),
             selectedColor: AppTokens.accent.withValues(alpha: 0.18),
             checkmarkColor: AppTokens.accent,
             labelStyle: TextStyle(
               fontSize: 13,
-              color: _targets.contains(source.sourceId)
-                  ? AppTokens.accent
-                  : null,
-              fontWeight: _targets.contains(source.sourceId)
-                  ? FontWeight.w600
-                  : FontWeight.w400,
+              color:
+                  _targets.contains(source.sourceId) ? AppTokens.accent : null,
+              fontWeight:
+                  _targets.contains(source.sourceId)
+                      ? FontWeight.w600
+                      : FontWeight.w400,
             ),
           ),
       ],
