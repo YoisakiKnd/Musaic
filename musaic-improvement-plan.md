@@ -166,3 +166,333 @@ M4「V2 演进」    按需
 - **性能**：startup trace <1s、tap→出声 p50 <800ms、500 收藏 + 1000 本地曲库滚动无 >32ms 掉帧、播放常驻 <150MB（DevTools memory，profile 构建）
 - **质量**：`flutter analyze` 零问题持续；测试数只增不减（当前 77）；架构守护测试通过；CI 全绿才可合入
 - **文档**：README 渠道能力矩阵与代码声明一致（每里程碑 diff 一遍，杜绝「宣称-实现」漂移——本次评审的最大教训）
+
+---
+
+## 9. 补充 Bug 与风险整改清单（H 系列）
+
+> 本节根据当前源码、平台配置、测试目录和 Git 工作树复核补充。H 系列优先级高于普通功能迭代；除注明「验证」外，均应落到代码、测试或发布配置。
+
+| ID | 优先级 | 问题与证据 | 具体修复方案 | 验收方式 |
+|---|---|---|---|---|
+| H1 | 🔴 | Android Release 使用 debug 签名，无法进行正式发布 | `android/app/build.gradle.kts` 增加独立 release signingConfig；通过 `key.properties` 或 CI Secret 注入，提交 `key.properties.example` | `flutter build apk --release` 成功；签名指纹与发布配置一致 |
+| H2 | 🔴 | 当前存在大量未提交/未跟踪核心文件，CI 已被移除 | 先建立干净提交，再恢复 `.github/workflows/ci.yml`；PR 执行 format/analyze/test，tag 执行平台构建 | 干净 clone 可完成依赖安装、测试和构建 |
+| H3 | 🔴 | 播放队列变更后系统媒体 `queueIndex` 可能过期 | `publishQueue` 显式接收当前索引；移动、删除、清空、随机重排全部同步队列指针 | Android 通知栏、车机/Android Auto 点选与队列索引一致 |
+| H4 | 🔴 | `player_notifier.dart` 打印完整播放 URL，可能包含签名和 Token | 生产环境关闭完整 URL 日志，只输出渠道、域名、是否本地和请求耗时；统一经脱敏 Logger | 日志扫描不得出现 `Cookie`、`Authorization`、`token`、完整播放 URL |
+| H5 | 🔴 | WebView 使用 `getAllCookies()`，可能把其他站点 Cookie 转发给 YouTube | 按 `webLoginCookieOrigins` 做 host 白名单；仅保留 YTM 认证所需 Cookie 字段 | 测试其他域名 Cookie 不会进入 YTM 登录请求 |
+| H6 | 🔴 | 酷狗播放地址未统一升级 HTTPS，Token/UserID 通过 GET 参数传递 | 播放 URL 只接受 HTTPS；凭据改为请求体、Cookie 或服务端允许的安全头；补 Apple 平台 ATS 验证 | iOS/macOS/Android 播放矩阵通过，抓包不出现明文凭据 |
+| H7 | 🔴 | YTM `checkSession` 忽略账号摘要结果，失效 Cookie 可能仍被判定有效 | 根据账号摘要和认证 Cookie 实际结果返回 false；网络异常继续抛出而不是标记过期 | 有效 Cookie、失效 Cookie、断网三种测试分别通过 |
+| H8 | 🔴 | Hive Box 打开失败会阻断整个应用启动 | 启动阶段按 Box 分组容错；损坏 Box 备份后重建；关键资料保留恢复提示 | 模拟损坏/只读/磁盘异常时首页仍可进入 |
+| H9 | 高 | MQTT 畸形包会结束扫码，QoS>0 未回 PUBACK，缓冲区可能无界增长 | 校验剩余长度上限；坏包丢弃并继续；实现 QoS ACK；限制缓冲区大小和连接超时 | 畸形包、超大长度、QoS>0、断线重连测试通过 |
+| H10 | 高 | PlayerPage 监听整个 `PlayerState`，进度变化会导致整页 10Hz 重建 | 拆成 currentTrack、position、playing、queue、sleep 等精确 `select`；背景/封面加 `RepaintBoundary` | Profile 模式下播放页非进度组件不随 100ms 进度重建 |
+| H11 | 高 | 本地扫描、ID3 解析和封面写盘运行在 UI isolate | isolate 扫描、4 路有界解析、进度回调、取消、增量索引 | 1000 首曲库扫描时主线程无明显卡顿 |
+| H12 | 高 | 搜索首屏仍等待所有渠道；分页失败被当作到底 | 每渠道独立状态，先到先显示，支持取消、重试、分页和失败重查 | 慢渠道不阻塞已完成渠道，失败渠道有重试入口 |
+| H13 | 高 | 保存全部搜索结果逐首读改写歌单，形成 O(n²) | 使用 `addManyToPlaylist` 一次读改写；批量入队一次性同步系统队列 | 500 首批量保存只发生一次歌单写入 |
+| H14 | 高 | 大型分组搜索结果使用非 builder 列表，一次性构建所有子项 | 使用 `CustomScrollView + SliverList`；分组头和列表项懒加载 | 1000 条结果打开时首帧和滚动稳定 |
+| H15 | 高 | 备份导入逐区写入，中途失败会留下半套数据 | 先完整解码、校验和构造临时数据，再批量提交；失败时恢复原状态 | 导入中途模拟异常，原资料库保持不变 |
+| H16 | 中 | 账号歌单、凭据存在读改写并发竞态 | 对同一渠道/歌单增加异步互斥锁或操作队列；写入后再刷新缓存 | 并发添加、删除、导入不会互相覆盖 |
+| H17 | 中 | 100ms 位置 Timer 在暂停和空闲时仍持续唤醒 | 播放时创建，暂停/停止/销毁时取消；定时器只服务必要组件 | 暂停播放后无持续位置轮询 |
+| H18 | 中 | `resume_repository` 空队列和非法 index 存在 `clamp(0, -1)` 隐患 | 恢复前校验队列和索引，非法快照直接丢弃并记录可诊断错误 | 空快照、损坏快照、越界索引不崩溃 |
+| H19 | 中 | UTF-16 代理对、超长 LRC、MQTT 缓冲存在边界性能问题 | 使用完整 Unicode 解码；LRC 用时间索引去重；MQTT 使用可消费缓冲区并限制包大小 | emoji 歌词、超长歌词和大包测试通过 |
+| H20 | 中 | `coverPaletteProvider` family 没有生命周期回收 | 评估 `autoDispose`、限制缓存数量；页面退出后释放封面取色结果 | 长时间切歌后内存不持续增长 |
+| H21 | 中 | 错误只输出 debug 日志，没有聚合诊断 | 增加脱敏环形日志；设置页支持导出；后续接入 Crashlytics/Sentry | 用户可导出不含凭据的诊断包 |
+| H22 | 中 | `patch_inappwebview_gradle.sh` 依赖 BSD sed 并修改本机 pub cache | 使用可复现 dependency override 或已修复 fork，删除本机补丁流程 | Linux/macOS 干净环境构建结果一致 |
+
+---
+
+## 10. 存储专项方案
+
+### 10.1 存储分层
+
+| 数据类型 | 存储位置 | 生命周期 | 优化策略 |
+|---|---|---|---|
+| Cookie/Token/认证信息 | Keychain/Keystore/DPAPI | 长期 | 单渠道 Blob、白名单、原子写入、禁止同步 |
+| 账号资料 | Hive `account_box` | 长期 | 版本化 JSON、损坏恢复、状态和凭据分离 |
+| 收藏 | Hive `favorites_box` | 长期 | `sourceId:trackId` 作为 Key，O(1) 查询，批量写入 |
+| 播放历史 | Hive `history_box` | 200 条 | 时间戳 Key、有序裁剪、删除旧重复记录 |
+| 歌单 | Hive 或后续 SQLite | 长期 | 短期批量写入，长期元数据和曲目拆表 |
+| 网络封面 | 缓存目录 | 30 天/容量上限 | LRU 淘汰，最大 100 MB |
+| 本地封面 | 临时/缓存目录 | 与文件关联 | 最大 256 MB，音乐文件删除时清理 |
+| 诊断日志 | 环形文件 | 7 天 | 最大 5 MB，自动脱敏和轮转 |
+| 用户备份 | 用户选择目录 | 用户控制 | 临时文件写入后原子 rename，不覆盖已有文件 |
+
+### 10.2 凭据存储改造
+
+将 `AccountRepository.saveCredentials` 改为以下流程：
+
+```text
+校验 sourceId 和字段白名单
+→ 清理空白及非法控制字符
+→ 生成完整版本化 Blob
+→ 一次写入 secure storage
+→ 更新内存缓存
+→ 延迟删除旧格式字段
+```
+
+推荐键名：
+
+```text
+musaic.credentials.netease
+musaic.credentials.qqmusic
+musaic.credentials.kugou
+musaic.credentials.ytm
+```
+
+不允许保存：
+
+- WebView 中与 YTM 无关的 Cookie。
+- 手机号密码明文。
+- 完整 HTTP 请求头。
+- 临时播放 URL。
+- 不必要的设备标识。
+
+### 10.3 Hive 和备份优化
+
+1. 历史记录不再每次全表 JSON 解码、排序和删除。
+2. 收藏、歌单导入统一使用 `putAll` 或批量方法。
+3. 歌单操作按歌单名称加锁，避免读改写覆盖。
+4. 大于 5 MB 的导出/导入任务放入 isolate。
+5. 导入前校验 schema、字段类型、数量和字符串长度。
+6. 导入使用临时快照，全部通过后才提交正式数据。
+7. 所有数据增加 schema 版本，未来支持迁移而不是直接清空。
+8. 启动遇到损坏 Box 时先备份原文件，再重建 Box 并显示恢复提示。
+
+### 10.4 缓存预算
+
+硬性预算建议如下：
+
+```text
+网络封面缓存：100 MB
+本地封面缓存：256 MB
+诊断日志：5 MB
+临时备份文件：50 MB
+单次 JSON 导入保护阈值：5 MB
+```
+
+新增 `StorageMaintenanceService`，在以下时机执行：
+
+- 应用启动后的空闲阶段。
+- 设备存储空间不足时。
+- 用户进入设置页时。
+- 用户点击「清理缓存」时。
+
+清理必须支持：
+
+```text
+只清理缓存，不清理用户资料
+清理本地封面
+清理网络封面
+清理诊断日志
+显示清理前后空间变化
+```
+
+---
+
+## 11. 内存专项方案
+
+### 11.1 图片内存控制
+
+统一限制 Flutter 图片缓存：
+
+```dart
+PaintingBinding.instance.imageCache.maximumSize = 300;
+PaintingBinding.instance.imageCache.maximumSizeBytes = 100 * 1024 * 1024;
+```
+
+建议解码尺寸：
+
+| 使用场景 | `memCacheWidth` |
+|---|---:|
+| 搜索列表 | 128 |
+| 最近播放卡片 | 264 |
+| MiniPlayer | 192 |
+| 播放器封面 | 512 |
+| 系统媒体封面 | 512 以下 |
+
+`Track` 只保存封面 URI，不保存原始图片字节；ID3 解析完成后立即释放临时 `Uint8List`。
+
+### 11.2 Provider 生命周期
+
+以下临时 Provider 应优先评估 `autoDispose`：
+
+- `coverPaletteProvider`。
+- `lyricsProvider`。
+- 单次搜索状态。
+- 远程歌单加载状态。
+- 二维码登录会话。
+
+歌词和取色缓存应设置数量或时间上限，不能因为 family 参数不同而无限累积。
+
+### 11.3 本地扫描内存模型
+
+本地扫描采用分批流水线：
+
+```text
+目录遍历
+→ 路径队列
+→ 4 路解析
+→ 每 50～100 首回传一次
+→ 释放标签和封面字节
+→ 更新索引
+```
+
+禁止：
+
+- 一次性把整个目录所有原始文件读入内存。
+- 在 `Track` 中保留封面原始字节。
+- 对同一个文件重复读取标签。
+- 无上限递归扫描用户误选的根目录。
+
+### 11.4 播放器内存模型
+
+将 `PlayerPage` 拆分为：
+
+```text
+PlayerBackground
+PlayerCover
+PlayerProgress
+PlayerControls
+LyricsPanel
+QueueButton
+SleepTimerButton
+```
+
+每个组件只监听自己需要的状态字段。背景、封面、歌词列表和控制区之间使用 `RepaintBoundary` 隔离，避免 position 更新引起整页重绘。
+
+目标：连续播放 30 分钟后内存不持续线性增长，普通播放场景保持在 150 MB 以内。
+
+---
+
+## 12. 软件流畅度专项方案
+
+### 12.1 启动阶段
+
+启动流程改为：
+
+```text
+绑定 Flutter
+→ 初始化最小依赖
+→ runApp 显示首页
+→ 首帧后打开普通 Hive Box
+→ 后台恢复账号状态
+→ 首次播放时初始化 AudioService
+→ 播放前或首次需要时请求通知权限
+```
+
+启动阶段禁止执行：
+
+- 通知权限弹窗。
+- 本地音乐扫描。
+- 所有渠道网络校验。
+- 大型备份解码。
+- 播放器背景取色。
+
+### 12.2 帧刷新策略
+
+| 模块 | 目标刷新频率 | 监听方式 |
+|---|---:|---|
+| 进度条 | 100 ms | 只监听 position/buffered/duration |
+| 当前词高亮 | 50～100 ms | 只刷新当前歌词行 |
+| MiniPlayer | 250 ms | 独立节流 |
+| 背景和封面 | 切歌时 | 只监听 current |
+| 播放按钮 | 状态改变时 | 只监听 playing |
+| 队列按钮 | 队列改变时 | 只监听 queue.length |
+| 历史/收藏列表 | 数据变化时 | Hive 事件流 |
+
+### 12.3 列表和搜索
+
+- 所有长列表使用 `ListView.builder` 或 `SliverList`。
+- 分组搜索结果改用 Sliver 懒加载。
+- 渠道搜索先到先显示，不等待最慢渠道。
+- 新搜索取消旧搜索请求。
+- QQ 封面详情请求最多 3～4 路并发。
+- 列表项不重复解码 JSON，不在 `build` 内发网络请求。
+
+### 12.4 动画和模糊
+
+- 每个页面最多一个实时 `BackdropFilter`。
+- 播放器背景使用低分辨率图或静态模糊图。
+- 低端设备关闭玻璃和复杂背景动画。
+- 尊重 `AccessibilityFeatures.disableAnimations`。
+- 背景、封面和歌词分别放在独立重绘边界内。
+- 页面销毁时取消所有动画、定时器和网络订阅。
+
+### 12.5 性能工具
+
+每次专项优化至少记录：
+
+```text
+flutter run --profile
+Flutter DevTools Timeline
+Flutter DevTools Memory
+FrameTiming
+冷启动 trace
+1000 首本地曲库扫描 trace
+播放 30 分钟内存曲线
+```
+
+---
+
+## 13. 重新调整后的里程碑
+
+### M0：保护和基线，1～2 天
+
+- 提交所有核心源码和测试。
+- 恢复最小 CI。
+- 修复 Release 签名配置。
+- 建立 analyze/test/build 基线。
+- 记录当前启动、播放、内存和缓存数据。
+
+### M1：安全与核心正确性，3～5 天
+
+- H3 队列索引。
+- H4 日志脱敏。
+- H5 Cookie 白名单。
+- H6 酷狗 HTTPS 和凭据传递。
+- H7 YTM 会话校验。
+- H8 Hive 启动容错。
+- 完成 PlayerNotifier、AudioHandler、Interceptor 测试。
+
+### M2：存储、内存和扫描，1 周
+
+- 凭据 Blob 和迁移。
+- 历史索引和歌单批量写入。
+- 备份临时提交和大文件 isolate。
+- 封面缓存上限和清理。
+- 本地扫描 isolate、进度、取消和增量索引。
+- 图片缓存和 Provider 生命周期治理。
+
+### M3：搜索和界面流畅度，1 周
+
+- 搜索流式返回、分页和重试。
+- PlayerPage 精确监听。
+- 歌词局部重绘。
+- Sliver 长列表。
+- 取消空闲位置 Timer。
+- 优化动画和模糊区域。
+
+### M4：产品功能扩展
+
+只有 M0～M3 的出口标准全部通过后，再继续：
+
+- YTM 字幕歌词。
+- QQ 账号歌单。
+- WebDAV 同步。
+- 诊断日志导出。
+- 自定义渠道插件。
+
+### 13.1 最终出口标准
+
+- `flutter analyze` 零问题。
+- `flutter test` 稳定通过。
+- CI 可在干净环境通过。
+- Android Release 使用正式签名。
+- 冷启动首帧小于 1 秒。
+- 点歌到出声 p50 小于 800ms。
+- 1000 首本地音乐扫描不阻塞 UI。
+- 500 首收藏和 1000 条搜索结果滚动无明显卡顿。
+- 播放 30 分钟内存不持续增长，目标小于 150 MB。
+- 网络封面缓存不超过 100 MB，本地封面缓存不超过 256 MB。
+- 日志不包含 Cookie、Token、Authorization 或完整播放 URL。
+- Android、iOS、macOS、Windows 至少完成核心播放回归。
+
