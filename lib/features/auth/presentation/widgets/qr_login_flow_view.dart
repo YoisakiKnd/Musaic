@@ -45,11 +45,15 @@ class _QrLoginFlowViewState extends ConsumerState<QrLoginFlowView> {
   @override
   void dispose() {
     _pollTimer?.cancel();
+    final session = _session;
+    if (session != null) widget.flow.cancel?.call(session);
     super.dispose();
   }
 
   Future<void> _start() async {
     _pollTimer?.cancel();
+    final previous = _session;
+    if (previous != null) widget.flow.cancel?.call(previous);
     setState(() {
       _status = '正在生成二维码…';
       _showRefresh = false;

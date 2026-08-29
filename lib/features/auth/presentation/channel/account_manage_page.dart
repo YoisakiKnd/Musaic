@@ -6,6 +6,7 @@ import '../../../../core/di/app_providers.dart';
 import '../../../../core/source/capabilities.dart';
 import '../../../../core/source/music_source.dart';
 import '../../../../core/theme/app_tokens.dart';
+import '../../../../core/utils/cover_network.dart';
 import '../../application/account_notifier.dart';
 import '../login_launcher.dart';
 
@@ -125,7 +126,10 @@ class _ChannelEntry extends ConsumerWidget {
           backgroundColor: AppTokens.accent.withValues(alpha: 0.15),
           backgroundImage: account.avatarUrl == null
               ? null
-              : NetworkImage(account.avatarUrl!),
+              : NetworkImage(
+                  account.avatarUrl!,
+                  headers: coverHttpHeaders(account.avatarUrl!),
+                ),
           child: account.avatarUrl == null
               ? Text(
                   source.displayName.characters.first,

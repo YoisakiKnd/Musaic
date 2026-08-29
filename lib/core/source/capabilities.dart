@@ -20,13 +20,9 @@ import '../model/track.dart';
 /// 一次扫码会话：轮询键 + 二维码的两种呈现形态（渠道提供 PNG，
 /// 或提供待本地渲染的内容 URL，二选一，PNG 优先展示）。
 class QrLoginSession {
-  const QrLoginSession({
-    required this.pollKey,
-    this.png,
-    this.contentUrl,
-  });
+  const QrLoginSession({required this.pollKey, this.png, this.contentUrl});
 
-  /// 轮询状态所需的会话标识（网易云 unikey / QQ qrsig / 微信 uuid / 酷狗 qrcode）。
+  /// 轮询状态所需的会话标识（网易云 unikey / QQ 音乐 qrcodeID / 酷狗 qrcode）。
   final String pollKey;
 
   /// 渠道服务端生成的二维码图片字节。
@@ -50,12 +46,13 @@ class QrLoginFlow {
     this.userIdCredentialKey,
     this.fallbackNickname = '用户',
     this.footerHint,
+    this.cancel,
   });
 
   /// 流水线标识（同一渠道多通道时区分，如 `qq` / `wechat`）。
   final String id;
 
-  /// Tab 标签（如「QQ 扫码」）。
+  /// Tab 标签（如「扫码登录」）。
   final String label;
 
   /// 二维码生成后的引导文案（如「请使用手机 QQ 扫一扫」）。
@@ -75,11 +72,14 @@ class QrLoginFlow {
 
   final Future<QrLoginSession> Function() create;
   final Future<QrLoginPoll> Function(QrLoginSession session) poll;
+
+  /// 会话结束（页面关闭 / 刷新二维码）时释放长连接。
+  final void Function(QrLoginSession session)? cancel;
 }
 
 /// 具备扫码登录能力的渠道（网易云 / QQ / 酷狗…）。
 abstract class QrLoginCapable {
-  /// 至少一条扫码流水线；多渠道通道（QQ/微信）返回多条。
+  /// 至少一条扫码流水线；同一渠道多通道时返回多条。
   List<QrLoginFlow> get qrLoginFlows;
 }
 
@@ -112,8 +112,11 @@ abstract class WebLoginCapable {
   String get webLoginActionLabel => '我已登录';
 
   /// 底部提示文案。
-  String get webLoginHint =>
-      '在上方页面完成登录后点击按钮；凭据仅保存在本机安全存储。';
+  String get webLoginHint => '在上方页面完成登录后点击按钮；凭据仅保存在本机安全存储。';
+
+  /// 提取 Cookie 时一并查询的源。Google SSO 会把 SAPISID 写到
+  /// accounts.google.com / .youtube.com，不能只读 [webLoginUrl]。
+  List<Uri> get webLoginCookieOrigins => <Uri>[webLoginUrl];
 
   Future<AuthResult> loginWithWebCookies(Map<String, String> cookies);
 }

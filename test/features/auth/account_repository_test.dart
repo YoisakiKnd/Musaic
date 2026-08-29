@@ -14,6 +14,9 @@ class _InMemorySecureStore implements SecureCredentialStore {
   int readAllCount = 0;
 
   @override
+  Future<String?> read(String key) async => store[key];
+
+  @override
   Future<Map<String, String>> readAll() async {
     readAllCount++;
     return Map.of(store);
@@ -26,12 +29,8 @@ class _InMemorySecureStore implements SecureCredentialStore {
   Future<void> delete(String key) async => store.remove(key);
 }
 
-Track _track(String id) => Track(
-      id: id,
-      sourceId: 'netease',
-      title: 't$id',
-      artist: 'a',
-    );
+Track _track(String id) =>
+    Track(id: id, sourceId: 'netease', title: 't$id', artist: 'a');
 
 void main() {
   late Directory tempDir;
@@ -53,16 +52,12 @@ void main() {
   setUp(() async {
     await box.clear();
     secure = _InMemorySecureStore();
-    repository = AccountRepository(
-      credentialStore: secure,
-      accountBox: box,
-    );
+    repository = AccountRepository(credentialStore: secure, accountBox: box);
   });
 
   group('凭据命名空间隔离（存储层单元测试要求）', () {
     test('不同渠道凭据互不可见', () async {
-      await repository.saveCredentials(
-          'netease', {'MUSIC_U': 'abc'});
+      await repository.saveCredentials('netease', {'MUSIC_U': 'abc'});
       await repository.saveCredentials('qqmusic', {'TOKEN': 'xyz'});
 
       final netease = await repository.readCredentials('netease');
@@ -74,8 +69,10 @@ void main() {
     });
 
     test('同渠道整体覆盖保存', () async {
-      await repository.saveCredentials(
-          'netease', {'MUSIC_U': 'old', 'EXTRA': 'e'});
+      await repository.saveCredentials('netease', {
+        'MUSIC_U': 'old',
+        'EXTRA': 'e',
+      });
       await repository.saveCredentials('netease', {'MUSIC_U': 'new'});
 
       final creds = await repository.readCredentials('netease');
@@ -107,6 +104,20 @@ void main() {
       expect((await repository.readCredentials('netease'))['MUSIC_U'], 'new');
       await repository.deleteCredentials('netease');
       expect(await repository.readCredentials('netease'), isEmpty);
+    });
+
+    test('凭据以单渠道 Blob 存储并过滤非法字段名', () async {
+      await repository.saveCredentials('netease', {
+        'MUSIC_U': 'abc',
+        'bad.key': 'should-not-be-stored',
+      });
+
+      expect(
+        secure.store.keys.where((key) => key == 'musaic.credentials.netease'),
+        hasLength(1),
+      );
+      expect(secure.store.keys.any((key) => key.contains('MUSIC_U')), isFalse);
+      expect(await repository.readCredentials('netease'), {'MUSIC_U': 'abc'});
     });
 
     test('clearAll 后缓存为空', () async {
@@ -141,15 +152,16 @@ void main() {
 
     // loggedOut → 不变
     await repository.markExpired('netease');
-    expect(repository.readAccount('netease').status,
-        AccountStatus.loggedOut);
+    expect(repository.readAccount('netease').status, AccountStatus.loggedOut);
 
     // loggedIn → expired，凭据保留
-    await repository.saveAccount(SourceAccount.markNow(
-      sourceId: 'netease',
-      status: AccountStatus.loggedIn,
-      nickname: 'n',
-    ));
+    await repository.saveAccount(
+      SourceAccount.markNow(
+        sourceId: 'netease',
+        status: AccountStatus.loggedIn,
+        nickname: 'n',
+      ),
+    );
     await repository.markExpired('netease');
 
     expect(repository.readAccount('netease').isExpired, isTrue);
@@ -159,31 +171,33 @@ void main() {
 
   test('logout 删除凭据并重置状态', () async {
     await repository.saveCredentials('netease', {'MUSIC_U': 'x'});
-    await repository.saveAccount(SourceAccount.markNow(
-      sourceId: 'netease',
-      status: AccountStatus.loggedIn,
-    ));
+    await repository.saveAccount(
+      SourceAccount.markNow(
+        sourceId: 'netease',
+        status: AccountStatus.loggedIn,
+      ),
+    );
 
     await repository.logout('netease');
 
     expect(await repository.readCredentials('netease'), isEmpty);
-    expect(repository.readAccount('netease').status,
-        AccountStatus.loggedOut);
+    expect(repository.readAccount('netease').status, AccountStatus.loggedOut);
   });
 
   test('clearAll 一键清除凭据与全部账号资料', () async {
     await repository.saveCredentials('netease', {'MUSIC_U': 'a'});
     await repository.saveCredentials('local', {'PATH_KEY': 'b'});
-    await repository.saveAccount(SourceAccount.markNow(
-      sourceId: 'netease',
-      status: AccountStatus.loggedIn,
-    ));
+    await repository.saveAccount(
+      SourceAccount.markNow(
+        sourceId: 'netease',
+        status: AccountStatus.loggedIn,
+      ),
+    );
 
     await repository.clearAll();
 
     expect(
-      secure.store.keys
-          .where((k) => k.startsWith('musaic.credential')),
+      secure.store.keys.where((k) => k.startsWith('musaic.credential')),
       isEmpty,
     );
     expect(repository.restoreAll(), isEmpty);

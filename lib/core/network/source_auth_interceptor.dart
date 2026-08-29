@@ -35,12 +35,20 @@ class SourceAuthInterceptor extends Interceptor {
   /// 响应体中代表「未登录/失效」的业务 code 集合。
   final Set<int> expiredBodyCodes;
 
+  /// 登录请求设此 extra，避免过期后残留凭据覆盖游客 Cookie / 污染扫码接口。
+  static const String skipAuthExtraKey = 'musaic.skipAuth';
+
+  static Options skipAuth([Options? options]) {
+    final extra = <String, dynamic>{...?options?.extra, skipAuthExtraKey: true};
+    return (options ?? Options()).copyWith(extra: extra);
+  }
+
   @override
   Future<void> onRequest(
     RequestOptions options,
     RequestInterceptorHandler handler,
   ) async {
-    if (injectCredentials) {
+    if (injectCredentials && options.extra[skipAuthExtraKey] != true) {
       try {
         final credentials = await readCredentials();
         if (credentials.isNotEmpty) {

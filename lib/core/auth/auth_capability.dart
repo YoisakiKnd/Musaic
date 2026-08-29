@@ -17,6 +17,9 @@ enum AuthType {
   /// Token 登录（V1.2 Subsonic 等预留）。
   token,
 
+  /// 扫码登录（QQ 音乐、酷狗等）。
+  qr,
+
   /// WebView 提取 Cookie 登录（YouTube Music）。
   webview,
 }
@@ -66,8 +69,10 @@ class AuthCapability {
   });
 
   /// 免登录能力的共享实例。
-  static const AuthCapability noAuth =
-      AuthCapability(type: AuthType.none);
+  static const AuthCapability noAuth = AuthCapability(type: AuthType.none);
+
+  /// 扫码登录能力的共享实例。
+  static const AuthCapability qr = AuthCapability(type: AuthType.qr);
 
   final AuthType type;
   final List<CredentialField> fields;

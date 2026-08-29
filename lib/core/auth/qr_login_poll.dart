@@ -1,6 +1,6 @@
 /// 二维码登录轮询状态（跨渠道共享领域模型）。
 ///
-/// 网易云（unikey）与 QQ（ptlogin qrsig）等扫码流程共用同一状态机：
+/// 网易云（unikey）与 QQ 音乐 App（qrcodeID）等扫码流程共用同一状态机：
 /// waiting → scanned → success，或 expired 后重新创建。
 library;
 
