@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <!--
+    Musaic 应用图标设计源：马赛克音符（音乐拼图）。
+    与 assets/branding/render_app_icon.py 的几何保持一致；
+    位图产物以脚本渲染为准，此文件为可读的设计定稿。
+    品牌色：accent #FF2D55 / 暗底 #151013（AppTokens）。
+  -->
+  <rect width="1024" height="1024" fill="#FF2D55"/>
+  <!-- 符干：右缘与符头右列对齐，底部压入右下瓷砖 -->
+  <rect x="728" y="206" width="60" height="490" rx="28" fill="#FFFFFF"/>
+  <!-- 符头：2×2 圆角马赛克瓷砖（棋盘） -->
+  <rect x="436" y="466" width="170" height="170" rx="44" fill="#FFFFFF"/>
+  <rect x="618" y="466" width="170" height="170" rx="44" fill="#FFC2CC"/>
+  <rect x="436" y="648" width="170" height="170" rx="44" fill="#FFC2CC"/>
+  <rect x="618" y="648" width="170" height="170" rx="44" fill="#FFFFFF"/>
+  <!-- 悬浮的深色拼图块：沿对角线脱离网格，呼应「拼图」 -->
+  <rect x="236" y="266" width="170" height="170" rx="44" fill="#151013"/>
+</svg>

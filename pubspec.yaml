@@ -44,12 +44,34 @@ dependencies:
   flutter_inappwebview: ^6.1.5    # YouTube Music WebView 登录（可读 httpOnly Cookie）
   meta: ^1.15.0
   path: ^1.9.0
+  connectivity_plus: ^7.3.1
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^4.0.0
   mocktail: ^1.0.4
+  flutter_launcher_icons: ^0.14.4
+  fake_async: ^1.3.3
 
 flutter:
   uses-material-design: true
+
+flutter_launcher_icons:
+  android: true
+  ios: true
+  image_path: assets/branding/app_icon.png
+  min_sdk_android: 21
+  adaptive_icon_background: "#FF2D55"
+  adaptive_icon_foreground: assets/branding/app_icon_fg.png
+  # 内容安全圈已在前景 PNG 内自管（缩放 0.75），不再二次内缩
+  adaptive_icon_foreground_inset: 0
+  adaptive_icon_monochrome: assets/branding/app_icon_mono.png
+  remove_alpha_ios: true
+  macos:
+    generate: true
+    image_path: assets/branding/app_icon.png
+  windows:
+    generate: true
+    image_path: assets/branding/app_icon.png
+    icon_size: 256
