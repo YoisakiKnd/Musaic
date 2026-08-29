@@ -9,6 +9,7 @@ import 'package:go_router/go_router.dart';
 import '../../../core/di/app_providers.dart';
 import '../../../core/model/track.dart';
 import '../../../core/theme/app_tokens.dart';
+import '../../../core/utils/cover_network.dart';
 import '../../library/data/library_providers.dart';
 import '../../player/player_notifier.dart';
 
@@ -45,19 +46,26 @@ class TrackTile extends ConsumerWidget {
     final isCurrent = current?.key == track.key;
     final scheme = Theme.of(context).colorScheme;
 
+    // 曲目行可能位于带背景色的容器内：显式透明 tileColor，
+    // 避免「ink splashes may be invisible」诊断在每次重建时刷屏
     return ListTile(
       dense: dense,
-      onTap: onTapOverride ?? () {
-        ref.read(playerNotifierProvider.notifier).playQueue(
-              queue,
-              startIndex:
-                  queue.indexWhere((t) => t.key == track.key).clamp(0,
-                      queue.isEmpty ? 0 : queue.length - 1),
-            );
-        context.push('/player');
-      },
-      onLongPress: onLongPress ??
-          (onRemove ?? () => _quickPlayNext(context, ref)),
+      tileColor: Colors.transparent,
+      onTap:
+          onTapOverride ??
+          () {
+            ref
+                .read(playerNotifierProvider.notifier)
+                .playQueue(
+                  queue,
+                  startIndex: queue
+                      .indexWhere((t) => t.key == track.key)
+                      .clamp(0, queue.isEmpty ? 0 : queue.length - 1),
+                );
+            context.push('/player');
+          },
+      onLongPress:
+          onLongPress ?? (onRemove ?? () => _quickPlayNext(context, ref)),
       leading: _TileCover(coverUrl: track.coverUrl),
       title: Text(
         track.title,
@@ -105,22 +113,26 @@ class TrackTile extends ConsumerWidget {
           if (onRemove != null)
             IconButton(
               visualDensity: VisualDensity.compact,
-              icon: Icon(Icons.remove_circle_outline_rounded,
-                  size: 20, color: scheme.onSurface.withValues(alpha: 0.5)),
+              icon: Icon(
+                Icons.remove_circle_outline_rounded,
+                size: 20,
+                color: scheme.onSurface.withValues(alpha: 0.5),
+              ),
               onPressed: onRemove,
             ),
           IconButton(
             visualDensity: VisualDensity.compact,
-            onPressed: () =>
-                ref.read(libraryRepositoryProvider).toggleFavorite(track),
+            onPressed:
+                () => ref.read(libraryRepositoryProvider).toggleFavorite(track),
             icon: Icon(
               isFavorite
                   ? Icons.favorite_rounded
                   : Icons.favorite_border_rounded,
               size: 20,
-              color: isFavorite
-                  ? AppTokens.accent
-                  : scheme.onSurface.withValues(alpha: 0.45),
+              color:
+                  isFavorite
+                      ? AppTokens.accent
+                      : scheme.onSurface.withValues(alpha: 0.45),
             ),
           ),
         ],
@@ -132,9 +144,9 @@ class TrackTile extends ConsumerWidget {
   Future<void> _quickPlayNext(BuildContext context, WidgetRef ref) async {
     unawaited(ref.read(playerNotifierProvider.notifier).insertNext(track));
     if (!context.mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('下一首播放「${track.title}」')),
-    );
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text('下一首播放「${track.title}」')));
   }
 }
 
@@ -166,6 +178,7 @@ class _TileCover extends StatelessWidget {
           width: 48,
           height: 48,
           fit: BoxFit.cover,
+          cacheWidth: 96, // 解码尺寸上限（迭代计划 §9.1）
           errorBuilder: (_, _, _) => fallback,
         ),
       );
@@ -173,16 +186,18 @@ class _TileCover extends StatelessWidget {
     return ClipRRect(
       borderRadius: BorderRadius.circular(12),
       child: CachedNetworkImage(
-        imageUrl: url,
+        imageUrl: normalizeCoverUrl(url),
+        httpHeaders: coverHttpHeaders(url),
         width: 48,
         height: 48,
         fit: BoxFit.cover,
         memCacheWidth: 96,
         fadeInDuration: AppTokens.durationFast,
-        placeholder: (_, _) => ColoredBox(
-          color: Theme.of(context).colorScheme.surfaceContainerHighest,
-          child: const SizedBox(width: 48, height: 48),
-        ),
+        placeholder:
+            (_, _) => ColoredBox(
+              color: Theme.of(context).colorScheme.surfaceContainerHighest,
+              child: const SizedBox(width: 48, height: 48),
+            ),
         errorWidget: (_, _, _) => fallback,
       ),
     );

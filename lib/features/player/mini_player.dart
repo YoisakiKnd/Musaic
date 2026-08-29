@@ -1,5 +1,4 @@
 import 'dart:io' show File;
-import 'dart:ui';
 
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
@@ -7,116 +6,140 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../core/theme/app_tokens.dart';
-import '../settings/settings_providers.dart';
+import '../../core/utils/cover_network.dart';
 import 'player_notifier.dart';
 
-/// 迷你播放条（Master Plan §8：常驻悬浮层，每屏唯一实时模糊区）。
-class MiniPlayer extends ConsumerWidget {
+/// 迷你播放条（传统 Material 风格）：全宽方角、贴于底部导航上方，
+/// 顶部 2px 进度线；点按或上滑打开播放页。
+class MiniPlayer extends ConsumerStatefulWidget {
   const MiniPlayer({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<MiniPlayer> createState() => _MiniPlayerState();
+}
+
+class _MiniPlayerState extends ConsumerState<MiniPlayer> {
+  double _dragDy = 0;
+
+  void _openPlayer(BuildContext context) => context.push('/player');
+
+  @override
+  Widget build(BuildContext context) {
     final track = ref.watch(playerNotifierProvider.select((s) => s.current));
     if (track == null) return const SizedBox.shrink();
 
-    final playing =
-        ref.watch(playerNotifierProvider.select((s) => s.playing));
-    final position =
-        ref.watch(playerNotifierProvider.select((s) => s.position));
-    final duration =
-        ref.watch(playerNotifierProvider.select((s) => s.duration));
+    final playing = ref.watch(playerNotifierProvider.select((s) => s.playing));
+    final position = ref.watch(
+      playerNotifierProvider.select((s) => s.position),
+    );
+    final duration = ref.watch(
+      playerNotifierProvider.select((s) => s.duration),
+    );
     final notifier = ref.read(playerNotifierProvider.notifier);
     final scheme = Theme.of(context).colorScheme;
 
-    final progress = (duration != null && duration.inMilliseconds > 0)
-        ? (position.inMilliseconds / duration.inMilliseconds)
-            .clamp(0.0, 1.0)
-        : 0.0;
+    final progress =
+        (duration != null && duration.inMilliseconds > 0)
+            ? (position.inMilliseconds / duration.inMilliseconds).clamp(
+              0.0,
+              1.0,
+            )
+            : 0.0;
 
-    final glass = ref.watch(enableGlassProvider);
-
-    Widget body = Container(
-      decoration: BoxDecoration(
-        color: scheme.surface.withValues(alpha: glass ? 0.72 : 0.97),
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(
-          color: scheme.outlineVariant.withValues(alpha: 0.5),
-        ),
-      ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          LinearProgressIndicator(
-            value: progress,
-            minHeight: 2,
-            backgroundColor: Colors.transparent,
-            valueColor:
-                const AlwaysStoppedAnimation<Color>(AppTokens.accent),
-          ),
-          ListTile(
-            dense: true,
-            onTap: () => context.push('/player'),
-            leading: _Cover(coverUrl: track.coverUrl),
-            title: Text(
-              track.title,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(fontWeight: FontWeight.w600),
+    return GestureDetector(
+      onTap: () => _openPlayer(context),
+      // 上滑手势：一甩或拖动超过 60px 即进入播放页
+      onVerticalDragUpdate: (details) {
+        if (details.delta.dy < 0) _dragDy += -details.delta.dy;
+      },
+      onVerticalDragEnd: (details) {
+        final flick = details.velocity.pixelsPerSecond.dy < -350;
+        final dragged = _dragDy > 60;
+        _dragDy = 0;
+        if (flick || dragged) _openPlayer(context);
+      },
+      child: Container(
+        color: scheme.surfaceContainerHighest,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            LinearProgressIndicator(
+              value: progress,
+              minHeight: 2,
+              backgroundColor: scheme.onSurface.withValues(alpha: 0.08),
+              valueColor: const AlwaysStoppedAnimation<Color>(AppTokens.accent),
             ),
-            subtitle: Text(
-              '${track.artist}${track.album == null ? '' : ' · ${track.album}'}',
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(
-                fontSize: 12,
-                color: scheme.onSurface.withValues(alpha: 0.6),
+            // 固定高度 + Row 精确居中（ListTile 的 leading/trailing 基线
+            // 在 64dp 行高里难以对齐，这里全部手工约束）
+            SizedBox(
+              height: 64,
+              child: Row(
+                children: [
+                  const SizedBox(width: 10),
+                  _Cover(coverUrl: track.coverUrl),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          track.title,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            fontWeight: FontWeight.w600,
+                            fontSize: 15,
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          '${track.artist}${track.album == null ? '' : ' · ${track.album}'}',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: scheme.onSurface.withValues(alpha: 0.6),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  IconButton(
+                    tooltip: playing ? '暂停' : '播放',
+                    constraints: const BoxConstraints(
+                      minWidth: 48,
+                      minHeight: 48,
+                    ),
+                    onPressed: notifier.toggle,
+                    icon: Icon(
+                      playing
+                          ? Icons.pause_circle_filled_rounded
+                          : Icons.play_circle_fill_rounded,
+                      size: 34,
+                    ),
+                  ),
+                  IconButton(
+                    tooltip: '下一首',
+                    constraints: const BoxConstraints(
+                      minWidth: 44,
+                      minHeight: 48,
+                    ),
+                    onPressed: notifier.next,
+                    icon: const Icon(Icons.skip_next_rounded),
+                  ),
+                  const SizedBox(width: 6),
+                ],
               ),
             ),
-            trailing: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                IconButton(
-                  onPressed: notifier.toggle,
-                  icon: Icon(
-                    playing
-                        ? Icons.pause_circle_filled_rounded
-                        : Icons.play_circle_fill_rounded,
-                    size: 34,
-                  ),
-                ),
-                IconButton(
-                  onPressed: notifier.next,
-                  icon: const Icon(Icons.skip_next_rounded),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-
-    if (glass) {
-      // 性能预算 §10.2：全屏唯一实时模糊区，外包 RepaintBoundary
-      body = ClipRRect(
-        borderRadius: BorderRadius.circular(20),
-        child: BackdropFilter(
-          filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
-          child: body,
+          ],
         ),
-      );
-    } else {
-      body = ClipRRect(borderRadius: BorderRadius.circular(20), child: body);
-    }
-
-    return RepaintBoundary(
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(12, 4, 12, 4),
-        child: body,
       ),
     );
   }
 }
 
+/// 迷你条封面：网络图 / 本地文件图 / 品牌渐变占位。
 class _Cover extends StatelessWidget {
   const _Cover({required this.coverUrl});
 
@@ -134,20 +157,22 @@ class _Cover extends StatelessWidget {
     if (url == null || url.isEmpty) return placeholder;
     if (url.startsWith('file://')) {
       return ClipRRect(
-        borderRadius: BorderRadius.circular(10),
+        borderRadius: BorderRadius.circular(6),
         child: Image.file(
           File(Uri.parse(url).toFilePath()),
           width: 44,
           height: 44,
           fit: BoxFit.cover,
+          cacheWidth: 88, // 解码尺寸上限（迭代计划 §9.1）
           errorBuilder: (_, _, _) => placeholder,
         ),
       );
     }
     return ClipRRect(
-      borderRadius: BorderRadius.circular(10),
+      borderRadius: BorderRadius.circular(6),
       child: CachedNetworkImage(
-        imageUrl: url,
+        imageUrl: normalizeCoverUrl(url),
+        httpHeaders: coverHttpHeaders(url),
         width: 44,
         height: 44,
         fit: BoxFit.cover,

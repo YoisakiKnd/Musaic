@@ -2,14 +2,11 @@ import 'dart:io' show File;
 import 'dart:ui' show Color;
 
 import 'package:flutter/painting.dart'
-    show
-        FileImage,
-        HSLColor,
-        ImageProvider,
-        NetworkImage,
-        ResizeImage;
+    show FileImage, HSLColor, ImageProvider, NetworkImage, ResizeImage;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:palette_generator/palette_generator.dart';
+
+import '../../core/utils/cover_network.dart';
 
 /// 封面取色结果（Master Plan §8：封面取色动态渐变背景）。
 ///
@@ -26,13 +23,18 @@ class CoverPalette {
 
 /// 按封面 URL 取色。family 天然缓存同封面的结果；
 /// 切歌时 PlayerPage 对背景做 450ms 渐变过渡。
-final coverPaletteProvider =
-    FutureProvider.family<CoverPalette, String>((ref, coverUrl) async {
+final coverPaletteProvider = FutureProvider.family<CoverPalette, String>((
+  ref,
+  coverUrl,
+) async {
   if (coverUrl.isEmpty) return const CoverPalette();
 
   final ImageProvider provider;
   if (coverUrl.startsWith('http://') || coverUrl.startsWith('https://')) {
-    provider = NetworkImage(coverUrl);
+    provider = NetworkImage(
+      normalizeCoverUrl(coverUrl),
+      headers: coverHttpHeaders(coverUrl),
+    );
   } else if (coverUrl.startsWith('file://')) {
     provider = FileImage(File(Uri.parse(coverUrl).toFilePath()));
   } else if (!coverUrl.contains('://')) {
@@ -47,11 +49,10 @@ final coverPaletteProvider =
       ResizeImage(provider, width: 64, height: 64),
       maximumColorCount: 12,
     );
-    Color? pick(PaletteColor? c) =>
-        c == null ? null : _readableOnDark(c.color);
-    final primary = pick(palette.dominantColor) ??
-        pick(palette.vibrantColor);
-    final secondary = pick(palette.mutedColor) ??
+    Color? pick(PaletteColor? c) => c == null ? null : _readableOnDark(c.color);
+    final primary = pick(palette.dominantColor) ?? pick(palette.vibrantColor);
+    final secondary =
+        pick(palette.mutedColor) ??
         (palette.colors.length > 1
             ? _readableOnDark(palette.colors.elementAt(1))
             : null);
@@ -70,10 +71,7 @@ Color _readableOnDark(Color color) {
   final lightness = hsl.lightness.clamp(0.42, 0.72);
   final saturation =
       hsl.saturation < 0.25 ? 0.35 : hsl.saturation.clamp(0.0, 0.85);
-  return hsl
-      .withLightness(lightness)
-      .withSaturation(saturation)
-      .toColor();
+  return hsl.withLightness(lightness).withSaturation(saturation).toColor();
 }
 
 /// 渐变端点兜底色（无封面时使用品牌红）。

@@ -1,4 +1,3 @@
-import 'dart:convert';
 import 'dart:io';
 
 import 'package:file_picker/file_picker.dart';
@@ -33,61 +32,61 @@ class SettingsPage extends ConsumerWidget {
             icon: Icons.library_music_rounded,
             title: '本地音乐',
             subtitle: '扫描文件夹管理 / 启动自动扫描',
-            onTap: () => Navigator.of(context).push(
-              MaterialPageRoute<void>(
-                builder: (_) => const LocalMusicSettingsPage(),
-              ),
-            ),
+            onTap:
+                () => Navigator.of(context).push(
+                  MaterialPageRoute<void>(
+                    builder: (_) => const LocalMusicSettingsPage(),
+                  ),
+                ),
           ),
           _EntryCard(
             icon: Icons.person_rounded,
             title: '账号管理',
             subtitle: '网易云 / QQ 音乐 / 酷狗 / YouTube Music 登录与状态',
-            onTap: () => Navigator.of(context).push(
-              MaterialPageRoute<void>(
-                builder: (_) => const AccountManagePage(),
-              ),
-            ),
+            onTap:
+                () => Navigator.of(context).push(
+                  MaterialPageRoute<void>(
+                    builder: (_) => const AccountManagePage(),
+                  ),
+                ),
           ),
           _EntryCard(
             icon: Icons.palette_rounded,
             title: '外观',
             subtitle: '主题模式（跟随系统 / 深色 / 浅色）',
-            onTap: () => Navigator.of(context).push(
-              MaterialPageRoute<void>(
-                builder: (_) => const AppearancePage(),
-              ),
-            ),
+            onTap:
+                () => Navigator.of(context).push(
+                  MaterialPageRoute<void>(
+                    builder: (_) => const AppearancePage(),
+                  ),
+                ),
           ),
           _EntryCard(
             icon: Icons.tune_rounded,
             title: '播放与性能',
             subtitle: '玻璃模糊效果等',
-            onTap: () => Navigator.of(context).push(
-              MaterialPageRoute<void>(
-                builder: (_) => const PlaybackPage(),
-              ),
-            ),
+            onTap:
+                () => Navigator.of(context).push(
+                  MaterialPageRoute<void>(builder: (_) => const PlaybackPage()),
+                ),
           ),
           _EntryCard(
             icon: Icons.storage_rounded,
             title: '数据管理',
             subtitle: '搜索历史 / 播放历史 / 喜欢的音乐',
-            onTap: () => Navigator.of(context).push(
-              MaterialPageRoute<void>(
-                builder: (_) => const DataPage(),
-              ),
-            ),
+            onTap:
+                () => Navigator.of(context).push(
+                  MaterialPageRoute<void>(builder: (_) => const DataPage()),
+                ),
           ),
           _EntryCard(
             icon: Icons.info_outline_rounded,
             title: '关于',
             subtitle: '版本与免责声明',
-            onTap: () => Navigator.of(context).push(
-              MaterialPageRoute<void>(
-                builder: (_) => const AboutPage(),
-              ),
-            ),
+            onTap:
+                () => Navigator.of(context).push(
+                  MaterialPageRoute<void>(builder: (_) => const AboutPage()),
+                ),
           ),
           const SizedBox(height: 24),
           Center(
@@ -121,9 +120,10 @@ class AppearancePage extends ConsumerWidget {
           Card(
             child: RadioGroup<ThemeMode>(
               groupValue: themeMode,
-              onChanged: (value) => ref
-                  .read(themeModeProvider.notifier)
-                  .set(value ?? ThemeMode.dark),
+              onChanged:
+                  (value) => ref
+                      .read(themeModeProvider.notifier)
+                      .set(value ?? ThemeMode.dark),
               child: Column(
                 children: [
                   for (final mode in ThemeMode.values)
@@ -149,8 +149,23 @@ class AppearancePage extends ConsumerWidget {
               ),
               value: ref.watch(oledBlackProvider),
               activeThumbColor: AppTokens.accent,
-              onChanged: (value) =>
-                  ref.read(oledBlackProvider.notifier).set(value),
+              onChanged:
+                  (value) => ref.read(oledBlackProvider.notifier).set(value),
+            ),
+          ),
+          const SizedBox(height: 12),
+          // ---------- 封面取色 ----------
+          Card(
+            child: SwitchListTile(
+              title: const Text('封面取色动态背景'),
+              subtitle: const Text(
+                '播放页背景随专辑封面取色；关闭统一使用品牌渐变',
+                style: TextStyle(fontSize: 12),
+              ),
+              value: ref.watch(dynamicCoverColorProvider),
+              onChanged:
+                  (value) =>
+                      ref.read(dynamicCoverColorProvider.notifier).set(value),
             ),
           ),
         ],
@@ -173,11 +188,13 @@ class PlaybackPage extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final glass = ref.watch(enableGlassProvider);
     final quality = ref.watch(audioQualityProvider);
+    final cellularDowngrade = ref.watch(cellularAutoDowngradeProvider);
     final offsetMs = ref.watch(lyricOffsetMsProvider);
     final rawTimeout = ref.watch(networkTimeoutSecondsProvider);
     // 恢复值可能不在档位上，归到最近档展示
-    final timeoutSeconds = const [8, 14, 20]
-        .reduce((a, b) => (a - rawTimeout).abs() <= (b - rawTimeout).abs() ? a : b);
+    final timeoutSeconds = const [8, 14, 20].reduce(
+      (a, b) => (a - rawTimeout).abs() <= (b - rawTimeout).abs() ? a : b,
+    );
     return Scaffold(
       appBar: AppBar(title: const Text('播放与性能')),
       body: ListView(
@@ -190,8 +207,10 @@ class PlaybackPage extends ConsumerWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text('播放音质',
-                      style: TextStyle(fontWeight: FontWeight.w600)),
+                  const Text(
+                    '播放音质',
+                    style: TextStyle(fontWeight: FontWeight.w600),
+                  ),
                   const SizedBox(height: 2),
                   const Text(
                     '下次播放生效；不支持档位切换的渠道按默认码率播放',
@@ -209,10 +228,29 @@ class PlaybackPage extends ConsumerWidget {
                           ),
                       ],
                       selected: {quality},
-                      onSelectionChanged: (selection) => ref
-                          .read(audioQualityProvider.notifier)
-                          .set(selection.first),
+                      onSelectionChanged:
+                          (selection) => ref
+                              .read(audioQualityProvider.notifier)
+                              .set(selection.first),
                     ),
+                  ),
+                  const SizedBox(height: 4),
+                  SwitchListTile(
+                    contentPadding: EdgeInsets.zero,
+                    dense: true,
+                    title: const Text(
+                      '蜂窝网络自动降质',
+                      style: TextStyle(fontSize: 14),
+                    ),
+                    subtitle: const Text(
+                      '移动流量下自动降低一档音质，减少流量与电量消耗',
+                      style: TextStyle(fontSize: 12),
+                    ),
+                    value: cellularDowngrade,
+                    onChanged:
+                        (value) => ref
+                            .read(cellularAutoDowngradeProvider.notifier)
+                            .set(value),
                   ),
                 ],
               ),
@@ -241,16 +279,18 @@ class PlaybackPage extends ConsumerWidget {
                     max: 10000,
                     divisions: 100,
                     label: '${(offsetMs / 1000).toStringAsFixed(1)}s',
-                    onChanged: (v) => ref
-                        .read(lyricOffsetMsProvider.notifier)
-                        .set(v.round()),
+                    onChanged:
+                        (v) => ref
+                            .read(lyricOffsetMsProvider.notifier)
+                            .set(v.round()),
                   ),
                   if (offsetMs != 0)
                     Align(
                       alignment: Alignment.centerRight,
                       child: TextButton(
-                        onPressed: () =>
-                            ref.read(lyricOffsetMsProvider.notifier).set(0),
+                        onPressed:
+                            () =>
+                                ref.read(lyricOffsetMsProvider.notifier).set(0),
                         child: const Text('归零'),
                       ),
                     ),
@@ -266,8 +306,10 @@ class PlaybackPage extends ConsumerWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text('网络请求超时',
-                      style: TextStyle(fontWeight: FontWeight.w600)),
+                  const Text(
+                    '网络请求超时',
+                    style: TextStyle(fontWeight: FontWeight.w600),
+                  ),
                   const SizedBox(height: 2),
                   const Text(
                     '受限网络 / 代理环境可调大档位，播放与搜索即时生效',
@@ -283,9 +325,10 @@ class PlaybackPage extends ConsumerWidget {
                         ButtonSegment(value: 20, label: Text('弱网 20s')),
                       ],
                       selected: {timeoutSeconds},
-                      onSelectionChanged: (selection) => ref
-                          .read(networkTimeoutSecondsProvider.notifier)
-                          .set(selection.first),
+                      onSelectionChanged:
+                          (selection) => ref
+                              .read(networkTimeoutSecondsProvider.notifier)
+                              .set(selection.first),
                     ),
                   ),
                 ],
@@ -296,15 +339,30 @@ class PlaybackPage extends ConsumerWidget {
           // ---------- 玻璃效果 ----------
           Card(
             child: SwitchListTile(
-              title: const Text('玻璃模糊效果'),
+              title: const Text('播放页封面模糊背景'),
               subtitle: const Text(
-                '迷你播放条实时模糊；低端设备关闭可提升流畅度',
+                '开启：封面低分辨率上采样模糊；关闭：取色渐变',
                 style: TextStyle(fontSize: 12),
               ),
               value: glass,
               activeThumbColor: AppTokens.accent,
-              onChanged: (value) =>
-                  ref.read(enableGlassProvider.notifier).set(value),
+              onChanged:
+                  (value) => ref.read(enableGlassProvider.notifier).set(value),
+            ),
+          ),
+          const SizedBox(height: 12),
+          // ---------- 启动自动恢复 ----------
+          Card(
+            child: SwitchListTile(
+              title: const Text('启动时自动恢复上次播放'),
+              subtitle: const Text(
+                '打开应用后自动续播断点曲目（默认关闭）',
+                style: TextStyle(fontSize: 12),
+              ),
+              value: ref.watch(autoResumeOnLaunchProvider),
+              onChanged:
+                  (value) =>
+                      ref.read(autoResumeOnLaunchProvider.notifier).set(value),
             ),
           ),
         ],
@@ -379,14 +437,14 @@ class DataPage extends ConsumerWidget {
                 ListTile(
                   leading: const Icon(Icons.image_outlined),
                   title: const Text('清除封面缓存'),
-                  subtitle: const Text('删除本地扫描生成的内嵌封面缓存',
-                      style: TextStyle(fontSize: 12)),
+                  subtitle: const Text(
+                    '删除本地扫描生成的内嵌封面缓存',
+                    style: TextStyle(fontSize: 12),
+                  ),
                   onTap: () async {
                     final cleared = await _clearCoverCache();
                     if (!context.mounted) return;
-                    _toast(context, cleared
-                        ? '封面缓存已清除'
-                        : '暂无需要清理的缓存');
+                    _toast(context, cleared ? '封面缓存已清除' : '暂无需要清理的缓存');
                   },
                 ),
                 const Divider(height: 1, indent: 56),
@@ -426,21 +484,21 @@ class DataPage extends ConsumerWidget {
         if (!context.mounted) return;
         final confirmed = await showDialog<bool>(
           context: context,
-          builder: (dialogContext) => AlertDialog(
-            title: const Text('导出资料库'),
-            content: const Text(
-                '未选择保存位置，将导出到应用文档目录（Musaic/ 下），继续？'),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.of(dialogContext).pop(false),
-                child: const Text('取消'),
+          builder:
+              (dialogContext) => AlertDialog(
+                title: const Text('导出资料库'),
+                content: const Text('未选择保存位置，将导出到应用文档目录（Musaic/ 下），继续？'),
+                actions: [
+                  TextButton(
+                    onPressed: () => Navigator.of(dialogContext).pop(false),
+                    child: const Text('取消'),
+                  ),
+                  FilledButton(
+                    onPressed: () => Navigator.of(dialogContext).pop(true),
+                    child: const Text('导出'),
+                  ),
+                ],
               ),
-              FilledButton(
-                onPressed: () => Navigator.of(dialogContext).pop(true),
-                child: const Text('导出'),
-              ),
-            ],
-          ),
         );
         if (confirmed != true) return;
         final documents = await getApplicationDocumentsDirectory();
@@ -468,13 +526,14 @@ class DataPage extends ConsumerWidget {
         type: FileType.custom,
         allowedExtensions: const ['json'],
       );
-      final fileBytes = picked?.files.single.bytes ??
+      final fileBytes =
+          picked?.files.single.bytes ??
           (picked?.files.single.path == null
               ? null
               : await File(picked!.files.single.path!).readAsBytes());
       if (fileBytes == null) return;
       final service = ref.read(backupServiceProvider);
-      final backup = service.decode(utf8.decode(fileBytes));
+      final backup = service.decodeBytes(fileBytes);
       final result = await service.importBackup(backup);
       if (!context.mounted) return;
       _toast(
@@ -522,7 +581,9 @@ class AboutPage extends StatelessWidget {
                   trailing: const Icon(Icons.copy_rounded, size: 18),
                   onTap: () {
                     Clipboard.setData(
-                      const ClipboardData(text: 'https://github.com/YoisakiKnd/Musaic'),
+                      const ClipboardData(
+                        text: 'https://github.com/YoisakiKnd/Musaic',
+                      ),
                     );
                     _toast(context, '仓库地址已复制');
                   },
@@ -588,8 +649,7 @@ class _EntryCard extends StatelessWidget {
           backgroundColor: AppTokens.accent.withValues(alpha: 0.15),
           child: Icon(icon, size: 22, color: AppTokens.accent),
         ),
-        title: Text(title,
-            style: const TextStyle(fontWeight: FontWeight.w600)),
+        title: Text(title, style: const TextStyle(fontWeight: FontWeight.w600)),
         subtitle: Text(
           subtitle,
           maxLines: 1,

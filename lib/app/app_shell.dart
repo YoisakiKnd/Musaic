@@ -4,15 +4,15 @@ import 'package:go_router/go_router.dart';
 
 import '../core/auth/source_account.dart';
 import '../core/di/app_providers.dart';
+import '../core/theme/app_tokens.dart';
 import '../features/auth/application/account_notifier.dart';
 import '../features/auth/presentation/login_launcher.dart';
-import '../core/theme/app_tokens.dart';
 import '../features/player/mini_player.dart';
 import '../features/player/player_notifier.dart';
 
 /// 自适应骨架（Master Plan §8）：
-/// - < 840dp：底部导航（MiniPlayer 悬浮其上）
-/// - >= 840dp：NavigationRail（MiniPlayer 底部居中悬浮）
+/// - < 840dp：全宽底部导航（MiniPlayer 贴于导航上方，方角）
+/// - >= 840dp：NavigationRail（MiniPlayer 作为底部全宽条）
 class AppShell extends ConsumerWidget {
   const AppShell({super.key, required this.navigationShell});
 
@@ -37,8 +37,7 @@ class AppShell extends ConsumerWidget {
         if (previous.bySource[entry.key]?.status != AccountStatus.loggedIn) {
           continue;
         }
-        final source =
-            ref.read(sourceRegistryProvider).resolve(entry.key);
+        final source = ref.read(sourceRegistryProvider).resolve(entry.key);
         if (source == null) continue;
         if (!context.mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
@@ -65,106 +64,78 @@ class AppShell extends ConsumerWidget {
   }
 
   Widget _buildCompact(BuildContext context, bool hasQueue) {
-    final scheme = Theme.of(context).colorScheme;
     return Scaffold(
-      extendBody: true,
-      body: Stack(
+      body: navigationShell,
+      // 传统 Material：标准全宽 NavigationBar（无圆角、无悬浮边框），
+      // MiniPlayer 作为方角条直接贴在导航上方
+      bottomNavigationBar: Column(
+        mainAxisSize: MainAxisSize.min,
         children: [
-          Positioned.fill(child: navigationShell),
-          if (hasQueue)
-            const Positioned(
-              left: 12,
-              right: 12,
-              bottom: 92,
-              child: MiniPlayer(),
-            ),
-        ],
-      ),
-      bottomNavigationBar: SafeArea(
-        minimum: const EdgeInsets.fromLTRB(16, 0, 16, 12),
-        child: Container(
-          decoration: BoxDecoration(
-            color: scheme.surface.withValues(alpha: 0.94),
-            borderRadius: BorderRadius.circular(32),
-            border: Border.all(
-              color: scheme.outlineVariant.withValues(alpha: 0.5),
-            ),
-          ),
-          child: NavigationBar(
-            height: 64,
-            backgroundColor: Colors.transparent,
-            shadowColor: Colors.transparent,
-            surfaceTintColor: Colors.transparent,
-            indicatorColor: AppTokens.accent.withValues(alpha: 0.15),
+          if (hasQueue) const MiniPlayer(),
+          NavigationBar(
+            height: 76,
             selectedIndex: navigationShell.currentIndex,
-            onDestinationSelected: (index) => navigationShell.goBranch(
-              index,
-              initialLocation: index == navigationShell.currentIndex,
-            ),
+            onDestinationSelected:
+                (index) => navigationShell.goBranch(
+                  index,
+                  initialLocation: index == navigationShell.currentIndex,
+                ),
             destinations: [
               for (final (icon, label) in _destinations)
                 NavigationDestination(
                   icon: Icon(icon),
-                  selectedIcon: Icon(icon, color: AppTokens.accent),
+                  selectedIcon: Icon(icon),
                   label: label,
                 ),
             ],
           ),
-        ),
+        ],
       ),
     );
   }
 
   Widget _buildWide(BuildContext context, bool hasQueue) {
     return Scaffold(
-      body: Stack(
+      body: Row(
         children: [
-          Row(
-            children: [
-              NavigationRail(
-                selectedIndex: navigationShell.currentIndex,
-                onDestinationSelected: (index) => navigationShell.goBranch(
+          NavigationRail(
+            selectedIndex: navigationShell.currentIndex,
+            onDestinationSelected:
+                (index) => navigationShell.goBranch(
                   index,
-                  initialLocation:
-                      index == navigationShell.currentIndex,
+                  initialLocation: index == navigationShell.currentIndex,
                 ),
-                labelType: NavigationRailLabelType.all,
-                leading: Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 18),
-                  child: Container(
-                    width: 36,
-                    height: 36,
-                    decoration: const BoxDecoration(
-                      gradient: AppTokens.brandGradient,
-                      shape: BoxShape.circle,
-                    ),
-                    child: const Icon(Icons.graphic_eq_rounded,
-                        size: 20, color: Colors.white),
-                  ),
+            labelType: NavigationRailLabelType.all,
+            leading: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 18),
+              child: Container(
+                width: 36,
+                height: 36,
+                decoration: const BoxDecoration(
+                  gradient: AppTokens.brandGradient,
+                  shape: BoxShape.circle,
                 ),
-                destinations: [
-                  for (final (icon, label) in _destinations)
-                    NavigationRailDestination(
-                      icon: Icon(icon),
-                      selectedIcon: Icon(icon, color: AppTokens.accent),
-                      label: Text(label),
-                    ),
-                ],
-              ),
-              const VerticalDivider(width: 1),
-              Expanded(child: navigationShell),
-            ],
-          ),
-          if (hasQueue)
-            Align(
-              alignment: Alignment.bottomCenter,
-              child: ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: 520),
-                child: const MiniPlayer(),
+                child: const Icon(
+                  Icons.graphic_eq_rounded,
+                  size: 20,
+                  color: Colors.white,
+                ),
               ),
             ),
+            destinations: [
+              for (final (icon, label) in _destinations)
+                NavigationRailDestination(
+                  icon: Icon(icon),
+                  selectedIcon: Icon(icon),
+                  label: Text(label),
+                ),
+            ],
+          ),
+          const VerticalDivider(width: 1),
+          Expanded(child: navigationShell),
         ],
       ),
+      bottomNavigationBar: hasQueue ? const MiniPlayer() : null,
     );
   }
 }
