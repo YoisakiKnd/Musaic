@@ -36,7 +36,7 @@ class NetworkConfig {
 /// 每次请求按 [NetworkConfig] 现值覆写超时。
 class TimeoutInterceptor extends Interceptor {
   TimeoutInterceptor({NetworkConfig? config})
-      : _config = config ?? NetworkConfig.instance;
+    : _config = config ?? NetworkConfig.instance;
 
   final NetworkConfig _config;
 

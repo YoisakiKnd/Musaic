@@ -15,18 +15,13 @@ enum LyricGranularity {
 
 /// 单个字/词的时间戳。
 class LyricWord {
-  const LyricWord({
-    required this.text,
-    required this.start,
-    this.end,
-  });
+  const LyricWord({required this.text, required this.start, this.end});
 
   final String text;
   final Duration start;
   final Duration? end;
 
-  Duration get resolvedEnd =>
-      end ?? start + const Duration(milliseconds: 400);
+  Duration get resolvedEnd => end ?? start + const Duration(milliseconds: 400);
 }
 
 /// 一行歌词。翻译字段可由解析器在构建后合并写入。
@@ -66,9 +61,7 @@ class LyricLine {
   }
 
   bool contains(Duration position) =>
-      !position.isNegative &&
-      position >= start &&
-      position < resolvedEnd;
+      !position.isNegative && position >= start && position < resolvedEnd;
 
   /// 当前行内的活跃字下标与其填充进度（0~1）。
   ///
@@ -85,8 +78,7 @@ class LyricLine {
       if (position < wordEnd) {
         final total = (wordEnd - word.start).inMilliseconds;
         final elapsed = (position - word.start).inMilliseconds;
-        final fraction =
-            total <= 0 ? 1.0 : (elapsed / total).clamp(0.0, 1.0);
+        final fraction = total <= 0 ? 1.0 : (elapsed / total).clamp(0.0, 1.0);
         return (index: i, fraction: fraction);
       }
     }
@@ -110,15 +102,15 @@ class LyricBundle {
   bool get isEmpty => lines.isEmpty;
 
   bool get supportsWordHighlight =>
-      granularity == LyricGranularity.word &&
-      lines.any((l) => l.hasWords);
+      granularity == LyricGranularity.word && lines.any((l) => l.hasWords);
 
   static List<LyricLine> _normalize(List<LyricLine> raw) {
     final sorted = [...raw]..sort((a, b) => a.start.compareTo(b.start));
     final result = <LyricLine>[];
     for (var i = 0; i < sorted.length; i++) {
       final line = sorted[i];
-      final inferredEnd = line.end ??
+      final inferredEnd =
+          line.end ??
           (i + 1 < sorted.length
               ? sorted[i + 1].start
               : line.start + const Duration(seconds: 5));
@@ -147,7 +139,8 @@ class LyricBundle {
         LyricWord(
           text: words[i].text,
           start: words[i].start,
-          end: words[i].end ??
+          end:
+              words[i].end ??
               (i + 1 < words.length ? words[i + 1].start : lineEnd),
         ),
     ];
@@ -182,8 +175,7 @@ class LyricBundle {
       Duration? bestDelta;
       for (final candidate in translations) {
         final delta = (candidate.start - line.start).abs();
-        if (delta <= tolerance &&
-            (bestDelta == null || delta < bestDelta)) {
+        if (delta <= tolerance && (bestDelta == null || delta < bestDelta)) {
           bestDelta = delta;
           best = candidate;
         }

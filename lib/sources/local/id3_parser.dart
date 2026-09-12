@@ -43,9 +43,8 @@ abstract final class Id3Parser {
     var offset = 0;
     // 扩展头
     if (flags & 0x40 != 0 && payload.length >= 4) {
-      final extSize = major >= 4
-          ? _synchsafeInt(payload, 0)
-          : _uint32(payload, 0) + 4;
+      final extSize =
+          major >= 4 ? _synchsafeInt(payload, 0) : _uint32(payload, 0) + 4;
       offset += extSize;
     }
 
@@ -60,22 +59,25 @@ abstract final class Id3Parser {
       var headerLen = 0;
       int frameSize;
       if (major <= 2) {
-        frameSize = (payload[offset + 3] << 16) |
+        frameSize =
+            (payload[offset + 3] << 16) |
             (payload[offset + 4] << 8) |
             payload[offset + 5];
         headerLen = 6;
       } else {
-        frameSize = major >= 4
-            ? _synchsafeInt(payload, offset + 4)
-            : _uint32(payload, offset + 4);
+        frameSize =
+            major >= 4
+                ? _synchsafeInt(payload, offset + 4)
+                : _uint32(payload, offset + 4);
         headerLen = 10;
       }
-      if (frameSize <= 0 ||
-          offset + headerLen + frameSize > payload.length) {
+      if (frameSize <= 0 || offset + headerLen + frameSize > payload.length) {
         break;
       }
-      final content =
-          payload.sublist(offset + headerLen, offset + headerLen + frameSize);
+      final content = payload.sublist(
+        offset + headerLen,
+        offset + headerLen + frameSize,
+      );
 
       switch (frameId) {
         case 'TIT2' || 'TT2':
@@ -92,7 +94,8 @@ abstract final class Id3Parser {
       offset += headerLen + frameSize;
     }
 
-    final hasAny = tags.title != null ||
+    final hasAny =
+        tags.title != null ||
         tags.artist != null ||
         tags.album != null ||
         tags.coverBytes != null ||
@@ -119,9 +122,10 @@ abstract final class Id3Parser {
     var offset = 4; // encoding + lang
     final termWidth = _terminatorWidth(encodingByte);
     while (offset + termWidth <= content.length) {
-      final isTerminator = termWidth == 1
-          ? content[offset] == 0
-          : content[offset] == 0 && content[offset + 1] == 0;
+      final isTerminator =
+          termWidth == 1
+              ? content[offset] == 0
+              : content[offset] == 0 && content[offset + 1] == 0;
       if (isTerminator) {
         offset += termWidth;
         break;
@@ -137,11 +141,7 @@ abstract final class Id3Parser {
 
   /// APIC(v2.3+): [encoding][mime\0][pictType][description\0][data]
   /// PIC(v2.2):    [encoding][format:3][pictType][description\0][data]
-  static void _decodePicture(
-    Uint8List content,
-    int major,
-    Id3Tags tags,
-  ) {
+  static void _decodePicture(Uint8List content, int major, Id3Tags tags) {
     try {
       if (content.isEmpty) return;
       final encodingByte = content[0];
@@ -162,9 +162,10 @@ abstract final class Id3Parser {
 
       final termWidth = _terminatorWidth(encodingByte);
       while (offset + termWidth <= content.length) {
-        final terminated = termWidth == 1
-            ? content[offset] == 0
-            : content[offset] == 0 && content[offset + 1] == 0;
+        final terminated =
+            termWidth == 1
+                ? content[offset] == 0
+                : content[offset] == 0 && content[offset + 1] == 0;
         if (terminated) {
           offset += termWidth;
           break;
@@ -204,27 +205,31 @@ abstract final class Id3Parser {
           if (bytes.length < 2) return '';
           final littleEndian = bytes[0] == 0xFF && bytes[1] == 0xFE;
           final body = bytes.sublist(2);
-          return _stop(
-            _utf16(body, littleEndian),
-            stopAtTerminator,
-            true,
-          );
+          return _stop(_utf16(body, littleEndian), stopAtTerminator, true);
         case 2: // UTF-16BE
           return _stop(_utf16(bytes, false), stopAtTerminator, true);
         case 3: // UTF-8
         default:
-          return _stop(utf8.decode(bytes, allowMalformed: true),
-              stopAtTerminator, false);
+          return _stop(
+            utf8.decode(bytes, allowMalformed: true),
+            stopAtTerminator,
+            false,
+          );
       }
     } catch (_) {
       return null;
     }
   }
 
+  /// 按文本帧声明截断到终止符。
+  ///
+  /// UTF-16 帧的终止符是**一个 U+0000 码元**（解码后表现为单个 `\u0000`），
+  /// 不是两个连续 NUL 字符——旧实现的 `'\u0000\u0000'` 宽终止符永不命中，
+  /// 尾随垃圾会一起进入标题/歌手（P2 回归）。
+  /// 因此统一按单个 NUL 截断（UTF-16 多字节序列不会产生裸 NUL）。
   static String _stop(String s, bool enabled, bool wide) {
     if (!enabled) return _stripNull(s);
-    final terminator = wide ? '\u0000\u0000' : '\u0000';
-    final index = s.indexOf(terminator);
+    final index = s.indexOf('\u0000');
     final value = index >= 0 ? s.substring(0, index) : s;
     return _stripNull(value);
   }
@@ -242,9 +247,10 @@ abstract final class Id3Parser {
   static String _utf16(Uint8List bytes, bool littleEndian) {
     final buffer = StringBuffer();
     for (var i = 0; i + 1 < bytes.length; i += 2) {
-      final unit = littleEndian
-          ? bytes[i] | (bytes[i + 1] << 8)
-          : (bytes[i] << 8) | bytes[i + 1];
+      final unit =
+          littleEndian
+              ? bytes[i] | (bytes[i + 1] << 8)
+              : (bytes[i] << 8) | bytes[i + 1];
       buffer.writeCharCode(unit);
     }
     return buffer.toString();
@@ -273,9 +279,7 @@ abstract final class Id3Parser {
     final out = BytesBuilder(copy: false);
     for (var i = 0; i < input.length; i++) {
       out.addByte(input[i]);
-      if (input[i] == 0xFF &&
-          i + 1 < input.length &&
-          input[i + 1] == 0x00) {
+      if (input[i] == 0xFF && i + 1 < input.length && input[i + 1] == 0x00) {
         i++;
       }
     }
@@ -288,15 +292,16 @@ abstract final class Id3Parser {
     if (bytes.length < 128) return null;
     final tail = bytes.sublist(bytes.length - 128);
     if (_ascii(tail, 0, 3) != 'TAG') return null;
-    String field(int start, int len) =>
-        _stripNull(latin1.decode(tail.sublist(start, start + len),
-            allowInvalid: true));
-    final tags = Id3Tags()
-      ..title = field(3, 30)
-      ..artist = field(33, 30)
-      ..album = field(63, 30);
-    final hasAny = (tags.title?.isNotEmpty ?? false) ||
-        (tags.artist?.isNotEmpty ?? false);
+    String field(int start, int len) => _stripNull(
+      latin1.decode(tail.sublist(start, start + len), allowInvalid: true),
+    );
+    final tags =
+        Id3Tags()
+          ..title = field(3, 30)
+          ..artist = field(33, 30)
+          ..album = field(63, 30);
+    final hasAny =
+        (tags.title?.isNotEmpty ?? false) || (tags.artist?.isNotEmpty ?? false);
     if (!hasAny) return null;
     if (tags.title?.isEmpty ?? false) tags.title = null;
     if (tags.artist?.isEmpty ?? false) tags.artist = null;

@@ -19,9 +19,11 @@ class _StubSource extends MusicSource {
   AuthCapability get authCapability => AuthCapability.noAuth;
 
   @override
-  Future<List<Track>> search(String query,
-          {int limit = 30, int offset = 0}) async =>
-      const [];
+  Future<List<Track>> search(
+    String query, {
+    int limit = 30,
+    int offset = 0,
+  }) async => const [];
   @override
   Future<Track> getTrackDetail(Track track) => throw UnimplementedError();
   @override
@@ -35,9 +37,10 @@ Future<Map<String, String>> _noopReader() async => <String, String>{};
 
 void main() {
   test('注册后可按 sourceId 解析', () {
-    final registry = SourceRegistry()
-      ..register(_StubSource('local', '本地文件'))
-      ..register(_StubSource('netease', '网易云音乐'));
+    final registry =
+        SourceRegistry()
+          ..register(_StubSource('local', '本地文件'))
+          ..register(_StubSource('netease', '网易云音乐'));
 
     expect(registry.length, 2);
     expect(registry.resolve('netease')?.displayName, '网易云音乐');
@@ -52,10 +55,11 @@ void main() {
   });
 
   test('重复注册覆盖且顺序保持首次插入位置', () {
-    final registry = SourceRegistry()
-      ..register(_StubSource('a', 'A1'))
-      ..register(_StubSource('b', 'B'))
-      ..register(_StubSource('a', 'A2'));
+    final registry =
+        SourceRegistry()
+          ..register(_StubSource('a', 'A1'))
+          ..register(_StubSource('b', 'B'))
+          ..register(_StubSource('a', 'A2'));
 
     expect(registry.resolve('a')?.displayName, 'A2');
     expect(registry.all.map((s) => s.sourceId), ['a', 'b']);

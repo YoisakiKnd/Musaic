@@ -23,10 +23,13 @@ class CoverPalette {
 
 /// 按封面 URL 取色。family 天然缓存同封面的结果；
 /// 切歌时 PlayerPage 对背景做 450ms 渐变过渡。
-final coverPaletteProvider = FutureProvider.family<CoverPalette, String>((
-  ref,
-  coverUrl,
-) async {
+///
+/// autoDispose 必需：否则每个播放过的封面都会把取色结果永久驻留
+/// （P1 内存回归）。
+final coverPaletteProvider = FutureProvider.autoDispose.family<
+  CoverPalette,
+  String
+>((ref, coverUrl) async {
   if (coverUrl.isEmpty) return const CoverPalette();
 
   final ImageProvider provider;

@@ -69,20 +69,15 @@ abstract final class AppTokens {
 
   static ThemeData get lightTheme => _buildTheme(Brightness.light);
 
-  static ThemeData _buildTheme(
-    Brightness brightness, {
-    bool oled = false,
-  }) {
+  static ThemeData _buildTheme(Brightness brightness, {bool oled = false}) {
     final isDark = brightness == Brightness.dark;
-    final background = isDark
-        ? (oled ? Colors.black : darkBackground)
-        : lightBackground;
-    final surface = isDark
-        ? (oled ? Colors.black : darkSurface)
-        : lightSurface;
-    final surfaceHigh = isDark
-        ? (oled ? const Color(0xFF141414) : darkSurfaceHigh)
-        : lightSurfaceHigh;
+    final background =
+        isDark ? (oled ? Colors.black : darkBackground) : lightBackground;
+    final surface = isDark ? (oled ? Colors.black : darkSurface) : lightSurface;
+    final surfaceHigh =
+        isDark
+            ? (oled ? const Color(0xFF141414) : darkSurfaceHigh)
+            : lightSurfaceHigh;
     final scheme = ColorScheme.fromSeed(
       seedColor: accent,
       brightness: brightness,
@@ -122,31 +117,32 @@ abstract final class AppTokens {
       ),
       navigationBarTheme: NavigationBarThemeData(
         height: 68,
-        backgroundColor:
-            (isDark ? darkBackground : lightBackground).withValues(alpha: 0.92),
+        backgroundColor: (isDark ? darkBackground : lightBackground).withValues(
+          alpha: 0.92,
+        ),
         indicatorColor: accent.withValues(alpha: 0.16),
         iconTheme: WidgetStateProperty.resolveWith(
           (states) => IconThemeData(
-            color: states.contains(WidgetState.selected)
-                ? accent
-                : textSecondary,
+            color:
+                states.contains(WidgetState.selected) ? accent : textSecondary,
           ),
         ),
         labelTextStyle: WidgetStateProperty.resolveWith(
           (states) => TextStyle(
             fontSize: 11,
-            fontWeight: states.contains(WidgetState.selected)
-                ? FontWeight.w600
-                : FontWeight.w400,
-            color: states.contains(WidgetState.selected)
-                ? accent
-                : textSecondary,
+            fontWeight:
+                states.contains(WidgetState.selected)
+                    ? FontWeight.w600
+                    : FontWeight.w400,
+            color:
+                states.contains(WidgetState.selected) ? accent : textSecondary,
           ),
         ),
       ),
       navigationRailTheme: NavigationRailThemeData(
-        backgroundColor:
-            (isDark ? darkBackground : lightBackground).withValues(alpha: 0.92),
+        backgroundColor: (isDark ? darkBackground : lightBackground).withValues(
+          alpha: 0.92,
+        ),
         indicatorColor: accent.withValues(alpha: 0.16),
         selectedIconTheme: const IconThemeData(color: accent),
         selectedLabelTextStyle: const TextStyle(

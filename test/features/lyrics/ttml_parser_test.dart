@@ -22,12 +22,13 @@ void main() {
     expect(bundle.granularity, LyricGranularity.word);
     expect(bundle.supportsWordHighlight, isTrue);
 
-    final withWords =
-        bundle.lines.where((l) => l.hasWords).toList();
+    final withWords = bundle.lines.where((l) => l.hasWords).toList();
     expect(withWords.length, 1);
     expect(withWords.single.words.map((w) => w.text), ['你', '好']);
-    expect(withWords.single.words.first.start,
-        const Duration(milliseconds: 5500));
+    expect(
+      withWords.single.words.first.start,
+      const Duration(milliseconds: 5500),
+    );
   });
 
   test('无 span 行保持整行文本并可降级为 line 粒度', () {
@@ -44,15 +45,22 @@ void main() {
 
   group('parseClock', () {
     test('hh:mm:ss.mmm', () {
-      expect(TtmlParser.parseClock('00:01:02.345'),
-          const Duration(hours: 0, minutes: 1, seconds: 2, milliseconds: 345));
+      expect(
+        TtmlParser.parseClock('00:01:02.345'),
+        const Duration(hours: 0, minutes: 1, seconds: 2, milliseconds: 345),
+      );
     });
     test('mm:ss.f 两位小数补齐毫秒', () {
-      expect(TtmlParser.parseClock('01:02.5'),
-          const Duration(minutes: 1, seconds: 2, milliseconds: 500));
+      expect(
+        TtmlParser.parseClock('01:02.5'),
+        const Duration(minutes: 1, seconds: 2, milliseconds: 500),
+      );
     });
     test('秒与毫秒单位', () {
-      expect(TtmlParser.parseClock('12.5s'), const Duration(seconds: 12, milliseconds: 500));
+      expect(
+        TtmlParser.parseClock('12.5s'),
+        const Duration(seconds: 12, milliseconds: 500),
+      );
       expect(TtmlParser.parseClock('900ms'), const Duration(milliseconds: 900));
     });
     test('非法输入返回 null', () {

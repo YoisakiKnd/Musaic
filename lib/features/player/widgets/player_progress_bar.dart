@@ -42,26 +42,30 @@ class _PlayerProgressBarState extends State<PlayerProgressBar> {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final accent = widget.color;
-    final value = _dragging
-        ? _dragValue
-        : (widget.position.inMilliseconds / _maxMs).clamp(0.0, 1.0);
-    final buffered =
-        ((widget.buffered?.inMilliseconds ?? 0) / _maxMs)
-            .clamp(0.0, 1.0);
+    final value =
+        _dragging
+            ? _dragValue
+            : (widget.position.inMilliseconds / _maxMs).clamp(0.0, 1.0);
+    final buffered = ((widget.buffered?.inMilliseconds ?? 0) / _maxMs).clamp(
+      0.0,
+      1.0,
+    );
 
     return Column(
       children: [
         GestureDetector(
           behavior: HitTestBehavior.opaque,
-          onHorizontalDragStart: (_) => setState(() {
-            _dragging = true;
-            _dragValue = value;
-          }),
+          onHorizontalDragStart:
+              (_) => setState(() {
+                _dragging = true;
+                _dragValue = value;
+              }),
           onHorizontalDragUpdate: (details) {
             final box = context.findRenderObject()! as RenderBox;
-            final fraction =
-                (details.localPosition.dx / box.size.width)
-                    .clamp(0.0, 1.0);
+            final fraction = (details.localPosition.dx / box.size.width).clamp(
+              0.0,
+              1.0,
+            );
             setState(() => _dragValue = fraction);
           },
           onHorizontalDragEnd: (_) async {
@@ -74,13 +78,11 @@ class _PlayerProgressBarState extends State<PlayerProgressBar> {
             widget.onSeek(target); // 拖动结束统一 seek，避免频繁打断解码
           },
           child: Padding(
-            padding:
-                const EdgeInsets.symmetric(vertical: 12, horizontal: 4),
+            padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 4),
             child: LayoutBuilder(
               builder: (context, constraints) {
                 const trackHeight = 3.5;
-                final activeHeight =
-                    _dragging ? trackHeight * 2 : trackHeight;
+                final activeHeight = _dragging ? trackHeight * 2 : trackHeight;
                 return Center(
                   child: Stack(
                     alignment: Alignment.centerLeft,
@@ -89,8 +91,7 @@ class _PlayerProgressBarState extends State<PlayerProgressBar> {
                         height: activeHeight,
                         width: constraints.maxWidth,
                         decoration: BoxDecoration(
-                          color:
-                              scheme.outlineVariant.withValues(alpha: 0.45),
+                          color: scheme.outlineVariant.withValues(alpha: 0.45),
                           borderRadius: BorderRadius.circular(activeHeight),
                         ),
                       ),
@@ -100,8 +101,7 @@ class _PlayerProgressBarState extends State<PlayerProgressBar> {
                           height: activeHeight,
                           decoration: BoxDecoration(
                             color: scheme.outlineVariant,
-                            borderRadius:
-                                BorderRadius.circular(activeHeight),
+                            borderRadius: BorderRadius.circular(activeHeight),
                           ),
                         ),
                       ),
@@ -110,20 +110,19 @@ class _PlayerProgressBarState extends State<PlayerProgressBar> {
                         child: Container(
                           height: activeHeight,
                           decoration: BoxDecoration(
-                            gradient: accent == null
-                                ? AppTokens.brandGradient
-                                : null,
+                            gradient:
+                                accent == null ? AppTokens.brandGradient : null,
                             color: accent,
-                            borderRadius:
-                                BorderRadius.circular(activeHeight),
+                            borderRadius: BorderRadius.circular(activeHeight),
                           ),
                         ),
                       ),
                       if (_dragging)
                         Positioned(
-                          left:
-                              (constraints.maxWidth * value - 7).clamp(0.0,
-                                  constraints.maxWidth - 14),
+                          left: (constraints.maxWidth * value - 7).clamp(
+                            0.0,
+                            constraints.maxWidth - 14,
+                          ),
                           child: Container(
                             width: 14,
                             height: 14,
@@ -150,9 +149,11 @@ class _PlayerProgressBarState extends State<PlayerProgressBar> {
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
             Text(
-              _format(_dragging
-                  ? Duration(milliseconds: (_dragValue * _maxMs).round())
-                  : widget.position),
+              _format(
+                _dragging
+                    ? Duration(milliseconds: (_dragValue * _maxMs).round())
+                    : widget.position,
+              ),
               style: TextStyle(
                 fontSize: 12,
                 color: scheme.onSurface.withValues(alpha: 0.6),

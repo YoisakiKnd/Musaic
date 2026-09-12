@@ -83,5 +83,5 @@ class LocalMusicSettingsRepository {
 
 final localMusicSettingsRepositoryProvider =
     Provider<LocalMusicSettingsRepository>((ref) {
-  throw StateError('localMusicSettingsRepositoryProvider 必须在启动时 override');
-});
+      throw StateError('localMusicSettingsRepositoryProvider 必须在启动时 override');
+    });

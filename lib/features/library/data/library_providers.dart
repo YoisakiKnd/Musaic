@@ -27,7 +27,13 @@ final favoritesRevisionProvider = StreamProvider<int>((ref) async* {
 });
 
 /// O(1) 收藏判定（Hive containsKey），替代「watch 全列表 + 线性扫描」。
-final isFavoriteProvider = Provider.family<bool, String>((ref, trackKey) {
+///
+/// autoDispose 必需：列表页每行 TrackTile 都会 watch 一个 family 实例，
+/// 不释放会让 200 首历史留下 200 个常驻 Provider（P1 内存回归）。
+final isFavoriteProvider = Provider.autoDispose.family<bool, String>((
+  ref,
+  trackKey,
+) {
   ref.watch(favoritesRevisionProvider);
   return ref.watch(libraryRepositoryProvider).isFavorite(trackKey);
 });

@@ -8,6 +8,8 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:meta/meta.dart';
+
 const int propAuthMethod = 0x15;
 const int propUserProperty = 0x26;
 const int propServerKeepAlive = 0x13;
@@ -42,11 +44,31 @@ class QqMqttClient {
   final WebSocket _socket;
   final List<int> _buffer = <int>[];
   final List<Uint8List> _ready = <Uint8List>[];
-  final List<Completer<Uint8List?>> _waiters = <Completer<Uint8List?>>[];
+  final List<_PacketWaiter> _waiters = <_PacketWaiter>[];
   StreamSubscription<dynamic>? _sub;
   int keepAlive;
   int _packetId = 1;
   bool _closed = false;
+
+  /// 仅供测试：无 WebSocket 的实例，用于验证等待队列语义。
+  @visibleForTesting
+  QqMqttClient.forTest({this.keepAlive = 30}) : _socket = _NullWebSocket();
+
+  /// 仅供测试：注入一段服务端字节流。
+  @visibleForTesting
+  void debugFeed(List<int> bytes) => _onChunk(Uint8List.fromList(bytes));
+
+  /// 仅供测试：模拟连接关闭。
+  @visibleForTesting
+  void debugClose() => _onSocketClosed();
+
+  /// 仅供测试：当前挂起的等待者数量（应恒为 0 或 1）。
+  @visibleForTesting
+  int get debugWaiterCount => _waiters.length;
+
+  /// 仅供测试：已缓冲待取的报文数量。
+  @visibleForTesting
+  int get debugReadyCount => _ready.length;
 
   static Future<QqMqttClient> connect({
     required String host,
@@ -158,7 +180,9 @@ class QqMqttClient {
   }
 
   Future<_Connack> _waitConnack() async {
-    final packet = await _nextPacket().timeout(const Duration(seconds: 15));
+    final packet = await _nextPacket().future.timeout(
+      const Duration(seconds: 15),
+    );
     if (packet == null) throw StateError('MQTT 连接在 CONNACK 前关闭');
     final decoded = decodePacket(packet);
     if (decoded.type != 2) {
@@ -183,7 +207,9 @@ class QqMqttClient {
   ) async {
     final id = _nextPacketId();
     _socket.add(encodeSubscribe(id, topic, userProperties));
-    final packet = await _nextPacket().timeout(const Duration(seconds: 15));
+    final packet = await _nextPacket().future.timeout(
+      const Duration(seconds: 15),
+    );
     if (packet == null) throw StateError('MQTT 连接在 SUBACK 前关闭');
     final decoded = decodePacket(packet);
     if (decoded.type != 9) {
@@ -199,9 +225,14 @@ class QqMqttClient {
     final pingEvery = Duration(seconds: pingSecs);
     while (!_closed) {
       Uint8List? packet;
+      final pending = _nextPacket();
       try {
-        packet = await _nextPacket().timeout(pingEvery);
+        packet = await pending.future.timeout(pingEvery);
       } on TimeoutException {
+        // P0 回归：超时后必须把已放弃的 waiter 从队列摘除。
+        // 否则它滞留在 _waiters 队头，后续到达的 PUBLISH 会去完成这个
+        // 无人监听的 completer，真正的等待者永不完成 → 扫码登录挂死。
+        _waiters.remove(pending);
         if (_closed) return null;
         _socket.add(Uint8List.fromList(const <int>[0xC0, 0x00]));
         continue;
@@ -229,12 +260,16 @@ class QqMqttClient {
     return id;
   }
 
-  Future<Uint8List?> _nextPacket() {
-    if (_ready.isNotEmpty) return Future<Uint8List?>.value(_ready.removeAt(0));
-    if (_closed) return Future<Uint8List?>.value(null);
-    final waiter = Completer<Uint8List?>();
+  /// 取出下一个报文；返回的 [_PacketWaiter] 可被调用方取消
+  /// （[nextPublish] 的超时分支依赖此能力摘除孤儿等待者）。
+  _PacketWaiter _nextPacket() {
+    if (_ready.isNotEmpty) {
+      return _PacketWaiter.settled(_ready.removeAt(0));
+    }
+    if (_closed) return _PacketWaiter.settled(null);
+    final waiter = _PacketWaiter();
     _waiters.add(waiter);
-    return waiter.future;
+    return waiter;
   }
 
   Future<void> close() async {
@@ -256,6 +291,33 @@ class _Connack {
   final int reason;
   final int? serverKeepAlive;
   final String? serverReference;
+}
+
+/// 一次报文等待的可取消句柄。
+///
+/// [nextPublish] 的 keepAlive 超时分支需要把已放弃的等待者从
+/// 客户端队列中摘除，避免孤儿 completer 吞掉后续报文（P0 回归）。
+class _PacketWaiter {
+  _PacketWaiter();
+
+  _PacketWaiter.settled(Uint8List? value) : _completed = true, _value = value;
+
+  final Completer<Uint8List?> _completer = Completer<Uint8List?>();
+  bool _completed = false;
+  Uint8List? _value;
+
+  Future<Uint8List?> get future =>
+      _completed ? Future<Uint8List?>.value(_value) : _completer.future;
+
+  bool get isCompleted => _completed || _completer.isCompleted;
+
+  /// 由客户端在收到报文时调用。
+  void complete(Uint8List? value) {
+    if (isCompleted) return;
+    _completed = true;
+    _value = value;
+    _completer.complete(value);
+  }
 }
 
 class DecodedMqttPacket {
@@ -532,4 +594,18 @@ void writeVarint(BytesBuilder out, int value) {
     if (index >= 3) throw StateError('MQTT remaining length 过长');
   }
   throw StateError('MQTT remaining length 不完整');
+}
+
+/// 测试用的哑 WebSocket：所有写入被丢弃。
+///
+/// 仅在 [QqMqttClient.forTest] 下使用，避免单元测试触碰真实网络。
+class _NullWebSocket implements WebSocket {
+  @override
+  void add(dynamic data) {}
+
+  @override
+  Future<void> close([int? closeCode, String? closeReason]) async {}
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }

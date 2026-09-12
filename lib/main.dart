@@ -13,6 +13,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:window_manager/window_manager.dart';
 
+import 'core/logging/app_logger.dart';
 import 'app/lifecycle/app_lifecycle.dart';
 import 'app/router.dart';
 import 'core/network/network_config.dart';
@@ -59,7 +60,7 @@ class _Bootstrap {
     } catch (e) {
       // 兜底：系统媒体集成不可用时仍可正常播放（仅缺少通知栏/锁屏控制）。
       // 不允许静默：Activity 继承错误曾让这里失败 0 日志（EMU 实测教训）。
-      debugPrint('MusaicAudioService init 失败: $e');
+      AppLog.debug('MusaicAudioService init 失败: $e');
       return MusaicAudioHandler(player: AudioPlayer());
     }
   }
@@ -100,17 +101,14 @@ Future<void> main() async {
 
   // release 模式下构建/异步异常默认静默，统一转存 logcat 便于远程诊断
   FlutterError.onError = (details) {
-    debugPrint(
-      'MusaicFlutterError: ${details.exception}\n'
-      '${details.stack?.toString().split('\n').take(6).join('\n')}',
+    AppLog.error(
+      'MusaicFlutterError: ${details.exception}',
+      stackTrace: details.stack,
     );
     FlutterError.presentError(details);
   };
   PlatformDispatcher.instance.onError = (error, stack) {
-    debugPrint(
-      'MusaicAsyncError: $error\n'
-      '${stack.toString().split('\n').take(6).join('\n')}',
-    );
+    AppLog.error('MusaicAsyncError: $error', stackTrace: stack);
     return true;
   };
 

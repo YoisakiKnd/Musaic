@@ -44,18 +44,19 @@ class _LocalMusicSettingsPageState
   }
 
   Future<void> _scan() async {
-    final local = ref
-        .read(sourceRegistryProvider)
-        .all
-        .whereType<LibraryScanCapable>()
-        .firstOrNull;
+    final local =
+        ref
+            .read(sourceRegistryProvider)
+            .all
+            .whereType<LibraryScanCapable>()
+            .firstOrNull;
     if (local == null) return;
     final permitted = await _ensurePermission();
     if (!mounted) return;
     if (!permitted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('未授予音乐权限，无法扫描系统目录')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('未授予音乐权限，无法扫描系统目录')));
       return;
     }
     setState(() => _scanning = true);
@@ -64,14 +65,14 @@ class _LocalMusicSettingsPageState
       final tracks = await local.scanLibrary(force: true);
       if (!mounted) return;
       setState(() => _lastCount = tracks.length);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('扫描完成，找到 ${tracks.length} 首歌曲')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('扫描完成，找到 ${tracks.length} 首歌曲')));
     } catch (_) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('扫描失败，请检查目录与存储权限')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('扫描失败，请检查目录与存储权限')));
     } finally {
       if (mounted) setState(() => _scanning = false);
     }
@@ -82,9 +83,9 @@ class _LocalMusicSettingsPageState
     final permitted = await _ensurePermission();
     if (!mounted) return;
     if (!permitted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('未授予音乐权限，无法访问所选文件夹')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('未授予音乐权限，无法访问所选文件夹')));
       return;
     }
     String? pickedPath;
@@ -101,17 +102,17 @@ class _LocalMusicSettingsPageState
 
     final repo = _repo;
     if (repo.folders.contains(pickedPath)) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('该文件夹已添加')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('该文件夹已添加')));
       return;
     }
     await repo.addFolder(pickedPath);
     if (!mounted) return;
     setState(() {});
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('已添加：$pickedPath')),
-    );
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text('已添加：$pickedPath')));
   }
 
   /// 快捷添加应用内置目录（无需权限）。
@@ -120,17 +121,17 @@ class _LocalMusicSettingsPageState
     if (appFolder == null || !mounted) return;
     final repo = _repo;
     if (repo.folders.contains(appFolder)) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('内置目录已添加')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('内置目录已添加')));
       return;
     }
     await repo.addFolder(appFolder);
     if (!mounted) return;
     setState(() {});
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('已添加：$appFolder')),
-    );
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text('已添加：$appFolder')));
   }
 
   @override
@@ -148,14 +149,20 @@ class _LocalMusicSettingsPageState
           Row(
             children: [
               Expanded(
-                child: Text('扫描文件夹（${folders.length}）',
-                    style: const TextStyle(
-                        fontSize: 15, fontWeight: FontWeight.w700)),
+                child: Text(
+                  '扫描文件夹（${folders.length}）',
+                  style: const TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
               ),
               IconButton(
                 tooltip: '前往文件管理器选择文件夹',
-                icon: const Icon(Icons.create_new_folder_rounded,
-                    color: AppTokens.accent),
+                icon: const Icon(
+                  Icons.create_new_folder_rounded,
+                  color: AppTokens.accent,
+                ),
                 onPressed: _pickAndAddFolder,
               ),
             ],
@@ -163,8 +170,10 @@ class _LocalMusicSettingsPageState
           if (folders.isEmpty)
             Card(
               child: ListTile(
-                leading: Icon(Icons.folder_off_rounded,
-                    color: scheme.onSurface.withValues(alpha: 0.4)),
+                leading: Icon(
+                  Icons.folder_off_rounded,
+                  color: scheme.onSurface.withValues(alpha: 0.4),
+                ),
                 title: const Text('尚未添加文件夹'),
                 subtitle: Text(
                   '添加音乐文件夹后点击「立即扫描」建立本地曲库',
@@ -179,15 +188,18 @@ class _LocalMusicSettingsPageState
             for (final folder in folders)
               Card(
                 child: ListTile(
-                  leading: const Icon(Icons.folder_rounded,
-                      color: AppTokens.accent),
-                  title: Text(folder,
-                      style: const TextStyle(fontSize: 13)),
+                  leading: const Icon(
+                    Icons.folder_rounded,
+                    color: AppTokens.accent,
+                  ),
+                  title: Text(folder, style: const TextStyle(fontSize: 13)),
                   trailing: IconButton(
                     tooltip: '移除',
-                    icon: Icon(Icons.close_rounded,
-                        size: 20,
-                        color: scheme.onSurface.withValues(alpha: 0.5)),
+                    icon: Icon(
+                      Icons.close_rounded,
+                      size: 20,
+                      color: scheme.onSurface.withValues(alpha: 0.5),
+                    ),
                     onPressed: () async {
                       await _repo.removeFolder(folder);
                       setState(() {});
@@ -200,8 +212,10 @@ class _LocalMusicSettingsPageState
             child: TextButton.icon(
               onPressed: _addAppFolder,
               icon: const Icon(Icons.inventory_2_outlined, size: 16),
-              label: const Text('添加应用内置目录（无需权限）',
-                  style: TextStyle(fontSize: 12)),
+              label: const Text(
+                '添加应用内置目录（无需权限）',
+                style: TextStyle(fontSize: 12),
+              ),
             ),
           ),
           const SizedBox(height: 8),
@@ -215,13 +229,17 @@ class _LocalMusicSettingsPageState
               ),
             ),
             onPressed: _scanning ? null : _scan,
-            icon: _scanning
-                ? const SizedBox(
-                    width: 18,
-                    height: 18,
-                    child: CircularProgressIndicator(
-                        strokeWidth: 2, color: Colors.white))
-                : const Icon(Icons.radar_rounded),
+            icon:
+                _scanning
+                    ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: Colors.white,
+                      ),
+                    )
+                    : const Icon(Icons.radar_rounded),
             label: Text(_scanning ? '正在扫描…' : '立即扫描'),
           ),
           if (_lastCount != null) ...[
@@ -239,9 +257,9 @@ class _LocalMusicSettingsPageState
           const SizedBox(height: 16),
           // ---------- 扫描设置 ----------
           const Text(
-              '扫描设置',
-              style: TextStyle(
-                  fontSize: 15, fontWeight: FontWeight.w700)),
+            '扫描设置',
+            style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700),
+          ),
           const SizedBox(height: 8),
           Card(
             child: SwitchListTile(

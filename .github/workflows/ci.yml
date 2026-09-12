@@ -1,0 +1,65 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  FLUTTER_VERSION: '3.29.0'
+
+jobs:
+  analyze-and-test:
+    name: 静态分析 + 测试
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - name: 拉取依赖
+        run: flutter pub get
+
+      - name: 格式检查
+        run: dart format --output=none --set-exit-if-changed lib test
+
+      - name: 静态分析（零警告基线）
+        run: flutter analyze --no-pub
+
+      - name: 单元 + Widget 测试
+        run: flutter test --no-pub --reporter expanded
+
+  build-android:
+    name: Android 构建冒烟
+    runs-on: ubuntu-latest
+    needs: analyze-and-test
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - name: 拉取依赖
+        run: flutter pub get
+
+      # 干净环境必须可构建：不再依赖改本机 pub cache 的补丁脚本。
+      - name: 构建 debug APK
+        run: flutter build apk --debug --no-pub

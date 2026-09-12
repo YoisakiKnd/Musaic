@@ -41,9 +41,10 @@ class _QrLoginPageState extends ConsumerState<QrLoginPage>
     final old = _tabController;
     if (old != null && old.length == panels.length) return;
     old?.dispose();
-    _tabController = panels.length > 1
-        ? TabController(length: panels.length, vsync: this)
-        : null;
+    _tabController =
+        panels.length > 1
+            ? TabController(length: panels.length, vsync: this)
+            : null;
   }
 
   @override
@@ -94,20 +95,20 @@ class _QrLoginPageState extends ConsumerState<QrLoginPage>
               child: TabBar(
                 controller: controller,
                 labelColor: AppTokens.accent,
-                unselectedLabelColor:
-                    scheme.onSurface.withValues(alpha: 0.55),
+                unselectedLabelColor: scheme.onSurface.withValues(alpha: 0.55),
                 indicatorColor: AppTokens.accent,
                 dividerColor: Colors.transparent,
                 tabs: [for (final p in panels) Tab(text: p.$1)],
               ),
             ),
           Expanded(
-            child: controller == null
-                ? panels.single.$2
-                : TabBarView(
-                    controller: controller,
-                    children: [for (final p in panels) p.$2],
-                  ),
+            child:
+                controller == null
+                    ? panels.single.$2
+                    : TabBarView(
+                      controller: controller,
+                      children: [for (final p in panels) p.$2],
+                    ),
           ),
         ],
       ),

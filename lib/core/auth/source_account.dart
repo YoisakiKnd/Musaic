@@ -68,41 +68,39 @@ class SourceAccount {
       userId: identical(userId, _unset) ? this.userId : userId as String?,
       nickname:
           identical(nickname, _unset) ? this.nickname : nickname as String?,
-      avatarUrl: identical(avatarUrl, _unset)
-          ? this.avatarUrl
-          : avatarUrl as String?,
+      avatarUrl:
+          identical(avatarUrl, _unset) ? this.avatarUrl : avatarUrl as String?,
       vipLabel:
           identical(vipLabel, _unset) ? this.vipLabel : vipLabel as String?,
-      updatedAt:
-          touchUpdatedAt ? DateTime.now() : updatedAt,
+      updatedAt: touchUpdatedAt ? DateTime.now() : updatedAt,
     );
   }
 
   static const Object _unset = Object();
 
   Map<String, dynamic> toJson() => <String, dynamic>{
-        'sourceId': sourceId,
-        'status': status.name,
-        if (userId != null) 'userId': userId,
-        if (nickname != null) 'nickname': nickname,
-        if (avatarUrl != null) 'avatarUrl': avatarUrl,
-        if (vipLabel != null) 'vipLabel': vipLabel,
-        if (updatedAt != null) 'updatedAt': updatedAt!.millisecondsSinceEpoch,
-      };
+    'sourceId': sourceId,
+    'status': status.name,
+    if (userId != null) 'userId': userId,
+    if (nickname != null) 'nickname': nickname,
+    if (avatarUrl != null) 'avatarUrl': avatarUrl,
+    if (vipLabel != null) 'vipLabel': vipLabel,
+    if (updatedAt != null) 'updatedAt': updatedAt!.millisecondsSinceEpoch,
+  };
 
   factory SourceAccount.fromJson(Map<String, dynamic> json) {
     final rawUpdated = json['updatedAt'];
     return SourceAccount(
       sourceId: json['sourceId']! as String,
-      status:
-          AccountStatus.values.firstWhere((s) => s.name == json['status']),
+      status: AccountStatus.values.firstWhere((s) => s.name == json['status']),
       userId: json['userId'] as String?,
       nickname: json['nickname'] as String?,
       avatarUrl: json['avatarUrl'] as String?,
       vipLabel: json['vipLabel'] as String?,
-      updatedAt: rawUpdated == null
-          ? null
-          : DateTime.fromMillisecondsSinceEpoch(rawUpdated as int),
+      updatedAt:
+          rawUpdated == null
+              ? null
+              : DateTime.fromMillisecondsSinceEpoch(rawUpdated as int),
     );
   }
 

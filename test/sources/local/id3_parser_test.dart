@@ -96,8 +96,7 @@ Uint8List _synthV1({required String title, required String artist}) {
 void main() {
   group('ID3v2.3', () {
     test('解析标题/歌手/专辑', () {
-      final bytes =
-          _synthV23(title: '夜曲', artist: '周杰伦', album: '十一月的萧邦');
+      final bytes = _synthV23(title: '夜曲', artist: '周杰伦', album: '十一月的萧邦');
       final tags = Id3Parser.parse(bytes);
       expect(tags, isNotNull);
       expect(tags!.title, '夜曲');
@@ -141,8 +140,66 @@ void main() {
       frame.add(payload);
       final body = frame.toBytes();
       final header = [0x49, 0x44, 0x33, 0x03, 0x00, 0x00, 0, 0, 0, body.length];
-      final tags =
-          Id3Parser.parse(Uint8List.fromList([...header, ...body]));
+      final tags = Id3Parser.parse(Uint8List.fromList([...header, ...body]));
+      expect(tags!.title, text);
+    });
+
+    test('UTF-16 文本帧的 NUL 终止符正确截断（P2 回归）', () {
+      // 旧实现找 '\u0000\u0000'（两个连续 NUL 字符），而 UTF-16 解码后
+      // 终止符是单个 U+0000，宽终止逻辑永不命中，尾随垃圾会进入标题。
+      const text = '海阔天空';
+      final payload = List<int>.of(const [0x01, 0xFF, 0xFE]);
+      for (final unit in text.codeUnits) {
+        payload.addAll([unit & 0xFF, (unit >> 8) & 0xFF]);
+      }
+      payload.addAll(const [0x00, 0x00]); // UTF-16 终止符（一个码元）
+      for (final unit in 'GARBAGE'.codeUnits) {
+        payload.addAll([unit & 0xFF, (unit >> 8) & 0xFF]);
+      }
+      final frame = BytesBuilder();
+      frame.add(utf8.encode('TIT2'));
+      final size = payload.length;
+      frame.add([
+        (size >> 24) & 0xFF,
+        (size >> 16) & 0xFF,
+        (size >> 8) & 0xFF,
+        size & 0xFF,
+        0x00,
+        0x00,
+      ]);
+      frame.add(payload);
+      final body = frame.toBytes();
+      final header = [0x49, 0x44, 0x33, 0x03, 0x00, 0x00, 0, 0, 0, body.length];
+      final tags = Id3Parser.parse(Uint8List.fromList([...header, ...body]));
+
+      expect(tags!.title, text, reason: '终止符后的内容必须被丢弃');
+      expect(tags.title, isNot(contains('GARBAGE')));
+    });
+
+    test('UTF-16BE（无 BOM）文本帧同样按 NUL 截断', () {
+      const text = '测试';
+      final payload = List<int>.of(const [0x02]); // UTF-16BE
+      for (final unit in text.codeUnits) {
+        payload.addAll([(unit >> 8) & 0xFF, unit & 0xFF]);
+      }
+      payload.addAll(const [0x00, 0x00]);
+      payload.addAll(const [0x00, 0x41]); // 'A' 大端
+      final frame = BytesBuilder();
+      frame.add(utf8.encode('TIT2'));
+      final size = payload.length;
+      frame.add([
+        (size >> 24) & 0xFF,
+        (size >> 16) & 0xFF,
+        (size >> 8) & 0xFF,
+        size & 0xFF,
+        0x00,
+        0x00,
+      ]);
+      frame.add(payload);
+      final body = frame.toBytes();
+      final header = [0x49, 0x44, 0x33, 0x03, 0x00, 0x00, 0, 0, 0, body.length];
+      final tags = Id3Parser.parse(Uint8List.fromList([...header, ...body]));
+
       expect(tags!.title, text);
     });
   });

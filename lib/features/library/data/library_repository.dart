@@ -59,6 +59,13 @@ class LibraryRepository {
     });
   }
 
+  /// 清空全部收藏。
+  ///
+  /// 之所以放在仓库层而不是让调用方循环 [toggleFavorite]：
+  /// 后者是 N 次「containsKey + delete」Hive 往返，大曲库下会阻塞
+  /// 主 isolate；`clear()` 是一次批量删除（设置页「清空喜欢的音乐」）。
+  Future<void> clearFavorites() => _favorites.clear();
+
   /// 全量歌单快照（备份导出用）。
   Map<String, List<Track>> playlistSnapshot() => {
     for (final name in playlistNames) name: playlistTracks(name),
@@ -290,17 +297,29 @@ class LibraryRepository {
     playlists: Map<String, String>.from(_playlists.toMap()),
   );
 
-  /// 整库回滚：清空后按快照原样写回。
+  /// 整库回滚：先写回快照内容，再删除快照中不存在的键。
   ///
-  /// 快照在导入前已完整载入内存，写回阶段不再读取外部数据，
-  /// 失败时本地数据要么是导入前状态、要么是完整导入结果。
+  /// 旧实现是「逐 Box clear() 后 putAll()」：中途崩溃/写失败会停在
+  /// 「已清空但未写回」的状态，用户数据全部丢失。
+  /// 改为「先写后删」——任一时刻磁盘上都保留完整可用数据，
+  /// 最坏情况是残留少量多余条目，不会出现空库（P1 数据安全回归）。
   Future<void> restoreSnapshot(LibrarySnapshot snapshot) async {
-    await _favorites.clear();
     await _favorites.putAll(snapshot.favorites);
-    await _history.clear();
     await _history.putAll(snapshot.history);
-    await _playlists.clear();
     await _playlists.putAll(snapshot.playlists);
+    await _pruneKeys(_favorites, snapshot.favorites.keys);
+    await _pruneKeys(_history, snapshot.history.keys);
+    await _pruneKeys(_playlists, snapshot.playlists.keys);
+  }
+
+  static Future<void> _pruneKeys(Box<String> box, Iterable<String> keep) async {
+    final keepSet = keep.toSet();
+    final stale = box.keys
+        .map((k) => '$k')
+        .where((k) => !keepSet.contains(k))
+        .toList(growable: false);
+    if (stale.isEmpty) return;
+    await box.deleteAll(stale);
   }
 }
 

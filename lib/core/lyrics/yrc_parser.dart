@@ -8,10 +8,10 @@ import 'lyric_bundle.dart';
 /// [12590,2960](12590,240,我)(12830,180,们)   ← 行起点/时长 + 字级元组
 /// ```
 abstract final class YrcParser {
-  static final RegExp _lineHead =
-      RegExp(r'^\[(\d+),(\d+)\]');
-  static final RegExp _wordTuple =
-      RegExp(r'\((\d+),(\d+),((?:[^()\\]|\\.)*)\)');
+  static final RegExp _lineHead = RegExp(r'^\[(\d+),(\d+)\]');
+  static final RegExp _wordTuple = RegExp(
+    r'\((\d+),(\d+),((?:[^()\\]|\\.)*)\)',
+  );
 
   static LyricBundle parse(String source) {
     final lines = <LyricLine>[];
@@ -52,8 +52,7 @@ abstract final class YrcParser {
         );
       }
 
-      final fullText =
-          words.map((w) => w.text).join();
+      final fullText = words.map((w) => w.text).join();
       lines.add(
         LyricLine(
           text: fullText,
@@ -77,12 +76,11 @@ abstract final class YrcParser {
 
   /// 头部行 `{"t":..,"c":[{"tx":"作词: "},{"tx":"某人"}]}` → `作词: 某人`。
   static String? _parseHeaderText(String jsonLine) {
-    final txMatches = RegExp(r'"tx"\s*:\s*"((?:[^"\\]|\\.)*)"')
-        .allMatches(jsonLine);
+    final txMatches = RegExp(
+      r'"tx"\s*:\s*"((?:[^"\\]|\\.)*)"',
+    ).allMatches(jsonLine);
     if (txMatches.isEmpty) return null;
-    return txMatches
-        .map((m) => _unescape(m.group(1) ?? ''))
-        .join();
+    return txMatches.map((m) => _unescape(m.group(1) ?? '')).join();
   }
 
   /// 还原 YRC 文本中的常见转义。

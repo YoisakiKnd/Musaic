@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:isolate';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
@@ -7,7 +8,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
+import '../../core/app_info.dart';
 import '../../core/di/app_providers.dart';
+import '../../core/logging/app_logger.dart';
 import '../../core/theme/app_tokens.dart';
 import '../auth/presentation/channel/account_manage_page.dart';
 import '../library/data/backup_service.dart';
@@ -449,13 +452,23 @@ class DataPage extends ConsumerWidget {
                 ),
                 const Divider(height: 1, indent: 56),
                 ListTile(
+                  leading: const Icon(Icons.bug_report_outlined),
+                  title: const Text('导出诊断日志'),
+                  subtitle: const Text(
+                    '最近 500 条运行日志（已脱敏，不含凭据）',
+                    style: TextStyle(fontSize: 12),
+                  ),
+                  onTap: () => _exportDiagnostics(context),
+                ),
+                const Divider(height: 1, indent: 56),
+                ListTile(
                   leading: const Icon(Icons.favorite_border_rounded),
                   title: const Text('清空喜欢的音乐'),
                   onTap: () async {
                     final repo = ref.read(libraryRepositoryProvider);
-                    for (final track in repo.favorites.toList()) {
-                      await repo.toggleFavorite(track);
-                    }
+                    // 仓库级批量清空：一次 Hive clear()，替代逐条 toggleFavorite
+                    // 的 N 次往返（P2）。
+                    await repo.clearFavorites();
                     if (!context.mounted) return;
                     _toast(context, '已清空喜欢的音乐');
                   },
@@ -469,12 +482,16 @@ class DataPage extends ConsumerWidget {
   }
 
   /// 导出：优先系统保存对话框；不支持/取消时落到文档目录。
+  ///
+  /// 编码移出主 isolate（大曲库下同步 encodePretty 会卡帧），
+  /// 落盘走「临时文件 + rename」原子替换，避免中途崩溃截断用户文件。
   Future<void> _exportBackup(BuildContext context, WidgetRef ref) async {
     final service = ref.read(backupServiceProvider);
-    final json = service.snapshot().encodePretty();
+    final backup = service.snapshot();
     final fileName =
         'musaic-backup-${DateTime.now().toIso8601String().substring(0, 10)}.json';
     try {
+      final json = await Isolate.run(backup.encodePretty);
       String? savedPath = await FilePicker.platform.saveFile(
         dialogTitle: '导出资料库',
         fileName: fileName,
@@ -505,13 +522,52 @@ class DataPage extends ConsumerWidget {
         final dir = Directory(p.join(documents.path, 'Musaic'));
         if (!dir.existsSync()) dir.createSync(recursive: true);
         final file = File(p.join(dir.path, fileName));
-        await file.writeAsString(json);
+        await _writeAtomically(file, json);
         savedPath = file.path;
       } else {
-        await File(savedPath).writeAsString(json);
+        await _writeAtomically(File(savedPath), json);
       }
       if (!context.mounted) return;
       _toast(context, '已导出：$savedPath');
+    } catch (e) {
+      if (!context.mounted) return;
+      _toast(context, '导出失败：$e');
+    }
+  }
+
+  /// 原子写：同目录写临时文件后 rename 覆盖目标。
+  ///
+  /// 直接 `writeAsString` 会先截断目标文件，磁盘满或进程被杀时
+  /// 用户原有的备份文件即被破坏（P1 回归）。
+  static Future<void> _writeAtomically(File target, String contents) async {
+    final temp = File('${target.path}.tmp');
+    await temp.writeAsString(contents, flush: true);
+    await temp.rename(target.path);
+  }
+
+  /// 导出诊断日志（迭代计划 H21 / B27）。
+  ///
+  /// 日志在写入环形缓冲前已强制脱敏（见 `core/logging/app_logger.dart`），
+  /// 因此可以直接交给用户粘贴到 issue。
+  Future<void> _exportDiagnostics(BuildContext context) async {
+    final text = AppLog.exportText();
+    if (text.isEmpty) {
+      _toast(context, '暂无日志可导出');
+      return;
+    }
+    final stamp = DateTime.now()
+        .toIso8601String()
+        .replaceAll(':', '-')
+        .substring(0, 19);
+    final fileName = 'musaic-diagnostics-$stamp.txt';
+    try {
+      final documents = await getApplicationDocumentsDirectory();
+      final dir = Directory(p.join(documents.path, 'Musaic'));
+      if (!dir.existsSync()) dir.createSync(recursive: true);
+      final file = File(p.join(dir.path, fileName));
+      await _writeAtomically(file, text);
+      if (!context.mounted) return;
+      _toast(context, '诊断日志已导出：${file.path}');
     } catch (e) {
       if (!context.mounted) return;
       _toast(context, '导出失败：$e');
@@ -567,8 +623,8 @@ class AboutPage extends StatelessWidget {
               children: [
                 const ListTile(
                   leading: Icon(Icons.info_outline_rounded),
-                  title: Text('Musaic · 音乐拼图'),
-                  subtitle: Text('版本 0.1.0 · 多渠道聚合播放器'),
+                  title: Text(AppInfo.appName),
+                  subtitle: Text('版本 ${AppInfo.version} · 多渠道聚合播放器'),
                 ),
                 const Divider(height: 1, indent: 56),
                 ListTile(
@@ -581,9 +637,7 @@ class AboutPage extends StatelessWidget {
                   trailing: const Icon(Icons.copy_rounded, size: 18),
                   onTap: () {
                     Clipboard.setData(
-                      const ClipboardData(
-                        text: 'https://github.com/YoisakiKnd/Musaic',
-                      ),
+                      const ClipboardData(text: AppInfo.repositoryUrl),
                     );
                     _toast(context, '仓库地址已复制');
                   },

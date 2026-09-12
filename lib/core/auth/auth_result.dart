@@ -24,7 +24,10 @@ sealed class AuthResult {
 }
 
 class AuthSuccess extends AuthResult {
-  const AuthSuccess(this.account, {this.credentials = const <String, String>{}});
+  const AuthSuccess(
+    this.account, {
+    this.credentials = const <String, String>{},
+  });
 
   final SourceAccount account;
 

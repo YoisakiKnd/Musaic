@@ -74,9 +74,14 @@ class LocalFileSource extends MusicSource implements LibraryScanCapable {
     return dirs.where((d) => d.existsSync()).toList();
   }
 
+  /// 内嵌封面落盘目录。
+  ///
+  /// 放在**应用支持目录**而非临时目录：系统可随时清理 temp，
+  /// 会导致已扫描曲目的封面 URL 失效（列表封面集体变占位图）。
+  /// 支持目录由应用负责清理，配合 `_djb2(path)` 命名可复用已有文件。
   static Future<Directory> defaultCoverCache() async {
-    final temp = await getTemporaryDirectory();
-    final dir = Directory(p.join(temp.path, 'musaic_covers'));
+    final base = await getApplicationSupportDirectory();
+    final dir = Directory(p.join(base.path, 'musaic_covers'));
     if (!dir.existsSync()) dir.createSync(recursive: true);
     return dir;
   }
@@ -89,11 +94,24 @@ class LocalFileSource extends MusicSource implements LibraryScanCapable {
   ///
   /// 全程在后台 isolate 执行（迭代计划 §9.3 / B13）：目录解析结果
   /// 传入后台，解析按批回传，UI isolate 不接触标签与封面原始字节。
+  ///
+  /// 注意 `force: true` 语义：用户在设置里新增/更换了目录后必须**重扫**，
+  /// 若直接复用进行中的 `_activeScan`（旧目录配置），新目录会被静默忽略。
+  /// 因此 force 时放弃旧句柄、按当前目录重新起一次扫描。
   @override
   Future<List<Track>> scanLibrary({bool force = false}) {
     if (!force && _cache != null) return Future.value(_cache);
-    if (force) _cache = null;
-    return _activeScan ??= _scanNow().whenComplete(() => _activeScan = null);
+    if (!force) {
+      return _activeScan ??= _scanNow().whenComplete(() => _activeScan = null);
+    }
+    _cache = null;
+    late Future<List<Track>> scan;
+    scan = _scanNow().whenComplete(() {
+      // 仅当自己仍是当前句柄时才清空，避免覆盖后发起的那一次
+      if (identical(_activeScan, scan)) _activeScan = null;
+    });
+    _activeScan = scan;
+    return scan;
   }
 
   Future<List<Track>> _scanNow() async {
@@ -382,20 +400,45 @@ Track _trackFromParsed(
 }
 
 /// 只读取标签所需字节，避免整文件载入内存（性能预算 §10.2）。
+///
+/// 固定 512KB 头预算会**截断** ID3v2 标签：标签头里的 synchsafe 长度
+/// 声明了真实大小，若超过预算，帧循环会在标签中间提前 break，
+/// 静默丢掉封面/歌词等字段（大内嵌封面专辑很常见）。
+/// 因此先读 10 字节标签头拿到声明长度，再按需读取（带上限兜底）。
 Future<Uint8List> readTagBytes(File file) async {
   final length = await file.length();
   const headBudget = 512 * 1024;
-  final headSize = length < headBudget ? length : headBudget;
+
+  /// 标签体上限：防止畸形文件声明超大长度导致巨额内存分配。
+  const maxTagBody = 8 * 1024 * 1024;
 
   final raf = await file.open();
   try {
-    final head = await raf.read(headSize);
+    // 先读标签头（ID3v2 头固定 10 字节）
+    final header = await raf.read(10);
     final hasV2 =
-        head.length >= 3 &&
-        head[0] == 0x49 &&
-        head[1] == 0x44 &&
-        head[2] == 0x33;
-    if (hasV2 || length <= headBudget) return head;
+        header.length >= 3 &&
+        header[0] == 0x49 &&
+        header[1] == 0x44 &&
+        header[2] == 0x33;
+
+    int headSize;
+    if (hasV2 && header.length >= 10) {
+      // synchsafe：每字节仅低 7 位有效
+      final declared =
+          ((header[6] & 0x7F) << 21) |
+          ((header[7] & 0x7F) << 14) |
+          ((header[8] & 0x7F) << 7) |
+          (header[9] & 0x7F);
+      final total = (declared + 10).clamp(10, maxTagBody);
+      headSize = total < length ? total : length;
+    } else {
+      headSize = length < headBudget ? length : headBudget;
+    }
+
+    await raf.setPosition(0);
+    final head = await raf.read(headSize);
+    if (hasV2 || length <= headSize) return head;
     // 无 v2 头：补读尾部 128 字节供 ID3v1 判断
     await raf.setPosition(length - 128);
     final tail = await raf.read(128);

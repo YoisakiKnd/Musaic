@@ -40,10 +40,7 @@ class _LoginDialogState extends ConsumerState<_LoginDialog> {
   }
 
   TextEditingController _controllerFor(CredentialField field) {
-    return _controllers.putIfAbsent(
-      field.key,
-      TextEditingController.new,
-    );
+    return _controllers.putIfAbsent(field.key, TextEditingController.new);
   }
 
   Future<void> _submit() async {
@@ -66,8 +63,9 @@ class _LoginDialogState extends ConsumerState<_LoginDialog> {
           SnackBar(content: Text('欢迎，${account.nickname ?? '用户'}')),
         );
       case AuthFailure(:final message):
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text(message)));
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(message)));
     }
   }
 
@@ -96,8 +94,10 @@ class _LoginDialogState extends ConsumerState<_LoginDialog> {
             ),
           ),
           const SizedBox(width: 10),
-          Text('登录${widget.source.displayName}',
-              style: const TextStyle(fontSize: 18)),
+          Text(
+            '登录${widget.source.displayName}',
+            style: const TextStyle(fontSize: 18),
+          ),
         ],
       ),
       content: SingleChildScrollView(
@@ -114,8 +114,7 @@ class _LoginDialogState extends ConsumerState<_LoginDialog> {
                   hintText: field.placeholder,
                   helperText: field.hint,
                   border: OutlineInputBorder(
-                    borderRadius:
-                        BorderRadius.circular(AppTokens.radiusChip),
+                    borderRadius: BorderRadius.circular(AppTokens.radiusChip),
                   ),
                 ),
               ),
@@ -123,39 +122,47 @@ class _LoginDialogState extends ConsumerState<_LoginDialog> {
             ],
             if (capability.guide != null)
               Theme(
-                data: Theme.of(context)
-                    .copyWith(dividerColor: Colors.transparent),
+                data: Theme.of(
+                  context,
+                ).copyWith(dividerColor: Colors.transparent),
                 child: ExpansionTile(
                   tilePadding: EdgeInsets.zero,
                   childrenPadding: const EdgeInsets.only(bottom: 8),
-                  leading: const Icon(Icons.help_outline_rounded,
-                      color: AppTokens.accent),
-                  title: Text(capability.guide!.title,
-                      style: const TextStyle(
-                          fontSize: 14, fontWeight: FontWeight.w600)),
+                  leading: const Icon(
+                    Icons.help_outline_rounded,
+                    color: AppTokens.accent,
+                  ),
+                  title: Text(
+                    capability.guide!.title,
+                    style: const TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
                   children: [
-                    for (var i = 0;
-                        i < capability.guide!.steps.length;
-                        i++)
+                    for (var i = 0; i < capability.guide!.steps.length; i++)
                       Padding(
                         padding: const EdgeInsets.symmetric(vertical: 3),
                         child: Row(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Text('${i + 1}. ',
-                                style: const TextStyle(
-                                  fontSize: 13,
-                                  fontWeight: FontWeight.w700,
-                                  color: AppTokens.accent,
-                                )),
+                            Text(
+                              '${i + 1}. ',
+                              style: const TextStyle(
+                                fontSize: 13,
+                                fontWeight: FontWeight.w700,
+                                color: AppTokens.accent,
+                              ),
+                            ),
                             Expanded(
                               child: Text(
                                 capability.guide!.steps[i],
                                 style: TextStyle(
                                   fontSize: 13,
                                   height: 1.4,
-                                  color: scheme.onSurface
-                                      .withValues(alpha: 0.75),
+                                  color: scheme.onSurface.withValues(
+                                    alpha: 0.75,
+                                  ),
                                 ),
                               ),
                             ),
@@ -170,23 +177,23 @@ class _LoginDialogState extends ConsumerState<_LoginDialog> {
       ),
       actions: [
         TextButton(
-          onPressed:
-              _submitting ? null : () => Navigator.of(context).pop(),
+          onPressed: _submitting ? null : () => Navigator.of(context).pop(),
           child: const Text('取消'),
         ),
         FilledButton(
           style: FilledButton.styleFrom(backgroundColor: AppTokens.accent),
           onPressed: _submitting ? null : _submit,
-          child: _submitting
-              ? const SizedBox(
-                  width: 18,
-                  height: 18,
-                  child: CircularProgressIndicator(
-                    strokeWidth: 2,
-                    color: Colors.white,
-                  ),
-                )
-              : const Text('登录'),
+          child:
+              _submitting
+                  ? const SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      color: Colors.white,
+                    ),
+                  )
+                  : const Text('登录'),
         ),
       ],
     );

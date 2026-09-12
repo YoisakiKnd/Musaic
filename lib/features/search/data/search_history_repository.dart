@@ -16,9 +16,8 @@ class SearchHistoryRepository {
     final raw = _box.get(_key);
     if (raw == null) return const <String>[];
     try {
-      final list = (jsonDecode(raw) as List<dynamic>)
-          .whereType<String>()
-          .toList();
+      final list =
+          (jsonDecode(raw) as List<dynamic>).whereType<String>().toList();
       return List<String>.unmodifiable(list);
     } catch (_) {
       return const <String>[];
@@ -29,10 +28,7 @@ class SearchHistoryRepository {
   Future<List<String>> add(String keyword) async {
     final trimmed = keyword.trim();
     if (trimmed.isEmpty) return load();
-    final next = <String>[
-      trimmed,
-      ...load().where((k) => k != trimmed),
-    ];
+    final next = <String>[trimmed, ...load().where((k) => k != trimmed)];
     final capped = next.take(_cap).toList();
     await _box.put(_key, jsonEncode(capped));
     return List<String>.unmodifiable(capped);

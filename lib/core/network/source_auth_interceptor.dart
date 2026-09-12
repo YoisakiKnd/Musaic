@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:dio/dio.dart';
 
 /// 凭据读取器类型（与渠道解耦）。
@@ -87,12 +89,35 @@ class SourceAuthInterceptor extends Interceptor {
   bool _isSessionExpired(Response<dynamic> response) {
     final status = response.statusCode;
     if (status == 401 || status == 301) return true;
-    final data = response.data;
-    if (data is Map && data['code'] is int) {
-      final bodyCode = data['code'] as int;
-      if (expiredBodyCodes.contains(bodyCode)) return true;
+    final code = _extractBodyCode(response.data);
+    return code != null && expiredBodyCodes.contains(code);
+  }
+
+  /// 从响应体中提取业务 code。
+  ///
+  /// 各渠道普遍使用 `ResponseType.plain`（网易云 / QQ / 酷狗），
+  /// 此时 [Response.data] 恒为 String，旧实现直接 `data is Map` 判断
+  /// 导致业务码过期检测**完全失效**（P1 回归守护）。
+  /// 这里同时兼容已解析的 Map 与原始 JSON 字符串。
+  static int? _extractBodyCode(Object? data) {
+    Object? decoded = data;
+    if (decoded is String) {
+      final text = decoded.trim();
+      if (text.isEmpty) return null;
+      // 仅尝试解析 JSON 对象/数组；HTML 错误页等直接放弃。
+      if (!text.startsWith('{') && !text.startsWith('[')) return null;
+      try {
+        decoded = jsonDecode(text);
+      } catch (_) {
+        return null;
+      }
     }
-    return false;
+    if (decoded is Map) {
+      final raw = decoded['code'];
+      if (raw is int) return raw;
+      if (raw is String) return int.tryParse(raw);
+    }
+    return null;
   }
 
   bool _isAuthRedirect(Response<dynamic>? response) =>

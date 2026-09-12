@@ -120,6 +120,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
   @override
   Widget build(BuildContext context) {
     final track = ref.watch(playerNotifierProvider.select((s) => s.current));
+    final error = ref.watch(playerNotifierProvider.select((s) => s.error));
 
     if (track == null) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -163,12 +164,32 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
               palette: palette,
               child: SafeArea(
                 bottom: false,
-                child: OrientationBuilder(
-                  builder:
-                      (context, orientation) =>
-                          orientation == Orientation.landscape
-                              ? _buildLandscape(track)
-                              : _buildPortrait(track),
+                child: Stack(
+                  children: [
+                    OrientationBuilder(
+                      builder:
+                          (context, orientation) =>
+                              orientation == Orientation.landscape
+                                  ? _buildLandscape(track)
+                                  : _buildPortrait(track),
+                    ),
+                    // 错误横幅置于最上层：与沉浸模式无关，
+                    // 保证解析超时 / 渠道不可用等失败始终可见且可重试（P0 回归）。
+                    if (error != null)
+                      _PlayerErrorBanner(
+                        message: error,
+                        onRetry:
+                            () =>
+                                ref
+                                    .read(playerNotifierProvider.notifier)
+                                    .retry(),
+                        onDismiss:
+                            () =>
+                                ref
+                                    .read(playerNotifierProvider.notifier)
+                                    .clearError(),
+                      ),
+                  ],
                 ),
               ),
             ),
@@ -1004,6 +1025,79 @@ class _CoverImage extends StatelessWidget {
       memCacheWidth: 512,
       placeholder: (_, _) => placeholder,
       errorWidget: (_, _, _) => placeholder,
+    );
+  }
+}
+
+/// 播放错误横幅：覆盖在播放页最上层，不受沉浸模式影响。
+///
+/// 播放失败（解析超时 / 渠道不可用 / 解码失败）必须始终可见，
+/// 并提供「重试」与「关闭」两个出口（P0 回归守护）。
+class _PlayerErrorBanner extends StatelessWidget {
+  const _PlayerErrorBanner({
+    required this.message,
+    required this.onRetry,
+    required this.onDismiss,
+  });
+
+  final String message;
+  final VoidCallback onRetry;
+  final VoidCallback onDismiss;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Positioned(
+      top: 8,
+      left: 12,
+      right: 12,
+      child: Material(
+        color: Colors.transparent,
+        child: Container(
+          padding: const EdgeInsets.fromLTRB(14, 10, 6, 10),
+          decoration: BoxDecoration(
+            color: scheme.errorContainer.withValues(alpha: 0.92),
+            borderRadius: BorderRadius.circular(14),
+          ),
+          child: Row(
+            children: [
+              Icon(
+                Icons.error_outline_rounded,
+                size: 18,
+                color: scheme.onErrorContainer,
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  message,
+                  style: TextStyle(
+                    fontSize: 12.5,
+                    color: scheme.onErrorContainer,
+                  ),
+                ),
+              ),
+              TextButton(
+                onPressed: onRetry,
+                style: TextButton.styleFrom(
+                  foregroundColor: scheme.onErrorContainer,
+                  visualDensity: VisualDensity.compact,
+                ),
+                child: const Text('重试'),
+              ),
+              IconButton(
+                tooltip: '关闭',
+                onPressed: onDismiss,
+                visualDensity: VisualDensity.compact,
+                icon: Icon(
+                  Icons.close_rounded,
+                  size: 18,
+                  color: scheme.onErrorContainer,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }

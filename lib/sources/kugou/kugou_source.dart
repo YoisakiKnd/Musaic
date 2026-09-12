@@ -1,15 +1,15 @@
 import 'dart:convert';
-import 'dart:developer' as developer;
 import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart' as crypto;
 import 'package:dio/dio.dart';
 
+import '../../core/logging/app_logger.dart';
 import '../../core/error/source_exception.dart';
 import '../../core/model/track.dart';
-import '../../core/network/network_config.dart';
-import '../../core/network/source_auth_interceptor.dart';
+import '../../core/network/response_decoder.dart';
+import '../../core/network/source_dio.dart';
 import '../../core/source/capabilities.dart';
 import '../../core/source/music_source.dart';
 import '../../core/auth/auth_capability.dart';
@@ -50,31 +50,16 @@ class KugouSource extends MusicSource implements QrLoginCapable {
 
   static const String _salt = 'NVPh5oo715z5DIWAeQlhMDsWXXQV4hwt';
 
-  late final Dio _dio = _buildDio();
-
-  Dio _buildDio() {
-    final dio = Dio(
-      BaseOptions(
-        connectTimeout: NetworkConfig.instance.connect,
-        receiveTimeout: NetworkConfig.instance.receive,
-        headers: <String, String>{
-          'User-Agent':
-              'Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 '
-              '(KHTML, like Gecko) Chrome/120.0 Mobile Safari/537.36',
-        },
-        validateStatus: (int? code) => code != null && code < 500,
-      ),
-    );
-    dio.interceptors.add(
-      SourceAuthInterceptor(
-        sourceId: KugouSource.id,
-        readCredentials: credentialReader,
-        onSessionExpired: () => onSessionExpired?.call(),
-      ),
-    );
-    dio.interceptors.add(TimeoutInterceptor());
-    return dio;
-  }
+  late final Dio _dio = buildSourceDio(
+    sourceId: KugouSource.id,
+    readCredentials: credentialReader,
+    onSessionExpired: onSessionExpired,
+    headers: <String, String>{
+      'User-Agent':
+          'Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 '
+          '(KHTML, like Gecko) Chrome/120.0 Mobile Safari/537.36',
+    },
+  );
 
   // ---------- 音乐能力 ----------
 
@@ -98,9 +83,9 @@ class KugouSource extends MusicSource implements QrLoginCapable {
           'platform': 'WebFilter',
         },
       );
-      final lists =
-          _asMap(_asMap(_decoded(response))?['data'])?['lists']
-              as List<dynamic>?;
+      final lists = asList(
+        _asMap(_asMap(_decoded(response))?['data'])?['lists'],
+      );
       if (lists == null) return const <Track>[];
       return lists
           .map(_trackFromSearchSong)
@@ -116,7 +101,7 @@ class KugouSource extends MusicSource implements QrLoginCapable {
 
   @override
   Future<ResolvedStream> resolveStream(Track track) async {
-    final hash = track.sourceData?['hash'] as String?;
+    final hash = asStringOrNull(track.sourceData?['hash']);
     if (hash == null || hash.isEmpty) {
       throw UnavailableStreamException('曲目缺少渠道标识', sourceId: sourceId);
     }
@@ -128,18 +113,20 @@ class KugouSource extends MusicSource implements QrLoginCapable {
         token = credentials['token'] ?? '';
         userid = credentials['userid'] ?? '';
       } catch (_) {}
+      // 凭据走 Cookie 头而非 URL query（避免进入代理 / 服务端日志）。
       final response = await _dio.get<dynamic>(
         'https://m.kugou.com/app/i/getSongInfo.php',
-        queryParameters: <String, dynamic>{
-          'cmd': 'playInfo',
-          'hash': hash,
-          if (token.isNotEmpty) 'token': token,
-          if (userid.isNotEmpty) 'userid': userid,
-        },
+        queryParameters: <String, dynamic>{'cmd': 'playInfo', 'hash': hash},
+        options: Options(
+          headers: <String, String>{
+            if (token.isNotEmpty || userid.isNotEmpty)
+              'Cookie': 'token=$token; userid=$userid',
+          },
+        ),
       );
       final data = _asMap(_decoded(response));
-      final status = data?['status'] as int? ?? -1;
-      final url = data?['url'] as String?;
+      final status = asIntOrNull(data?['status']) ?? -1;
+      final url = asStringOrNull(data?['url']);
       if (status != 1 || url == null || url.isEmpty) {
         // 分级提示：未登录引导登录；已登录则说明版权限制
         final loggedIn = await _hasCredentials();
@@ -156,7 +143,7 @@ class KugouSource extends MusicSource implements QrLoginCapable {
 
   @override
   Future<LyricBundle?> fetchLyrics(Track track) async {
-    final hash = track.sourceData?['hash'] as String?;
+    final hash = asStringOrNull(track.sourceData?['hash']);
     if (hash == null || hash.isEmpty) return null;
     try {
       // 1) hash → 歌词候选
@@ -171,12 +158,11 @@ class KugouSource extends MusicSource implements QrLoginCapable {
           'hash': hash,
         },
       );
-      final candidates =
-          _asMap(_decoded(search))?['candidates'] as List<dynamic>?;
+      final candidates = asList(_asMap(_decoded(search))?['candidates']);
       if (candidates == null || candidates.isEmpty) return null;
       final first = _asMap(candidates.first);
-      final lyricId = first?['id'] as String?;
-      final accessKey = first?['accesskey'] as String?;
+      final lyricId = asStringOrNull(first?['id']);
+      final accessKey = asStringOrNull(first?['accesskey']);
       if (lyricId == null || accessKey == null) return null;
 
       // 2) 下载 LRC
@@ -191,7 +177,7 @@ class KugouSource extends MusicSource implements QrLoginCapable {
           'accesskey': accessKey,
         },
       );
-      final content = _asMap(_decoded(download))?['content'] as String?;
+      final content = asStringOrNull(_asMap(_decoded(download))?['content']);
       if (content == null || content.trim().isEmpty) return null;
       var lrcText = content;
       if (!content.trimLeft().startsWith('[')) {
@@ -249,8 +235,8 @@ class KugouSource extends MusicSource implements QrLoginCapable {
       },
     );
     final payload = _asMap(data)?['data'];
-    final qrKey = _asMap(payload)?['qrcode'] as String?;
-    final imgDataUrl = _asMap(payload)?['qrcode_img'] as String?;
+    final qrKey = asStringOrNull(_asMap(payload)?['qrcode']);
+    final imgDataUrl = asStringOrNull(_asMap(payload)?['qrcode_img']);
     if (qrKey == null || qrKey.isEmpty) {
       throw NetworkSourceException('获取登录二维码失败', sourceId: sourceId);
     }
@@ -286,7 +272,7 @@ class KugouSource extends MusicSource implements QrLoginCapable {
       },
     );
     final payload = _asMap(data)?['data'];
-    final status = _asMap(payload)?['status'] as int? ?? -1;
+    final status = asIntOrNull(_asMap(payload)?['status']) ?? -1;
     switch (status) {
       case 0:
         return const QrLoginPollExpired();
@@ -295,17 +281,17 @@ class KugouSource extends MusicSource implements QrLoginCapable {
       case 2:
         return const QrLoginPollScanned();
       case 4:
-        final token = _asMap(payload)?['token'] as String?;
+        final token = asStringOrNull(_asMap(payload)?['token']);
         final userid = _asMap(payload)?['userid'];
         if (token == null || token.isEmpty || userid == null) {
           throw NetworkSourceException('登录凭据缺失，请重试', sourceId: sourceId);
         }
         return QrLoginPoll.success(
           credentials: <String, String>{'token': token, 'userid': '$userid'},
-          nickname: _asMap(payload)?['nickname'] as String?,
+          nickname: asStringOrNull(_asMap(payload)?['nickname']),
         );
       default:
-        developer.log('未知二维码状态 $status', name: 'MusaicKugou');
+        AppLog.debug('未知二维码状态 $status', tag: 'MusaicKugou');
         return const QrLoginPollWaiting();
     }
   }
@@ -361,10 +347,14 @@ class KugouSource extends MusicSource implements QrLoginCapable {
   }) async {
     final Response<dynamic> response;
     try {
+      // 凭据改走 Cookie 头而非 URL query：query 会进入代理 / CDN /
+      // 服务端访问日志，token 与 userid 属于会话凭据（P1 安全回归）。
       response = await _dio.get<dynamic>(
         'https://userservice.kugou.com/rpc/v1/get_user_info',
-        queryParameters: <String, dynamic>{'token': token, 'userid': userid},
-        options: Options(responseType: ResponseType.plain),
+        options: Options(
+          responseType: ResponseType.plain,
+          headers: <String, String>{'Cookie': 'token=$token; userid=$userid'},
+        ),
       );
     } catch (_) {
       if (throwOnError) rethrow;
@@ -373,7 +363,8 @@ class KugouSource extends MusicSource implements QrLoginCapable {
     final data = _asMap(_decoded(response));
     final userInfo = _asMap(_asMap(_asMap(data)?['data'])?['userInfo']);
     final nick =
-        userInfo?['nickname'] as String? ?? userInfo?['username'] as String?;
+        asStringOrNull(userInfo?['nickname']) ??
+        asStringOrNull(userInfo?['username']);
     return (nick == null || nick.isEmpty) ? null : nick;
   }
 
@@ -413,34 +404,34 @@ class KugouSource extends MusicSource implements QrLoginCapable {
   }
 
   /// 发起带全量签名参数的 GET，返回解码后的 JSON。
+  ///
+  /// **网络层异常原样透传 [DioException]**：通用扫码登录页把
+  /// [NetworkSourceException] 视为「明确失败」并停止轮询，
+  /// 若把瞬时断网/超时包装成它，一次抖动就会终止整个扫码流程。
+  /// 透传后由调用方的通用 `catch` 走静默重试（与网易云一致）。
   Future<dynamic> _signedGet(String url, Map<String, String> params) async {
     final signature = _webSignature(params);
-    try {
-      final response = await _dio.get<String>(
-        url,
-        queryParameters: <String, dynamic>{...params, 'signature': signature},
-        options: Options(responseType: ResponseType.plain),
-      );
-      return _decoded(response);
-    } on DioException catch (e) {
-      developer.log('signed GET 失败: ${e.type}', name: 'MusaicKugou');
-      throw NetworkSourceException('请求失败：网络异常', sourceId: sourceId);
-    }
+    final response = await _dio.get<String>(
+      url,
+      queryParameters: <String, dynamic>{...params, 'signature': signature},
+      options: Options(responseType: ResponseType.plain),
+    );
+    return _decoded(response);
   }
 
   Track? _trackFromSearchSong(dynamic raw) {
     final song = _asMap(raw);
     if (song == null) return null;
-    final hash = song['FileHash'] as String?;
+    final hash = asStringOrNull(song['FileHash']);
     if (hash == null || hash.isEmpty) return null;
     String cleanName(String rawName) =>
         rawName.replaceAll('<em>', '').replaceAll('</em>', '').trim();
-    final name = cleanName(song['SongName'] as String? ?? '');
+    final name = cleanName(asStringOrNull(song['SongName']) ?? '');
     if (name.isEmpty) return null;
-    final singer = (song['SingerName'] as String? ?? '').trim();
-    final image = song['Image'] as String?;
-    final durationSec = song['Duration'] as int?;
-    final albumId = song['AlbumID'] as String?;
+    final singer = (asStringOrNull(song['SingerName']) ?? '').trim();
+    final image = asStringOrNull(song['Image']);
+    final durationSec = asIntOrNull(song['Duration']);
+    final albumId = asStringOrNull(song['AlbumID']);
     final coverUrl =
         (image == null || image.isEmpty)
             ? null
@@ -450,7 +441,7 @@ class KugouSource extends MusicSource implements QrLoginCapable {
       sourceId: sourceId,
       title: name,
       artist: singer.isEmpty ? '未知歌手' : singer,
-      album: (song['AlbumName'] as String? ?? '').trim(),
+      album: (asStringOrNull(song['AlbumName']) ?? '').trim(),
       duration: durationSec == null ? null : Duration(seconds: durationSec),
       coverUrl: coverUrl,
       sourceData: <String, dynamic>{
@@ -460,22 +451,8 @@ class KugouSource extends MusicSource implements QrLoginCapable {
     );
   }
 
-  dynamic _decoded(Response<dynamic> response) {
-    final data = response.data;
-    if (data is String) {
-      final trimmed = data.trim();
-      if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
-        try {
-          return jsonDecode(trimmed);
-        } catch (_) {
-          return null;
-        }
-      }
-      return null;
-    }
-    return data;
-  }
+  dynamic _decoded(Response<dynamic> response) =>
+      decodeResponseBody(response.data);
 
-  Map<String, dynamic>? _asMap(dynamic value) =>
-      value is Map ? Map<String, dynamic>.from(value) : null;
+  Map<String, dynamic>? _asMap(dynamic value) => asMap(value);
 }

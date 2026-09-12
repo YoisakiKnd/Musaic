@@ -23,25 +23,27 @@ class _FakeNetease extends MusicSource {
 
   @override
   AuthCapability get authCapability => const AuthCapability(
-        type: AuthType.cookie,
-        fields: [
-          CredentialField(
-            key: 'MUSIC_U',
-            label: 'MUSIC_U',
-            placeholder: '粘贴 MUSIC_U 的纯值',
-          ),
-        ],
-        guide: AuthGuide(title: '如何获取 MUSIC_U', steps: ['步骤一', '步骤二']),
-      );
+    type: AuthType.cookie,
+    fields: [
+      CredentialField(
+        key: 'MUSIC_U',
+        label: 'MUSIC_U',
+        placeholder: '粘贴 MUSIC_U 的纯值',
+      ),
+    ],
+    guide: AuthGuide(title: '如何获取 MUSIC_U', steps: ['步骤一', '步骤二']),
+  );
 
   @override
   Future<AuthResult> login(Map<String, String> credentials) async {
     if ((credentials['MUSIC_U'] ?? '').trim() == 'good-cookie') {
-      return AuthSuccess(SourceAccount.markNow(
-        sourceId: sourceId,
-        status: AccountStatus.loggedIn,
-        nickname: '测试用户',
-      ));
+      return AuthSuccess(
+        SourceAccount.markNow(
+          sourceId: sourceId,
+          status: AccountStatus.loggedIn,
+          nickname: '测试用户',
+        ),
+      );
     }
     return const AuthFailure(
       reason: AuthFailureReason.invalidCredentials,
@@ -50,9 +52,11 @@ class _FakeNetease extends MusicSource {
   }
 
   @override
-  Future<List<Track>> search(String query,
-      {int limit = 30, int offset = 0}) async =>
-      [];
+  Future<List<Track>> search(
+    String query, {
+    int limit = 30,
+    int offset = 0,
+  }) async => [];
   @override
   Future<Track> getTrackDetail(Track track) => throw UnimplementedError();
   @override
@@ -96,12 +100,13 @@ Future<void> _pumpHost(WidgetTester tester) async {
       child: MaterialApp(
         home: Scaffold(
           body: Builder(
-            builder: (context) => Center(
-              child: FilledButton(
-                onPressed: () => showLoginDialog(context, _FakeNetease()),
-                child: const Text('OPEN'),
-              ),
-            ),
+            builder:
+                (context) => Center(
+                  child: FilledButton(
+                    onPressed: () => showLoginDialog(context, _FakeNetease()),
+                    child: const Text('OPEN'),
+                  ),
+                ),
           ),
         ),
       ),
@@ -112,8 +117,7 @@ Future<void> _pumpHost(WidgetTester tester) async {
 }
 
 void main() {
-  testWidgets('动态表单按渠道声明渲染字段与指引',
-      (tester) async {
+  testWidgets('动态表单按渠道声明渲染字段与指引', (tester) async {
     await _pumpHost(tester);
 
     expect(find.text('登录网易云音乐'), findsOneWidget);
@@ -122,8 +126,7 @@ void main() {
     expect(find.text('步骤一'), findsNothing); // 折叠状态不展示步骤
   });
 
-  testWidgets('无效 Cookie 提交失败并显示原因，弹窗保持打开',
-      (tester) async {
+  testWidgets('无效 Cookie 提交失败并显示原因，弹窗保持打开', (tester) async {
     await _pumpHost(tester);
 
     await tester.enterText(

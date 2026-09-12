@@ -11,10 +11,12 @@ void main() {
 ''');
     expect(bundle.metadata['ti'], '测试');
     expect(bundle.lines.length, 2);
-    expect(bundle.lines[0].start,
-        const Duration(minutes: 0, seconds: 1));
+    expect(bundle.lines[0].start, const Duration(minutes: 0, seconds: 1));
     expect(bundle.lines[0].text, '第一行');
-    expect(bundle.lines[1].start, const Duration(seconds: 4, milliseconds: 500));
+    expect(
+      bundle.lines[1].start,
+      const Duration(seconds: 4, milliseconds: 500),
+    );
   });
 
   test('一行多个时间戳展开为多行', () {
@@ -26,7 +28,10 @@ void main() {
 
   test('offset 标签整体偏移（正值提前）', () {
     final bundle = LrcParser.parse('[offset:500]\n[00:05.00]歌词');
-    expect(bundle.lines.single.start, const Duration(seconds: 4, milliseconds: 500));
+    expect(
+      bundle.lines.single.start,
+      const Duration(seconds: 4, milliseconds: 500),
+    );
   });
 
   test('两位小数按厘秒解释', () {
@@ -64,22 +69,29 @@ void main() {
   });
 
   test('mergeTranslations 按就近合并且尊重阈值', () {
-    final base = LyricBundle(lines: [
-      LyricLine(text: 'a', start: const Duration(seconds: 1)),
-      LyricLine(text: 'b', start: const Duration(seconds: 10)),
-    ]).lines;
-    final trans = LyricBundle(lines: [
-      LyricLine(text: '甲', start: const Duration(milliseconds: 1200)),
-      LyricLine(text: '乙', start: const Duration(seconds: 12)),
-    ]).lines;
+    final base =
+        LyricBundle(
+          lines: [
+            LyricLine(text: 'a', start: const Duration(seconds: 1)),
+            LyricLine(text: 'b', start: const Duration(seconds: 10)),
+          ],
+        ).lines;
+    final trans =
+        LyricBundle(
+          lines: [
+            LyricLine(text: '甲', start: const Duration(milliseconds: 1200)),
+            LyricLine(text: '乙', start: const Duration(seconds: 12)),
+          ],
+        ).lines;
 
     LyricBundle.mergeTranslations(base: base, translations: trans);
     expect(base[0].translation, '甲');
 
     // 超过阈值不合并不影响下一行匹配
-    final far = LyricBundle(lines: [
-      LyricLine(text: '远', start: const Duration(seconds: 9)),
-    ]).lines;
+    final far =
+        LyricBundle(
+          lines: [LyricLine(text: '远', start: const Duration(seconds: 9))],
+        ).lines;
     LyricBundle.mergeTranslations(
       base: [base[1]],
       translations: far,

@@ -42,8 +42,7 @@ class _PasswordLoginViewState extends ConsumerState<PasswordLoginView> {
   Future<void> _submit() async {
     final fields = widget.login.passwordFields;
     final values = <String, String>{
-      for (final field in fields)
-        field.key: _controllerFor(field).text.trim(),
+      for (final field in fields) field.key: _controllerFor(field).text.trim(),
     };
     if (values.values.any((v) => v.isEmpty)) {
       setState(() => _error = '请完整填写所有字段');
@@ -58,11 +57,9 @@ class _PasswordLoginViewState extends ConsumerState<PasswordLoginView> {
     setState(() => _submitting = false);
     switch (result) {
       case AuthSuccess(:final account, :final credentials):
-        await ref.read(accountsProvider.notifier).completeLogin(
-              widget.sourceId,
-              credentials,
-              account,
-            );
+        await ref
+            .read(accountsProvider.notifier)
+            .completeLogin(widget.sourceId, credentials, account);
         if (!mounted) return;
         Navigator.of(context).pop(true);
       case AuthFailure(:final message):
@@ -96,10 +93,7 @@ class _PasswordLoginViewState extends ConsumerState<PasswordLoginView> {
             const SizedBox(height: 16),
           ],
           if (_error != null) ...[
-            Text(
-              _error!,
-              style: TextStyle(fontSize: 13, color: scheme.error),
-            ),
+            Text(_error!, style: TextStyle(fontSize: 13, color: scheme.error)),
             const SizedBox(height: 12),
           ],
           FilledButton(
@@ -112,14 +106,17 @@ class _PasswordLoginViewState extends ConsumerState<PasswordLoginView> {
               ),
             ),
             onPressed: _submitting ? null : _submit,
-            child: _submitting
-                ? const SizedBox(
-                    width: 20,
-                    height: 20,
-                    child: CircularProgressIndicator(
-                        strokeWidth: 2, color: Colors.white),
-                  )
-                : const Text('登录'),
+            child:
+                _submitting
+                    ? const SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: Colors.white,
+                      ),
+                    )
+                    : const Text('登录'),
           ),
           const SizedBox(height: 12),
           Text(

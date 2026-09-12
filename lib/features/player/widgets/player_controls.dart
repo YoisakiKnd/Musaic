@@ -27,7 +27,10 @@ class PlayerControls extends ConsumerWidget {
           icon: Icon(
             Icons.shuffle_rounded,
             size: 22,
-            color: state.shuffleOn ? accent : scheme.onSurface.withValues(alpha: 0.6),
+            color:
+                state.shuffleOn
+                    ? accent
+                    : scheme.onSurface.withValues(alpha: 0.6),
           ),
         ),
         IconButton(
@@ -68,9 +71,10 @@ class PlayerControls extends ConsumerWidget {
               PlayMode.loopOne => Icons.repeat_one_rounded,
             },
             size: 22,
-            color: state.mode == PlayMode.sequential
-                ? scheme.onSurface.withValues(alpha: 0.6)
-                : accent,
+            color:
+                state.mode == PlayMode.sequential
+                    ? scheme.onSurface.withValues(alpha: 0.6)
+                    : accent,
           ),
         ),
       ],
@@ -111,22 +115,23 @@ class _PlayPauseButton extends ConsumerWidget {
             width: 72,
             height: 72,
             child: Center(
-              child: busy
-                  ? SizedBox(
-                      width: 26,
-                      height: 26,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2.4,
-                        color: Colors.white.withValues(alpha: 0.9),
+              child:
+                  busy
+                      ? SizedBox(
+                        width: 26,
+                        height: 26,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2.4,
+                          color: Colors.white.withValues(alpha: 0.9),
+                        ),
+                      )
+                      : Icon(
+                        state.playing
+                            ? Icons.pause_rounded
+                            : Icons.play_arrow_rounded,
+                        size: 42,
+                        color: Colors.white,
                       ),
-                    )
-                  : Icon(
-                      state.playing
-                          ? Icons.pause_rounded
-                          : Icons.play_arrow_rounded,
-                      size: 42,
-                      color: Colors.white,
-                    ),
             ),
           ),
         ),

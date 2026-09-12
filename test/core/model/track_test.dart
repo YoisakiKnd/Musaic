@@ -2,15 +2,15 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:musaic/core/model/track.dart';
 
 Track _sample() => const Track(
-      id: '186016',
-      sourceId: 'netease',
-      title: '晴天',
-      artist: '周杰伦',
-      album: '叶惠美',
-      duration: Duration(milliseconds: 269546),
-      coverUrl: 'https://example.com/cover.jpg',
-      sourceData: {'neteaseId': 186016},
-    );
+  id: '186016',
+  sourceId: 'netease',
+  title: '晴天',
+  artist: '周杰伦',
+  album: '叶惠美',
+  duration: Duration(milliseconds: 269546),
+  coverUrl: 'https://example.com/cover.jpg',
+  sourceData: {'neteaseId': 186016},
+);
 
 void main() {
   test('key 由渠道与曲目 id 组成', () {

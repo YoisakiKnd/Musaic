@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:just_audio/just_audio.dart' as ja;
 
+import '../../core/logging/app_logger.dart';
 import '../../core/di/app_providers.dart';
 import '../../core/error/source_exception.dart';
 import '../../core/model/track.dart';
@@ -214,6 +215,50 @@ class PlayerNotifier extends Notifier<PlayerState> {
   @visibleForTesting
   int debugPositionTicks = 0;
 
+  // ---------- 仅供测试驱动（P0 回归守护） ----------
+
+  /// 自动推进重入闸门当前值。
+  ///
+  /// 该标志泄漏为 true 会让播放态同步与自动切歌永久失效，
+  /// 必须可被测试直接断言。
+  @visibleForTesting
+  bool get debugAutoAdvancing => _autoAdvancing;
+
+  @visibleForTesting
+  set debugAutoAdvancing(bool value) => _autoAdvancing = value;
+
+  /// 当前洗牌序列（长度必须恒等于队列长度）。
+  @visibleForTesting
+  List<int>? get debugShuffleOrder => _shuffleOrder;
+
+  /// 直接注入队列/模式，绕过真实网络解析。
+  @visibleForTesting
+  void debugSeedState({
+    required List<Track> queue,
+    int currentIndex = 0,
+    PlayMode mode = PlayMode.sequential,
+    bool shuffleOn = false,
+    int? sleepSongsRemaining,
+  }) {
+    state = state.copyWith(
+      queue: List<Track>.unmodifiable(queue),
+      currentIndex: currentIndex,
+      mode: mode,
+      shuffleOn: shuffleOn,
+      sleepSongsRemaining: sleepSongsRemaining,
+    );
+    _shuffleOrder =
+        shuffleOn ? List<int>.generate(queue.length, (i) => i) : null;
+  }
+
+  /// 驱动「自然播完」推进路径。
+  @visibleForTesting
+  Future<void> debugAdvanceOnComplete() => _advanceOnComplete();
+
+  /// 驱动加载路径（用于越界守卫断言）。
+  @visibleForTesting
+  Future<void> debugLoadAndPlay(int index) => _loadAndPlay(index);
+
   // ---------- 对外操作 ----------
 
   /// 用一份队列开始播放（Master Plan §3.3：UI 点歌 → playQueue）。
@@ -320,11 +365,14 @@ class PlayerNotifier extends Notifier<PlayerState> {
     }
 
     state = state.copyWith(queue: List<Track>.unmodifiable(result.queue));
+    // 洗牌序列长度必须始终等于队列长度，否则 nextIndex 会返回越界下标
+    // （P0：shuffle 下移除当前曲 → RangeError 崩溃）。
+    // 因此无论是否移除当前曲，只要洗牌开启就重建序列。
+    if (state.shuffleOn) _reshuffleKeepingCurrent();
     if (result.removedCurrent) {
       await _loadAndPlay(result.currentIndex);
     } else {
       state = state.copyWith(currentIndex: result.currentIndex);
-      if (state.shuffleOn) _reshuffleKeepingCurrent();
     }
     _syncSystemQueue();
   }
@@ -371,6 +419,10 @@ class PlayerNotifier extends Notifier<PlayerState> {
     if (advance == null) {
       // 队列尽头：必须暂停 just_audio，让系统会话/通知同步为暂停态。
       // 否则通知栏停留在过期的 PLAYING，前台服务也一直挂着（EMU 实测）。
+      //
+      // 同时复位 _autoAdvancing：用户在「自然播完」的异步窗口内手动点
+      // 下一首时也会走到这里，若不复位则该闸门永久关闭（P0 回归）。
+      _autoAdvancing = false;
       await _handler.pause();
       state = state.copyWith(
         playing: false,
@@ -460,6 +512,23 @@ class PlayerNotifier extends Notifier<PlayerState> {
 
   void clearError() => state = state.copyWith(error: null);
 
+  /// 重试当前曲目：清空错误后重新解析并播放。
+  ///
+  /// 与 [playAt] 的区别在于必须绕过「下标越界即返回」的短路——
+  /// 当前曲被移除后 [currentIndex] 可能已越界，此时回到队首重试。
+  Future<void> retry() async {
+    if (!state.hasQueue) {
+      clearError();
+      return;
+    }
+    final index =
+        state.currentIndex >= 0 && state.currentIndex < state.queue.length
+            ? state.currentIndex
+            : 0;
+    state = state.copyWith(error: null);
+    await _loadAndPlay(index);
+  }
+
   Future<void> _onSystemSkipToNext() => next();
 
   Future<void> _onSystemSkipToPrevious() => previous();
@@ -484,6 +553,9 @@ class PlayerNotifier extends Notifier<PlayerState> {
   }
 
   Future<void> _loadAndPlay(int index) async {
+    // 越界守卫：洗牌序列/队列在并发变更下可能短暂失配，
+    // 此处是最后一道防线（release 下 assert 被剥离，必须显式判断）。
+    if (index < 0 || index >= state.queue.length) return;
     final seq = ++_loadSeq;
     final track = state.queue[index];
     state = state.copyWith(
@@ -515,7 +587,7 @@ class PlayerNotifier extends Notifier<PlayerState> {
       }
       if (seq != _loadSeq) return; // 已被更新的加载请求取代
       if (kDebugMode) {
-        debugPrint(
+        AppLog.debug(
           'MusaicPlayer stream: source=${track.sourceId} '
           '(local=${resolved.isLocalFile})',
         );
@@ -551,13 +623,14 @@ class PlayerNotifier extends Notifier<PlayerState> {
       _persistResume(force: true);
     } on SourceException catch (e) {
       if (seq != _loadSeq) return;
-      debugPrint('MusaicPlayer SourceException: ${e.message}');
+      AppLog.debug('MusaicPlayer SourceException: ${e.message}');
       state = state.copyWith(loading: false, playing: false, error: e.message);
     } catch (e, st) {
       if (seq != _loadSeq) return;
-      debugPrint('MusaicPlayer 播放异常: $e');
-      debugPrint(
-        'MusaicPlayer 堆栈首行: ${st.toString().split('\n').take(4).join(' | ')}',
+      AppLog.debug('MusaicPlayer 播放异常: $e');
+      AppLog.debug(
+        'MusaicPlayer 堆栈首行: '
+        '${st.toString().split('\n').take(4).join(' | ')}',
       );
       state = state.copyWith(
         loading: false,
@@ -595,23 +668,31 @@ class PlayerNotifier extends Notifier<PlayerState> {
   }
 
   /// 自然播完推进：先消化「剩余 N 首」定时，再进入下一曲。
+  ///
+  /// [_autoAdvancing] 必须在**所有**退出路径复位（含队列尽头与
+  /// 「剩余 N 首」停止）。该标志是 [_onPlayerStateChanged] 的重入闸门：
+  /// 一旦泄漏为 true，播放态同步与后续自动切歌将永久失效（P0 回归）。
   Future<void> _advanceOnComplete() async {
-    final remaining = state.sleepSongsRemaining;
-    if (remaining != null) {
-      if (remaining <= 1) {
-        state = state.copyWith(sleepSongsRemaining: null);
-        await _handler.pause();
-        if (!_disposed) {
-          state = state.copyWith(
-            playing: false,
-            position: state.duration ?? state.position,
-          );
+    try {
+      final remaining = state.sleepSongsRemaining;
+      if (remaining != null) {
+        if (remaining <= 1) {
+          state = state.copyWith(sleepSongsRemaining: null);
+          await _handler.pause();
+          if (!_disposed) {
+            state = state.copyWith(
+              playing: false,
+              position: state.duration ?? state.position,
+            );
+          }
+          return;
         }
-        return;
+        state = state.copyWith(sleepSongsRemaining: remaining - 1);
       }
-      state = state.copyWith(sleepSongsRemaining: remaining - 1);
+      await next();
+    } finally {
+      _autoAdvancing = false;
     }
-    await next();
   }
 
   bool _disposed = false;

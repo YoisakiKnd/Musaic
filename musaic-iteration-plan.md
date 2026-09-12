@@ -109,15 +109,17 @@ Musaic 是一个跨平台、多渠道、沉浸式音乐播放器：
 
 ### 3.3 当前主要缺口
 
-- Release 签名配置不完整。
-- 核心文件存在未提交和未跟踪风险。
-- 没有完整 CI、集成测试和覆盖率门禁。
-- 播放器状态机缺少测试。
-- 本地扫描仍在 UI isolate 中执行。
-- 播放页可能因位置更新进行大范围重建。
-- 搜索首屏仍等待全部渠道。
-- WebView Cookie 过滤、播放 URL 日志和酷狗请求安全需要整改。
-- Hive 启动损坏恢复、备份导入回滚尚未完成。
+> 本清单已于实现核对后重写：原先列出的「本地扫描仍在 UI isolate」「播放页大范围
+> 重建」「搜索首屏等待全部渠道」「备份导入回滚未完成」等项**均已落地**，继续按
+> 旧清单排期会误导。以下为实测仍然存在的缺口。
+
+- 集成测试与覆盖率门槛未建立（无 `integration_test/`）。
+- 真机 release 性能与功耗基线未实测（`docs/benchmarks.md` 中 6 项待实测）。
+- 缓存预算（网络封面 100MB / 本地封面 256MB）与 `StorageMaintenanceService` 未实现。
+- 大列表仍非 Sliver 懒加载；历史记录裁剪仍是全表 decode + sort。
+- ID3 大标签固定 512KB 头预算会截断；非 UTF-8（GBK）标签解码未回退。
+- WebDAV 同步、自定义渠道、同渠道多账号未实现。
+- 桌面端（≥1200dp 三栏 / 最小化生命周期降级）未做。
 
 ---
 
@@ -221,15 +223,15 @@ capabilities.dart
 
 ## 6.2 任务清单
 
-| ID | 任务 | 代码/配置范围 | 优先级 |
-|---|---|---|---|
-| I0-01 | 整理未提交和未跟踪文件 | Git 工作树、`lib/`、`test/` | 🔴 |
-| I0-02 | 确认 Android/macOS 可启动 | `android/`、`macos/` | 🔴 |
-| I0-03 | 恢复最小 CI | `.github/workflows/ci.yml` | 🔴 |
-| I0-04 | 增加格式和静态分析门禁 | `analysis_options.yaml`、CI | 高 |
-| I0-05 | 建立性能基线文档 | `docs/benchmarks.md` | 高 |
-| I0-06 | 统一文档入口 | `docs/`、README | 中 |
-| I0-07 | 引入版本号单一来源 | `pubspec.yaml`、关于页 | 中 |
+| ID | 任务 | 代码/配置范围 | 优先级 | 状态 |
+|---|---|---|---|---|
+| I0-01 | 整理未提交和未跟踪文件 | Git 工作树、`lib/`、`test/` | 🔴 | ✅ 已完成 |
+| I0-02 | 确认 Android/macOS 可启动 | `android/`、`macos/` | 🔴 | ✅ Android debug 构建通过（含 AGP 9 兼容修复） |
+| I0-03 | 恢复最小 CI | `.github/workflows/ci.yml` | 🔴 | ✅ 已完成（format + analyze + test + Android 冒烟） |
+| I0-04 | 增加格式和静态分析门禁 | `analysis_options.yaml`、CI | 高 | ✅ 已完成（全库 format 通过） |
+| I0-05 | 建立性能基线文档 | `docs/benchmarks.md` | 高 | 🟡 文档在，真机 release 数据待实测 |
+| I0-06 | 统一文档入口 | `docs/`、README | 中 | 🟡 README 已对齐实现，文档尚未全部迁入 docs/ |
+| I0-07 | 引入版本号单一来源 | `pubspec.yaml`、关于页 | 中 | ✅ 已完成（`lib/core/app_info.dart` + 守护测试） |
 
 ## 6.3 CI 第一版
 

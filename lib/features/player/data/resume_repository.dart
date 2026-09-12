@@ -28,20 +28,26 @@ class ResumePlayback {
   Track? get track => index >= 0 && index < queue.length ? queue[index] : null;
 
   Map<String, dynamic> toJson() => <String, dynamic>{
-        'queue': queue.map((t) => t.toJson()).toList(),
-        'index': index,
-        'positionMs': position.inMilliseconds,
-        'mode': mode.name,
-        'shuffleOn': shuffleOn,
-        'savedAt': savedAt.millisecondsSinceEpoch,
-      };
+    'queue': queue.map((t) => t.toJson()).toList(),
+    'index': index,
+    'positionMs': position.inMilliseconds,
+    'mode': mode.name,
+    'shuffleOn': shuffleOn,
+    'savedAt': savedAt.millisecondsSinceEpoch,
+  };
 
   factory ResumePlayback.fromJson(Map<String, dynamic> json) {
+    final queue =
+        (json['queue'] as List<dynamic>)
+            .map((t) => Track.fromJson(Map<String, dynamic>.from(t as Map)))
+            .toList();
+    // 越界 index 会让 [track] 恒为 null，快照被静默丢弃（旧数据 / 版本
+    // 迁移后常见）。这里把 index 钳到合法区间，保证可恢复。
+    final rawIndex = json['index'] as int? ?? 0;
+    final index = queue.isEmpty ? -1 : rawIndex.clamp(0, queue.length - 1);
     return ResumePlayback(
-      queue: (json['queue'] as List<dynamic>)
-          .map((t) => Track.fromJson(Map<String, dynamic>.from(t as Map)))
-          .toList(),
-      index: json['index'] as int,
+      queue: queue,
+      index: index,
       position: Duration(milliseconds: json['positionMs'] as int? ?? 0),
       mode: PlayMode.values.firstWhere(
         (m) => m.name == json['mode'],
@@ -81,23 +87,33 @@ class ResumeRepository {
   }
 
   Future<void> save(ResumePlayback snapshot) async {
+    if (snapshot.queue.isEmpty) {
+      await clear();
+      return;
+    }
     var queue = snapshot.queue;
-    var index = snapshot.index;
+    // 越界 index 会写出「无法恢复」的快照，钳到合法区间再裁剪。
+    var index = snapshot.index.clamp(0, queue.length - 1);
     if (queue.length > maxQueuePersist) {
       final start = (index - 150).clamp(0, queue.length - 1);
-      queue = queue.sublist(start, (start + maxQueuePersist).clamp(0, queue.length));
+      queue = queue.sublist(
+        start,
+        (start + maxQueuePersist).clamp(0, queue.length),
+      );
       index = index - start;
     }
     await box.put(
       _key,
-      jsonEncode(ResumePlayback(
-        queue: queue,
-        index: index,
-        position: snapshot.position,
-        mode: snapshot.mode,
-        shuffleOn: snapshot.shuffleOn,
-        savedAt: snapshot.savedAt,
-      ).toJson()),
+      jsonEncode(
+        ResumePlayback(
+          queue: queue,
+          index: index,
+          position: snapshot.position,
+          mode: snapshot.mode,
+          shuffleOn: snapshot.shuffleOn,
+          savedAt: snapshot.savedAt,
+        ).toJson(),
+      ),
     );
   }
 

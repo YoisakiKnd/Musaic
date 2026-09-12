@@ -3,17 +3,25 @@
 > 日期：2026-08-26 ｜ 依据：架构评审 + 依赖治理重构 + 本轮代码核查
 > 原则：每条改进都必须落到具体文件/行为，可验证、可度量；「先兑现，再修复，后提升，终扩展」。
 >
-> **进度快照（2026-08-27，commit f16a685 → 0c70490+）**
+> **进度快照（2026-09 复核）**
 >
 > | 状态 | 条目 |
 > |---|---|
-> | ✅ 已完成 | F1（含 Android service/receiver 缺失根因修复 + A13 通知权限）· F2（网络超时可调）· F3（定时多模式）· F4（队列管理+系统队列打通）· F5（搜索分页）· F8（本地封面取色兜底）· F9（过期引导）· B1（收藏 O(1)）· B4 · B7 · N1a/N1b/N1c（倍速/歌词偏移/音质档位）；新增：断点续播、资料库 JSON 导出/导入 |
-> | ⏸ 待办 | F6 YTM 歌词、F7 QQ 账号歌单 —— 均需协议调研（接口未经真机验证前不盲写）；D/P/U/E 系列按里程碑排期 |
+> | ✅ 已完成 | F1 · F2 · F3 · F4 · F5 · **F6 YTM 歌词** · **F7 QQ 账号歌单** · F8 · F9 · B1 · B4 · B7 · **B6 账号歌单失败可重试** · N1a/N1b/N1c · **N2 m3u 导入导出** · **E1 架构守护测试** · **E3 版本号单一来源** · **H4 统一脱敏日志** · **H21 诊断导出**；新增：断点续播、资料库 JSON 导出/导入 |
+> | ⏸ 待办 | D/P/U 系列（设计语言与体验）、WebDAV 同步、自定义渠道、集成测试与覆盖率门槛、真机 release 基线 |
 >
----|---|
-| **P0-a 落地架构重构** | 上一轮 45 文件改动（能力接口 / core 契约上移 / 401 全渠道接线 / 凭据缓存）需按 P0/P1/P2 拆 3~4 个 commit 入库，否则本计划所有工作与之混染 |
-| **P0-b 恢复 CI** | `flutter analyze + flutter test` 最小流水线；git 历史显示 CI 曾被主动移除，需确认原因（网络/成本）后重建，至少跑本地 pre-push |
-| **P0-c 真机回归基线** | 重构触碰了四渠道 create/poll 登录链路与 library 歌单页，合入前 Android + macOS 各过一遍：扫码登录 → 播放 → 歌词 → 账号歌单 → 登出 |
+> **本轮（2026-09）修复的缺陷**：P0 级 5 项（自动推进闸门泄漏、沉浸模式错误不可见、
+> 洗牌移除越界崩溃、本地歌单路由转义、QQ MQTT 孤儿 completer）、
+> P1 级 10 余项（401 业务码检测失效、系统队列删歌、酷狗凭据进 URL、
+> 分页契约、provider 无界缓存、备份导入原子性/互斥等）。
+> 全部附带**已验证能捕获原缺陷**的回归测试。
+>
+> 前置结论：
+> | 项 | 状态 |
+> |---|---|
+> | **P0-a 落地架构重构** | ✅ 已入库 |
+> | **P0-b 恢复 CI** | ✅ `.github/workflows/ci.yml`（format + analyze + test + Android 冒烟） |
+> | **P0-c 真机回归基线** | ⏸ 仍待真机执行（模拟器已验证构建与主链路） |
 
 ---
 
@@ -28,8 +36,8 @@
 | F3 | 定时关闭只有「倒计时」一种：一次性 `Timer`（`player_notifier.setSleepTimer`）在 app 被系统挂起时不可靠，且无「播完当前曲目停止」「N 首后停止」 | 补两种模式（后者在 `_onPlayerStateChanged/completed → next()` 链路上数歌数，天然可靠）；倒计时模式在 UI 文案注明「播放中生效」 | M |
 | F4 | 播放队列宣称「队列管理」实为只读清单（`player_page._openQueueSheet`）；且 `MusaicAudioHandler` 从未 `setQueue`，`queueIndex` 恒 0 → 车机/系统媒体中心看到空队列 | PlayerNotifier 增加 `removeAt/move/reorder`；队列面板支持拖拽排序 + 滑动删除；将 `mediaItem + queue + queueIndex` 接入 audio_service，使锁屏/车机获得真实队列上下文 | M |
 | F5 | 搜索宣称分页但从未使用：`MusicSource.search(offset)` 渠道端已实现，UI 固定 `limit: 20` 一锤子（`search_page`/`search_results_page` 无 offset/加载更多）；结果要等最慢渠道全部返回才出现 | 每渠道滚动到底自动续拉（offset += 20）；配合把 `Future.wait` 改为逐渠道流式落地：每个渠道一节，先到先渲染 + 骨架屏；QQ smartbox ≤10 条限制在 UI 明示 | M |
-| F6 | 「逐字歌词」实际只有网易云兑现；YTM `fetchLyrics => null` 无字幕来源 | 接入 YTM captions/timedtext 通道（LRC 级起步）；QQ/酷狗的 qrc/krc 为私有加密——与「不破解」免责声明冲突，README 渠道矩阵显式标注各渠道歌词精度等级，不假装支持 | M |
-| F7 | 账号歌单仅网易云一家 | QQ 实现 `RemotePlaylistCapable`（musicu.fcg `music.disktop.Sara.GetSysPlayList` 类接口，复用已有 comm 基建）；酷狗接口不稳定，暂缓 | M |
+| F6 ✅ | 「逐字歌词」实际只有网易云兑现；YTM `fetchLyrics => null` 无字幕来源 | 接入 YTM captions/timedtext 通道（LRC 级起步）；QQ/酷狗的 qrc/krc 为私有加密——与「不破解」免责声明冲突，README 渠道矩阵显式标注各渠道歌词精度等级，不假装支持 | M |
+| F7 ✅ | 账号歌单仅网易云一家 | QQ 实现 `RemotePlaylistCapable`（musicu.fcg `music.disktop.Sara.GetSysPlayList` 类接口，复用已有 comm 基建）；酷狗接口不稳定，暂缓 | M |
 | F8 | 本地文件无沉浸取色：`dynamic_color_provider.dart:39` 明示「本地路径等暂不支持」 | `CoverPalette` 支持 `file://`（palette_generator 接受字节，读 `local` 渠道内嵌封面已落盘的缓存 jpg 即可） | S |
 | F9 | 三态状态机「已过期」后无引导：expired 徽章只存在于账号页 | 过期时全局 banner/SnackBar 一次性引导（「QQ 音乐登录已过期，点此重新登录」），点击直达通用登录页（重构后只需 `QrLoginPage(sourceId)`，成本低） | S |
 

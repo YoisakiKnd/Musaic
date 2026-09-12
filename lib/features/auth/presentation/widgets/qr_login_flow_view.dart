@@ -128,21 +128,25 @@ class _QrLoginFlowViewState extends ConsumerState<QrLoginFlowView> {
     String? nickname,
   ) async {
     final display = nickname ?? widget.flow.fallbackNickname;
-    await ref.read(accountsProvider.notifier).completeLogin(
+    await ref
+        .read(accountsProvider.notifier)
+        .completeLogin(
           widget.sourceId,
           credentials,
           SourceAccount.markNow(
             sourceId: widget.sourceId,
             status: AccountStatus.loggedIn,
-            userId: widget.flow.userIdCredentialKey == null
-                ? null
-                : credentials[widget.flow.userIdCredentialKey!],
+            userId:
+                widget.flow.userIdCredentialKey == null
+                    ? null
+                    : credentials[widget.flow.userIdCredentialKey!],
             nickname: display,
           ),
         );
     if (!mounted) return;
-    ScaffoldMessenger.of(context)
-        .showSnackBar(SnackBar(content: Text('欢迎，$display')));
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text('欢迎，$display')));
     Navigator.of(context).pop(true);
   }
 
@@ -164,53 +168,55 @@ class _QrLoginFlowViewState extends ConsumerState<QrLoginFlowView> {
               child: SizedBox(
                 width: 200,
                 height: 200,
-                child: session == null
-                    ? const Center(
-                        child:
-                            CircularProgressIndicator(strokeWidth: 2),
-                      )
-                    : Stack(
-                        alignment: Alignment.center,
-                        children: [
-                          if (session.hasPng)
-                            Image.memory(session.png!,
-                                width: 200, height: 200)
-                          else if (session.contentUrl != null)
-                            QrImageView(
-                              data: session.contentUrl!,
-                              size: 200,
-                              backgroundColor: Colors.white,
-                            ),
-                          if (_showRefresh)
-                            Positioned.fill(
-                              child: Container(
-                                color:
-                                    Colors.black.withValues(alpha: 0.75),
-                                child: Column(
-                                  mainAxisAlignment:
-                                      MainAxisAlignment.center,
-                                  children: [
-                                    Text(
-                                      _status,
-                                      textAlign: TextAlign.center,
-                                      style: const TextStyle(
+                child:
+                    session == null
+                        ? const Center(
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                        : Stack(
+                          alignment: Alignment.center,
+                          children: [
+                            if (session.hasPng)
+                              Image.memory(
+                                session.png!,
+                                width: 200,
+                                height: 200,
+                              )
+                            else if (session.contentUrl != null)
+                              QrImageView(
+                                data: session.contentUrl!,
+                                size: 200,
+                                backgroundColor: Colors.white,
+                              ),
+                            if (_showRefresh)
+                              Positioned.fill(
+                                child: Container(
+                                  color: Colors.black.withValues(alpha: 0.75),
+                                  child: Column(
+                                    mainAxisAlignment: MainAxisAlignment.center,
+                                    children: [
+                                      Text(
+                                        _status,
+                                        textAlign: TextAlign.center,
+                                        style: const TextStyle(
                                           color: Colors.white,
-                                          fontSize: 13),
-                                    ),
-                                    const SizedBox(height: 8),
-                                    FilledButton(
-                                      style: FilledButton.styleFrom(
-                                          backgroundColor:
-                                              AppTokens.accent),
-                                      onPressed: _start,
-                                      child: const Text('刷新'),
-                                    ),
-                                  ],
+                                          fontSize: 13,
+                                        ),
+                                      ),
+                                      const SizedBox(height: 8),
+                                      FilledButton(
+                                        style: FilledButton.styleFrom(
+                                          backgroundColor: AppTokens.accent,
+                                        ),
+                                        onPressed: _start,
+                                        child: const Text('刷新'),
+                                      ),
+                                    ],
+                                  ),
                                 ),
                               ),
-                            ),
-                        ],
-                      ),
+                          ],
+                        ),
               ),
             ),
             const SizedBox(height: 20),

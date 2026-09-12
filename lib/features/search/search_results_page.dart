@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../core/logging/app_logger.dart';
 import '../../core/di/app_providers.dart';
 import '../../core/error/source_exception.dart';
 import '../../core/network/network_config.dart';
@@ -103,7 +104,7 @@ class _SearchResultsPageState extends ConsumerState<SearchResultsPage> {
     } on TimeoutException {
       _finishPending(sourceId, '响应超时');
     } catch (e) {
-      debugPrint('MusaicSearch[$sourceId] 异常: $e');
+      AppLog.debug('MusaicSearch[$sourceId] 异常: $e');
       _finishPending(sourceId, '搜索失败');
     }
   }

@@ -28,13 +28,15 @@ class Track {
       title: json['title']! as String,
       artist: json['artist']! as String,
       album: json['album'] as String?,
-      duration: rawDuration == null
-          ? null
-          : Duration(milliseconds: rawDuration as int),
+      duration:
+          rawDuration == null
+              ? null
+              : Duration(milliseconds: rawDuration as int),
       coverUrl: rawCover as String?,
-      sourceData: rawSource == null
-          ? null
-          : Map<String, dynamic>.from(rawSource as Map<dynamic, dynamic>),
+      sourceData:
+          rawSource == null
+              ? null
+              : Map<String, dynamic>.from(rawSource as Map<dynamic, dynamic>),
     );
   }
 
@@ -72,33 +74,32 @@ class Track {
           identical(duration, _unset) ? this.duration : duration as Duration?,
       coverUrl:
           identical(coverUrl, _unset) ? this.coverUrl : coverUrl as String?,
-      sourceData: identical(sourceData, _unset)
-          ? this.sourceData
-          : sourceData as Map<String, dynamic>?,
+      sourceData:
+          identical(sourceData, _unset)
+              ? this.sourceData
+              : sourceData as Map<String, dynamic>?,
     );
   }
 
   static const Object _unset = Object();
 
   Map<String, dynamic> toJson() => <String, dynamic>{
-        'id': id,
-        'sourceId': sourceId,
-        'title': title,
-        'artist': artist,
-        if (album != null) 'album': album,
-        if (duration != null) 'duration': duration!.inMilliseconds,
-        if (coverUrl != null) 'coverUrl': coverUrl,
-        if (sourceData != null) 'sourceData': sourceData,
-      };
+    'id': id,
+    'sourceId': sourceId,
+    'title': title,
+    'artist': artist,
+    if (album != null) 'album': album,
+    if (duration != null) 'duration': duration!.inMilliseconds,
+    if (coverUrl != null) 'coverUrl': coverUrl,
+    if (sourceData != null) 'sourceData': sourceData,
+  };
 
   @override
-  String toString() =>
-      'Track($key, title: $title, artist: $artist)'; // 日志不含凭据类信息
+  String toString() => 'Track($key, title: $title, artist: $artist)'; // 日志不含凭据类信息
 
   @override
   bool operator ==(Object other) =>
-      identical(this, other) ||
-      other is Track && other.key == key;
+      identical(this, other) || other is Track && other.key == key;
 
   @override
   int get hashCode => key.hashCode;

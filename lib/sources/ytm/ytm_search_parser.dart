@@ -1,4 +1,5 @@
 import '../../core/model/track.dart';
+import '../../core/network/response_decoder.dart';
 
 /// InnerTube 搜索结果解析（WEB_REMIX）。
 ///
@@ -11,9 +12,10 @@ List<Track> extractYtmSearchTracks(
 }) {
   final results = <Track>[];
   for (final section in _searchSections(root)) {
-    final shelf = _asMap(section)?['musicShelfRenderer'] ??
+    final shelf =
+        _asMap(section)?['musicShelfRenderer'] ??
         _asMap(section)?['musicCardShelfRenderer'];
-    final items = _asMap(shelf)?['contents'] as List<dynamic>?;
+    final items = asList(_asMap(shelf)?['contents']);
     for (final item in items ?? const <dynamic>[]) {
       final track = parseYtmListItem(_asMap(item), sourceId: sourceId);
       if (track != null) results.add(track);
@@ -29,10 +31,8 @@ List<dynamic> _searchSections(Map<String, dynamic>? root) {
     'tabs',
   ]);
   if (tabbed is List && tabbed.isNotEmpty) {
-    final tabContent =
-        _asMap(_asMap(tabbed.first)?['tabRenderer'])?['content'];
-    final sections =
-        _asMap(tabContent)?['sectionListRenderer']?['contents'];
+    final tabContent = _asMap(_asMap(tabbed.first)?['tabRenderer'])?['content'];
+    final sections = _asMap(tabContent)?['sectionListRenderer']?['contents'];
     if (sections is List) return sections;
   }
   final twoCol = _path(root, [
@@ -53,35 +53,35 @@ Track? parseYtmListItem(
   if (item == null) return null;
   final renderer = _asMap(item['musicResponsiveListItemRenderer']) ?? item;
 
-  final videoId = _path(renderer, ['playlistItemData', 'videoId']) as String? ??
-      _path(renderer, [
-        'navigationEndpoint',
-        'watchEndpoint',
-        'videoId',
-      ]) as String?;
+  final videoId =
+      asStringOrNull(_path(renderer, ['playlistItemData', 'videoId'])) ??
+      asStringOrNull(
+        _path(renderer, ['navigationEndpoint', 'watchEndpoint', 'videoId']),
+      );
   if (videoId == null || videoId.isEmpty) return null;
 
-  final flexColumns =
-      renderer['flexColumns'] as List<dynamic>? ?? const <dynamic>[];
+  final flexColumns = asList(renderer['flexColumns']) ?? const <dynamic>[];
   String title = '';
   final artists = <String>[];
   String? album;
   Duration? duration;
 
   for (var i = 0; i < flexColumns.length; i++) {
-    final runs = _path(_asMap(flexColumns[i]), [
-          'musicResponsiveListItemFlexColumnRenderer',
-          'text',
-          'runs',
-        ]) as List<dynamic>?;
+    final runs = asList(
+      _path(_asMap(flexColumns[i]), [
+        'musicResponsiveListItemFlexColumnRenderer',
+        'text',
+        'runs',
+      ]),
+    );
     if (runs == null || runs.isEmpty) continue;
     if (i == 0) {
-      title = _asMap(runs.first)?['text'] as String? ?? '';
+      title = asStringOrNull(_asMap(runs.first)?['text']) ?? '';
       continue;
     }
     for (final rawRun in runs) {
       final run = _asMap(rawRun);
-      final text = run?['text'] as String? ?? '';
+      final text = asStringOrNull(run?['text']) ?? '';
       final watch = _path(run, ['navigationEndpoint', 'watchEndpoint']);
       final pageType = _path(run, [
         'navigationEndpoint',
@@ -101,15 +101,17 @@ Track? parseYtmListItem(
   }
   if (title.isEmpty) return null;
 
-  final thumbs = _path(renderer, [
-        'thumbnail',
-        'musicThumbnailRenderer',
-        'thumbnail',
-        'thumbnails',
-      ]) as List<dynamic>?;
+  final thumbs = asList(
+    _path(renderer, [
+      'thumbnail',
+      'musicThumbnailRenderer',
+      'thumbnail',
+      'thumbnails',
+    ]),
+  );
   String? coverUrl;
   if (thumbs != null && thumbs.isNotEmpty) {
-    coverUrl = _asMap(thumbs.last)?['url'] as String?;
+    coverUrl = asStringOrNull(_asMap(thumbs.last)?['url']);
   }
 
   return Track(
@@ -150,5 +152,4 @@ dynamic _path(Map<String, dynamic>? map, List<String> keys) {
   return current;
 }
 
-Map<String, dynamic>? _asMap(dynamic value) =>
-    value is Map ? Map<String, dynamic>.from(value) : null;
+Map<String, dynamic>? _asMap(dynamic value) => asMap(value);

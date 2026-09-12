@@ -8,8 +8,7 @@ abstract final class LrcParser {
   static final RegExp _stamp = RegExp(
     r'^\[(\d{1,3}):(\d{1,2})(?:[.:](\d{1,3}))?\]',
   );
-  static final RegExp _metaTag =
-      RegExp(r'^\[([a-zA-Z#]+):([^\]]*)\]');
+  static final RegExp _metaTag = RegExp(r'^\[([a-zA-Z#]+):([^\]]*)\]');
 
   static LyricBundle parse(String source) {
     final timed = <(Duration, String)>[];
@@ -41,8 +40,11 @@ abstract final class LrcParser {
         final minutes = int.parse(m.group(1)!);
         final seconds = int.parse(m.group(2)!);
         final fractionStr = m.group(3) ?? '0';
-        final fractionMs = int.parse(fractionStr) *
-            (fractionStr.length == 2 ? 10 : (fractionStr.length == 1 ? 100 : 1));
+        final fractionMs =
+            int.parse(fractionStr) *
+            (fractionStr.length == 2
+                ? 10
+                : (fractionStr.length == 1 ? 100 : 1));
         stamps.add(
           Duration(
             minutes: minutes,
@@ -57,8 +59,7 @@ abstract final class LrcParser {
       final content = line.trim();
       if (content.isEmpty) continue; // 纯间奏标记行
       for (final stamp in stamps) {
-        final shifted =
-            stamp - Duration(milliseconds: offsetMs);
+        final shifted = stamp - Duration(milliseconds: offsetMs);
         timed.add((shifted.isNegative ? Duration.zero : shifted, content));
       }
     }

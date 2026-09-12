@@ -33,11 +33,7 @@ abstract final class NeteaseCrypto {
   static IV get _iv16 => IV.fromUtf8(_iv);
 
   static final Encrypter _presetEncrypter = Encrypter(
-    AES(
-      Key.fromUtf8(_presetKey),
-      mode: AESMode.cbc,
-      padding: 'PKCS7',
-    ),
+    AES(Key.fromUtf8(_presetKey), mode: AESMode.cbc, padding: 'PKCS7'),
   );
 
   /// 生成 weapi 请求体参数。
@@ -48,24 +44,21 @@ abstract final class NeteaseCrypto {
     final text = jsonEncode(payload);
     final secretKey = _randomSecretKey(random ?? Random.secure());
 
-    final step1 = _presetEncrypter
-        .encrypt(text, iv: _iv16)
-        .base64;
-    final step2 = Encrypter(
-      AES(
-        Key.fromUtf8(secretKey),
-        mode: AESMode.cbc,
-        padding: 'PKCS7',
-      ),
-    ).encrypt(step1, iv: _iv16).base64;
+    final step1 = _presetEncrypter.encrypt(text, iv: _iv16).base64;
+    final step2 =
+        Encrypter(
+          AES(Key.fromUtf8(secretKey), mode: AESMode.cbc, padding: 'PKCS7'),
+        ).encrypt(step1, iv: _iv16).base64;
 
     return (params: step2, encSecKey: _rsaNoPadHex(secretKey));
   }
 
   /// 密码 MD5 十六进制（网易云登录要求传 MD5）。
-  static String md5Hex(String input) => md5.convert(utf8.encode(input)).toString();
+  static String md5Hex(String input) =>
+      md5.convert(utf8.encode(input)).toString();
 
-  static String _randomSecretKey(Random random) => List.generate(
+  static String _randomSecretKey(Random random) =>
+      List.generate(
         16,
         (_) => _charset[random.nextInt(_charset.length)],
       ).join();
@@ -73,15 +66,14 @@ abstract final class NeteaseCrypto {
   /// RSA 无填充：secret 字节逆序 → 大整数 → modPow(e, n) → 256 位 hex。
   static String _rsaNoPadHex(String secret) {
     final reversed = secret.codeUnits.reversed.toList();
-    final hexOfReversed = reversed
-        .map((c) => c.toRadixString(16).padLeft(2, '0'))
-        .join();
+    final hexOfReversed =
+        reversed.map((c) => c.toRadixString(16).padLeft(2, '0')).join();
     final message = BigInt.parse(hexOfReversed, radix: 16);
     final exponent = BigInt.parse('010001', radix: 16);
     final modulus = BigInt.parse(_publicKeyModulus, radix: 16);
-    return message.modPow(exponent, modulus).toRadixString(16).padLeft(
-          256,
-          '0',
-        );
+    return message
+        .modPow(exponent, modulus)
+        .toRadixString(16)
+        .padLeft(256, '0');
   }
 }

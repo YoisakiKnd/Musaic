@@ -25,6 +25,12 @@
 
 ### 首轮实测发现并修复的 Bug
 
+0. **AGP 9 构建阻塞**（P0，2026-09 修复）：`flutter_inappwebview_android` 1.1.3
+   使用 AGP 9 已移除的 `proguard-android.txt`，干净 pub cache 下 Android 构建直接失败。
+   官方 1.2.0-beta.3 已修但版本约束与父插件 6.1.5 冲突。改由
+   `android/settings.gradle.kts` 的 `gradle.beforeProject` 钩子在配置阶段改写插件脚本，
+   不依赖 pub cache 状态；原 `tool/patch_inappwebview_gradle.sh` 已删除。
+
 1. **MainActivity 继承错误**（P0）：继承了 `FlutterFragmentActivity` 而 audio_service 要求 `AudioServiceActivity`，导致 `AudioService.init` 抛 PlatformException 且被静默吞掉——通知栏/锁屏/媒体键全部失效。修复 + init 失败改为显式 debugPrint。
 2. **队列尽头通知过期**：`next()` 在末曲后只重置应用内状态，系统会话停留过期 PLAYING、前台服务悬挂。修复：末曲后暂停 just_audio，会话/通知/前台同步。
 3. **ListTile 诊断刷屏**（debug-only）：MiniPlayer（10Hz 重建 × ListTile）+ TrackTile 位于带背景容器内，每次重建触发「ink splashes may be invisible」。已设 `tileColor: Colors.transparent` 修复两处主源；残留偶发项（与续播快照状态相关、debug-only）待后续定位。
@@ -52,6 +58,17 @@
 | 列表页滚动 | 实时模糊着色器执行 | 0 次/帧 | 已达成（MiniPlayer 静态磨砂替代 BackdropFilter） | 2026-08 | 代码审查 |
 | 蜂窝播放默认码率 | ≤192kbps | 已达成（蜂窝自动降质默认开启） | 2026-08 | 设置层矩阵单测 |
 | 切歌瞬间主 isolate 占用 | <8ms | 待实测 | — | DevTools |
+| QQ 封面补全并发 | ≤4 路 | 已达成（信号量限流，`_coverConcurrency = 4`） | 2026-09 | 代码审查 + 单测 |
+| Android debug 构建（干净 pub cache） | 可构建 | 已达成（Gradle 钩子修 AGP 9 兼容，无需手工补丁） | 2026-09 | `flutter build apk --debug` |
+
+### 静态质量门禁（2026-09 实测）
+
+| 指标 | 结果 |
+|---|---|
+| `flutter analyze --no-pub` | No issues found |
+| `flutter test --no-pub` | All tests passed |
+| `dart format --set-exit-if-changed lib test` | 通过（0 文件需改动） |
+| 架构守护测试 | 通过（core/features/sources 分层铁律） |
 
 ### 已落地的功耗行为（代码级保障）
 

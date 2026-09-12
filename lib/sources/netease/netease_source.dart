@@ -1,17 +1,17 @@
-import 'dart:convert';
-import 'dart:developer' as developer;
 import 'dart:math';
 
 import 'package:dio/dio.dart';
 
 import 'netease_crypto.dart';
 
+import '../../core/logging/app_logger.dart';
 import '../../core/error/source_exception.dart';
 import '../../core/utils/url_utils.dart';
 import '../../core/model/remote_playlist.dart';
 import '../../core/model/track.dart';
-import '../../core/network/network_config.dart';
+import '../../core/network/response_decoder.dart';
 import '../../core/network/source_auth_interceptor.dart';
+import '../../core/network/source_dio.dart';
 import '../../core/source/capabilities.dart';
 import '../../core/source/music_source.dart';
 import '../../core/auth/auth_capability.dart';
@@ -79,32 +79,17 @@ class NeteaseSource extends MusicSource
     ),
   );
 
-  late final Dio _dio = _buildDio();
-
-  Dio _buildDio() {
-    final dio = Dio(
-      BaseOptions(
-        baseUrl: 'https://music.163.com',
-        connectTimeout: NetworkConfig.instance.connect,
-        receiveTimeout: NetworkConfig.instance.receive,
-        headers: <String, String>{
-          'Referer': 'https://music.163.com',
-          'User-Agent':
-              'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15',
-        },
-        validateStatus: (int? code) => code != null && code < 500,
-      ),
-    );
-    dio.interceptors.add(
-      SourceAuthInterceptor(
-        sourceId: NeteaseSource.id,
-        readCredentials: credentialReader,
-        onSessionExpired: () => onSessionExpired?.call(),
-      ),
-    );
-    dio.interceptors.add(TimeoutInterceptor());
-    return dio;
-  }
+  late final Dio _dio = buildSourceDio(
+    sourceId: NeteaseSource.id,
+    baseUrl: 'https://music.163.com',
+    readCredentials: credentialReader,
+    onSessionExpired: onSessionExpired,
+    headers: <String, String>{
+      'Referer': 'https://music.163.com',
+      'User-Agent':
+          'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15',
+    },
+  );
 
   // ---------- 音乐能力 ----------
 
@@ -132,7 +117,7 @@ class NeteaseSource extends MusicSource
         options: Options(responseType: ResponseType.plain),
       );
       final result = _asMap(_decoded(response)['result']);
-      final songs = result?['songs'] as List<dynamic>?;
+      final songs = asList(result?['songs']);
       if (songs == null) return const <Track>[];
       final tracks =
           songs.map(_trackFromSearchSong).whereType<Track>().toList();
@@ -141,10 +126,10 @@ class NeteaseSource extends MusicSource
       await _fillCoversFromDetail(tracks);
       return List.unmodifiable(tracks);
     } on DioException catch (e) {
-      developer.log(
+      AppLog.debug(
         'search 失败: type=${e.type} '
         'status=${e.response?.statusCode} msg=${e.message}',
-        name: 'MusaicNetease',
+        tag: 'MusaicNetease',
       );
       throw NetworkSourceException('搜索失败：网络异常', sourceId: sourceId);
     }
@@ -160,18 +145,19 @@ class NeteaseSource extends MusicSource
         queryParameters: <String, dynamic>{'ids': '[$songId]'},
         options: Options(responseType: ResponseType.plain),
       );
-      final songs = _decoded(response)?['songs'] as List<dynamic>?;
+      final songs = asList(_decoded(response)?['songs']);
       if (songs == null || songs.isEmpty) return track;
       final detail = _asMap(songs.first);
       if (detail == null) return track;
       final album = _asMap(detail['album']);
+      final durationMs = asIntOrNull(detail['duration']);
       return track.copyWith(
-        album: (album?['name'] as String?) ?? track.album,
-        coverUrl: (album?['picUrl'] as String?)?.toHttps() ?? track.coverUrl,
+        album: asStringOrNull(album?['name']) ?? track.album,
+        coverUrl: asStringOrNull(album?['picUrl'])?.toHttps() ?? track.coverUrl,
         duration:
-            detail['duration'] is int
-                ? Duration(milliseconds: detail['duration'] as int)
-                : track.duration,
+            durationMs == null
+                ? track.duration
+                : Duration(milliseconds: durationMs),
       );
     } catch (_) {
       return track; // 详情失败不影响播放
@@ -194,13 +180,13 @@ class NeteaseSource extends MusicSource
         },
         options: Options(responseType: ResponseType.plain),
       );
-      final data = _asMap(_decoded(response))?['data'] as List<dynamic>?;
+      final data = asList(_asMap(_decoded(response))?['data']);
       if (data == null || data.isEmpty) {
         throw UnavailableStreamException('该曲目暂不可播放', sourceId: sourceId);
       }
       final item = _asMap(data.first);
-      final url = item?['url'] as String?;
-      final code = item?['code'] as int? ?? -1;
+      final url = asStringOrNull(item?['url']);
+      final code = asIntOrNull(item?['code']) ?? -1;
       if (url == null || url.isEmpty || code != 200) {
         // 分级提示：未登录引导登录；已登录则说明版权/会员限制
         final loggedIn = await _hasCredentials();
@@ -399,10 +385,12 @@ class NeteaseSource extends MusicSource
         },
       );
       final data = _asMap(_decoded(response));
-      final code = data?['code'] as int? ?? -1;
+      final code = asIntOrNull(data?['code']) ?? -1;
       if (code != 200) {
         final message =
-            data?['message'] as String? ?? data?['msg'] as String? ?? '';
+            asStringOrNull(data?['message']) ??
+            asStringOrNull(data?['msg']) ??
+            '';
         return AuthFailure(
           reason: AuthFailureReason.invalidCredentials,
           message: message.isEmpty ? '手机号或密码错误（code $code）' : message,
@@ -410,7 +398,7 @@ class NeteaseSource extends MusicSource
       }
       final musicU =
           _extractMusicU(response) ??
-          _musicUFromBodyCookie(data?['cookie'] as String?);
+          _musicUFromBodyCookie(asStringOrNull(data?['cookie']));
       if (musicU == null || musicU.isEmpty) {
         return const AuthFailure(
           reason: AuthFailureReason.serverError,
@@ -418,14 +406,14 @@ class NeteaseSource extends MusicSource
         );
       }
       final profile = _asMap(data?['profile']);
-      final nickname = profile?['nickname'] as String? ?? '';
+      final nickname = asStringOrNull(profile?['nickname']) ?? '';
       return AuthSuccess(
         SourceAccount.markNow(
           sourceId: sourceId,
           status: AccountStatus.loggedIn,
           userId: profile?['userId']?.toString(),
           nickname: nickname.isEmpty ? '网易云用户' : nickname,
-          avatarUrl: profile?['avatarUrl'] as String?,
+          avatarUrl: asStringOrNull(profile?['avatarUrl']),
         ),
         credentials: {'MUSIC_U': musicU},
       );
@@ -447,21 +435,22 @@ class NeteaseSource extends MusicSource
         skipAuth: true,
       );
     } on DioException catch (e) {
-      developer.log(
+      AppLog.debug(
         'createQrLogin DioException: type=${e.type} '
         'status=${e.response?.statusCode} msg=${e.message} '
         'error=${e.error}',
-        name: 'MusaicNetease',
+        tag: 'MusaicNetease',
       );
       rethrow;
     }
-    developer.log(
-      'createQrLogin status=${response.statusCode} '
-      'body=${response.data}',
-      name: 'MusaicNetease',
-    );
     final data = _asMap(_decoded(response));
-    final key = data?['unikey'] as String? ?? '';
+    // 只记录结构与状态，**不打印响应体**：该响应含登录 unikey。
+    AppLog.debug(
+      'createQrLogin status=${response.statusCode} '
+      'bodyKeys=${data?.keys.toList()}',
+      tag: 'MusaicNetease',
+    );
+    final key = asStringOrNull(data?['unikey']) ?? '';
     if (key.isEmpty) {
       throw NetworkSourceException('获取登录二维码失败', sourceId: sourceId);
     }
@@ -479,7 +468,7 @@ class NeteaseSource extends MusicSource
       skipAuth: true,
     );
     final data = _asMap(_decoded(response));
-    final code = data?['code'] as int? ?? -1;
+    final code = asIntOrNull(data?['code']) ?? -1;
     switch (code) {
       case 800:
         return QrLoginPoll.expired();
@@ -488,10 +477,11 @@ class NeteaseSource extends MusicSource
       case 803:
         final musicU =
             _extractMusicU(response) ??
-            _musicUFromBodyCookie(data?['cookie'] as String? ?? '');
-        developer.log(
-          '二维码授权成功：musicU=${musicU == null ? '缺失' : '已取得(${musicU.length}字符)'}',
-          name: 'MusaicNetease',
+            _musicUFromBodyCookie(asStringOrNull(data?['cookie']) ?? '');
+        AppLog.info(
+          '二维码授权成功：musicU='
+          '${musicU == null ? '缺失' : '已取得(${musicU.length}字符)'}',
+          tag: 'MusaicNetease',
         );
         if (musicU == null || musicU.isEmpty) {
           throw NetworkSourceException('授权成功但未取得登录凭据，请重试', sourceId: sourceId);
@@ -506,7 +496,7 @@ class NeteaseSource extends MusicSource
           nickname: nickname,
         );
       default:
-        developer.log('二维码轮询 code=$code', name: 'MusaicNetease');
+        AppLog.debug('二维码轮询 code=$code', tag: 'MusaicNetease');
         return QrLoginPoll.waiting();
     }
   }
@@ -525,7 +515,7 @@ class NeteaseSource extends MusicSource
       cookieHeader = 'MUSIC_U=$musicU';
     }
     final profile = await _fetchProfile(cookie: cookieHeader);
-    final nickname = profile?['nickname'] as String?;
+    final nickname = asStringOrNull(profile?['nickname']);
     if (profile == null || nickname == null || nickname.isEmpty) {
       return null;
     }
@@ -542,12 +532,12 @@ class NeteaseSource extends MusicSource
       final vipData = _asMap(_decoded(vipResp))?['data'];
       final redPlus = _asMap(vipData)?['redplus'];
       final vipType =
-          _asMap(redPlus)?['vipType'] as int? ??
-          _asMap(vipData)?['vipType'] as int? ??
+          asIntOrNull(_asMap(redPlus)?['vipType']) ??
+          asIntOrNull(_asMap(vipData)?['vipType']) ??
           0;
       final level =
-          _asMap(redPlus)?['redVipLevel'] as int? ??
-          _asMap(vipData)?['redVipLevel'] as int?;
+          asIntOrNull(_asMap(redPlus)?['redVipLevel']) ??
+          asIntOrNull(_asMap(vipData)?['redVipLevel']);
       vipLabel = switch (vipType) {
         10 => 'VIP${level != null ? ' Lv$level' : ''}',
         11 => '学生会员',
@@ -577,7 +567,7 @@ class NeteaseSource extends MusicSource
       queryParameters: <String, dynamic>{'uid': userId, 'limit': 100},
       options: Options(responseType: ResponseType.plain),
     );
-    final list = _asMap(_decoded(response))?['playlist'] as List<dynamic>?;
+    final list = asList(_asMap(_decoded(response))?['playlist']);
     if (list == null) return const <RemotePlaylist>[];
     return list
         .map(_parseUserPlaylist)
@@ -588,16 +578,16 @@ class NeteaseSource extends MusicSource
   RemotePlaylist? _parseUserPlaylist(dynamic raw) {
     final p = _asMap(raw);
     if (p == null) return null;
-    final id = p['id'] as int?;
-    final name = p['name'] as String?;
+    final id = asIntOrNull(p['id']);
+    final name = asStringOrNull(p['name']);
     if (id == null || name == null) return null;
     return RemotePlaylist(
       sourceId: sourceId,
       id: '$id',
       name: name,
-      trackCount: p['trackCount'] as int? ?? 0,
-      coverUrl: (p['coverImgUrl'] as String?)?.toHttps(),
-      playCount: p['playCount'] as int? ?? 0,
+      trackCount: asIntOrNull(p['trackCount']) ?? 0,
+      coverUrl: asStringOrNull(p['coverImgUrl'])?.toHttps(),
+      playCount: asIntOrNull(p['playCount']) ?? 0,
     );
   }
 
@@ -611,9 +601,9 @@ class NeteaseSource extends MusicSource
       queryParameters: <String, dynamic>{'id': id},
       options: Options(responseType: ResponseType.plain),
     );
-    final tracks =
-        _asMap(_asMap(_decoded(response))?['result'])?['tracks']
-            as List<dynamic>?;
+    final tracks = asList(
+      _asMap(_asMap(_decoded(response))?['result'])?['tracks'],
+    );
     if (tracks == null) return const <Track>[];
     return tracks.map(_trackFromDetailSong).whereType<Track>().toList();
   }
@@ -621,23 +611,23 @@ class NeteaseSource extends MusicSource
   Track? _trackFromDetailSong(dynamic raw) {
     final song = _asMap(raw);
     if (song == null) return null;
-    final songId = song['id'] as int?;
-    final name = song['name'] as String?;
+    final songId = asIntOrNull(song['id']);
+    final name = asStringOrNull(song['name']);
     if (songId == null || name == null) return null;
-    final artists = (song['artists'] as List<dynamic>? ?? const <dynamic>[])
-        .map((a) => _asMap(a)?['name'] as String?)
+    final artists = (asList(song['artists']) ?? const <dynamic>[])
+        .map((a) => asStringOrNull(_asMap(a)?['name']))
         .whereType<String>()
         .join('/');
     final album = _asMap(song['album']);
-    final durationMs = song['duration'] as int?;
+    final durationMs = asIntOrNull(song['duration']);
     return Track(
       id: '$songId',
       sourceId: NeteaseSource.id,
       title: name,
       artist: artists.isEmpty ? '未知歌手' : artists,
-      album: album?['name'] as String?,
+      album: asStringOrNull(album?['name']),
       duration: durationMs == null ? null : Duration(milliseconds: durationMs),
-      coverUrl: (album?['picUrl'] as String?)?.toHttps(),
+      coverUrl: asStringOrNull(album?['picUrl'])?.toHttps(),
       sourceData: <String, dynamic>{'neteaseId': songId},
     );
   }
@@ -672,7 +662,7 @@ class NeteaseSource extends MusicSource
     }
     try {
       final profile = await _fetchProfile(cookie: 'MUSIC_U=$cookieValue');
-      final nickname = profile?['nickname'] as String?;
+      final nickname = asStringOrNull(profile?['nickname']);
       if (profile == null || nickname == null || nickname.isEmpty) {
         return const AuthFailure(
           reason: AuthFailureReason.invalidCredentials,
@@ -685,7 +675,7 @@ class NeteaseSource extends MusicSource
           status: AccountStatus.loggedIn,
           userId: profile['userId']?.toString(),
           nickname: nickname,
-          avatarUrl: profile['avatarUrl'] as String?,
+          avatarUrl: asStringOrNull(profile['avatarUrl']),
         ),
         credentials: {'MUSIC_U': cookieValue},
       );
@@ -706,31 +696,18 @@ class NeteaseSource extends MusicSource
     // 上层据此保留乐观登录态，只有「确认无效」才返回 false。
     final profile = await _fetchProfile(cookie: 'MUSIC_U=$musicU');
     return profile != null &&
-        ((profile['nickname'] as String?)?.isNotEmpty ?? false);
+        ((asStringOrNull(profile['nickname'])?.isNotEmpty) ?? false);
   }
 
   // ---------- 工具 ----------
 
   /// 统一解码响应体：老接口返回的 Content-Type 常不是 application/json，
   /// Dio 会把 JSON 正文留成 String，这里手动解码兜底。
-  dynamic _decoded(Response<dynamic> response) {
-    final data = response.data;
-    if (data is String) {
-      final trimmed = data.trim();
-      if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
-        try {
-          return jsonDecode(trimmed);
-        } catch (_) {
-          return null;
-        }
-      }
-      return null;
-    }
-    return data;
-  }
+  dynamic _decoded(Response<dynamic> response) =>
+      decodeResponseBody(response.data);
 
   String? _lyricText(Map<String, dynamic> data, String key) {
-    final value = _asMap(data[key])?['lyric'] as String?;
+    final value = asStringOrNull(_asMap(data[key])?['lyric']);
     if (value == null || value.trim().isEmpty) return null;
     return value;
   }
@@ -746,7 +723,7 @@ class NeteaseSource extends MusicSource
       ),
     );
     final data = _asMap(_decoded(response));
-    if (data == null || (data['code'] as int? ?? -1) != 200) return null;
+    if (data == null || (asIntOrNull(data['code']) ?? -1) != 200) return null;
     return _asMap(data['profile']);
   }
 
@@ -761,8 +738,7 @@ class NeteaseSource extends MusicSource
   }
 
   int? _songIdOf(Track track) =>
-      (track.sourceData?['neteaseId'] as num?)?.toInt() ??
-      int.tryParse(track.id);
+      asIntOrNull(track.sourceData?['neteaseId']) ?? int.tryParse(track.id);
 
   /// 用 /api/song/detail 批量补全搜索结果的封面与专辑名（一次请求）。
   ///
@@ -781,18 +757,18 @@ class NeteaseSource extends MusicSource
         queryParameters: <String, dynamic>{'ids': '[${ids.join(',')}]'},
         options: Options(responseType: ResponseType.plain),
       );
-      final songs = _decoded(response)?['songs'] as List<dynamic>?;
+      final songs = asList(_decoded(response)?['songs']);
       if (songs == null) return;
       final picById = <int, String>{};
       final albumById = <int, String>{};
       for (final raw in songs) {
         final song = _asMap(raw);
-        final id = song?['id'] as int?;
+        final id = asIntOrNull(song?['id']);
         final album = _asMap(song?['album']);
-        final pic = (album?['picUrl'] as String?)?.toHttps();
+        final pic = asStringOrNull(album?['picUrl'])?.toHttps();
         if (song == null || id == null || pic == null) continue;
         picById[id] = pic;
-        final albumName = album?['name'] as String?;
+        final albumName = asStringOrNull(album?['name']);
         if (albumName != null) albumById[id] = albumName;
       }
       if (picById.isEmpty) return;
@@ -813,27 +789,26 @@ class NeteaseSource extends MusicSource
   Track? _trackFromSearchSong(dynamic raw) {
     final song = _asMap(raw);
     if (song == null) return null;
-    final songId = song['id'] as int?;
-    final name = song['name'] as String?;
+    final songId = asIntOrNull(song['id']);
+    final name = asStringOrNull(song['name']);
     if (songId == null || name == null) return null;
-    final artists = (song['artists'] as List<dynamic>? ?? const <dynamic>[])
-        .map((a) => _asMap(a)?['name'] as String?)
+    final artists = (asList(song['artists']) ?? const <dynamic>[])
+        .map((a) => asStringOrNull(_asMap(a)?['name']))
         .whereType<String>()
         .join('/');
     final album = _asMap(song['album']);
-    final durationMs = song['duration'] as int?;
+    final durationMs = asIntOrNull(song['duration']);
     return Track(
       id: '$songId',
       sourceId: NeteaseSource.id,
       title: name,
       artist: artists.isEmpty ? '未知歌手' : artists,
-      album: album?['name'] as String?,
+      album: asStringOrNull(album?['name']),
       duration: durationMs == null ? null : Duration(milliseconds: durationMs),
-      coverUrl: (album?['picUrl'] as String?)?.toHttps(),
+      coverUrl: asStringOrNull(album?['picUrl'])?.toHttps(),
       sourceData: <String, dynamic>{'neteaseId': songId},
     );
   }
 
-  Map<String, dynamic>? _asMap(dynamic value) =>
-      value is Map ? Map<String, dynamic>.from(value) : null;
+  Map<String, dynamic>? _asMap(dynamic value) => asMap(value);
 }

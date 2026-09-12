@@ -87,8 +87,18 @@ class MusaicAudioHandler extends BaseAudioHandler with SeekHandler {
 
   @override
   Future<void> removeQueueItem(dynamic mediaItem) async {
-    final key = mediaItem is String ? mediaItem : mediaItem?.toString();
-    if (key != null) await onRemoveQueueTrack?.call(key);
+    // Android 侧传入的是 MediaItem 实例，其 toString() 是整包 Map 序列化，
+    // 与 track.key 永不相等 → 通知栏/车机删歌静默失效。
+    // 必须按类型取出 id（P1 回归守护）。
+    final String? key = switch (mediaItem) {
+      null => null,
+      MediaItem() => mediaItem.id,
+      String() => mediaItem,
+      _ => mediaItem.toString(),
+    };
+    if (key != null && key.isNotEmpty) {
+      await onRemoveQueueTrack?.call(key);
+    }
   }
 
   @override

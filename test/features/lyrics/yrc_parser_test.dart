@@ -55,14 +55,8 @@ void main() {
   test('lineIndexAt 二分定位当前行', () {
     final bundle = YrcParser.parse(_yrcSample);
     expect(bundle.lineIndexAt(Duration.zero), -1);
-    expect(
-      bundle.lineIndexAt(const Duration(milliseconds: 12600)),
-      0,
-    );
-    expect(
-      bundle.lineIndexAt(const Duration(milliseconds: 16000)),
-      1,
-    );
+    expect(bundle.lineIndexAt(const Duration(milliseconds: 12600)), 0);
+    expect(bundle.lineIndexAt(const Duration(milliseconds: 16000)), 1);
   });
 
   test('YTLRC 翻译可按时间合并进主歌词', () {

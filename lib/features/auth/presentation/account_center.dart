@@ -43,12 +43,14 @@ class _SourceAccountTile extends ConsumerWidget {
     final scheme = Theme.of(context).colorScheme;
 
     final (statusLabel, statusColor) = switch (account.status) {
-      AccountStatus.loggedOut =>
-        ('未登录', scheme.onSurface.withValues(alpha: 0.5)),
+      AccountStatus.loggedOut => (
+        '未登录',
+        scheme.onSurface.withValues(alpha: 0.5),
+      ),
       AccountStatus.loggedIn => (
-          account.nickname ?? '已登录',
-          Colors.greenAccent.withValues(alpha: 0.9),
-        ),
+        account.nickname ?? '已登录',
+        Colors.greenAccent.withValues(alpha: 0.9),
+      ),
       AccountStatus.expired => ('已过期，请重新登录', Colors.orangeAccent),
     };
 
@@ -60,54 +62,66 @@ class _SourceAccountTile extends ConsumerWidget {
         ),
         leading: CircleAvatar(
           backgroundColor: AppTokens.accent.withValues(alpha: 0.15),
-          backgroundImage: account.avatarUrl == null
-              ? null
-              : NetworkImage(
-                  account.avatarUrl!,
-                  headers: coverHttpHeaders(account.avatarUrl!),
-                ),
-          child: account.avatarUrl == null
-              ? Text(
-                  source.displayName.characters.first,
-                  style: const TextStyle(
-                    fontWeight: FontWeight.w700,
-                    color: AppTokens.accent,
+          backgroundImage:
+              account.avatarUrl == null
+                  ? null
+                  : NetworkImage(
+                    account.avatarUrl!,
+                    headers: coverHttpHeaders(account.avatarUrl!),
                   ),
-                )
-              : null,
+          child:
+              account.avatarUrl == null
+                  ? Text(
+                    source.displayName.characters.first,
+                    style: const TextStyle(
+                      fontWeight: FontWeight.w700,
+                      color: AppTokens.accent,
+                    ),
+                  )
+                  : null,
         ),
-        title: Text(source.displayName,
-            style: const TextStyle(fontWeight: FontWeight.w600)),
+        title: Text(
+          source.displayName,
+          style: const TextStyle(fontWeight: FontWeight.w600),
+        ),
         subtitle: Row(
           children: [
             Container(
               width: 6,
               height: 6,
-              decoration:
-                  BoxDecoration(color: statusColor, shape: BoxShape.circle),
+              decoration: BoxDecoration(
+                color: statusColor,
+                shape: BoxShape.circle,
+              ),
             ),
             const SizedBox(width: 6),
             Flexible(
-              child: Text(statusLabel,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                      fontSize: 12,
-                      color: scheme.onSurface.withValues(alpha: 0.65))),
+              child: Text(
+                statusLabel,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontSize: 12,
+                  color: scheme.onSurface.withValues(alpha: 0.65),
+                ),
+              ),
             ),
           ],
         ),
-        trailing: account.isLoggedIn
-            ? IconButton(
-                tooltip: '登出',
-                icon: Icon(Icons.logout_rounded,
+        trailing:
+            account.isLoggedIn
+                ? IconButton(
+                  tooltip: '登出',
+                  icon: Icon(
+                    Icons.logout_rounded,
                     size: 20,
-                    color: scheme.onSurface.withValues(alpha: 0.6)),
-                onPressed: () => ref
-                    .read(accountsProvider.notifier)
-                    .logout(sourceId),
-              )
-            : null,
+                    color: scheme.onSurface.withValues(alpha: 0.6),
+                  ),
+                  onPressed:
+                      () =>
+                          ref.read(accountsProvider.notifier).logout(sourceId),
+                )
+                : null,
         onTap: () {
           if (source.authCapability.requiresLogin) {
             showLoginDialog(context, source);

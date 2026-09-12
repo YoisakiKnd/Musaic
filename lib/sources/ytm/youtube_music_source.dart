@@ -1,20 +1,22 @@
 import 'dart:convert';
-import 'dart:developer' as developer;
 
 import 'package:crypto/crypto.dart' as crypto;
 import 'package:dio/dio.dart';
 
+import '../../core/logging/app_logger.dart';
 import '../../core/error/source_exception.dart';
 import '../../core/model/track.dart';
-import '../../core/network/network_config.dart';
-import '../../core/network/source_auth_interceptor.dart';
+import '../../core/network/response_decoder.dart';
+import '../../core/network/source_dio.dart';
 import '../../core/source/capabilities.dart';
 import '../../core/source/music_source.dart';
 import '../../core/auth/auth_capability.dart';
 import '../../core/auth/auth_result.dart';
 import '../../core/auth/source_account.dart';
 import '../../core/auth/web_cookie_harvest.dart';
+import '../../core/lyrics/lrc_parser.dart';
 import '../../core/lyrics/lyric_bundle.dart';
+import 'ytm_lyrics_parser.dart';
 import 'ytm_search_parser.dart';
 
 /// YouTube Music 渠道（V1 匿名能力：搜索 / 播放直链）。
@@ -61,36 +63,21 @@ class YouTubeMusicSource extends MusicSource implements WebLoginCapable {
     ),
   );
 
-  late final Dio _dio = _buildDio();
-
-  Dio _buildDio() {
-    final dio = Dio(
-      BaseOptions(
-        connectTimeout: NetworkConfig.instance.connect,
-        receiveTimeout: NetworkConfig.instance.receive,
-        headers: <String, String>{
-          'Content-Type': 'application/json',
-          'Origin': 'https://music.youtube.com',
-          'User-Agent':
-              'Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 '
-              '(KHTML, like Gecko) Chrome/140.0.0.0 Mobile Safari/537.36',
-        },
-        validateStatus: (int? code) => code != null && code < 500,
-      ),
-    );
-    // YTM 自行按接口注入 Authorization/Cookie 头，这里仅做被动的会话过期捕获。
-    dio.interceptors.add(
-      SourceAuthInterceptor(
-        sourceId: YouTubeMusicSource.id,
-        readCredentials: credentialReader,
-        onSessionExpired: () => onSessionExpired?.call(),
-        injectCredentials: false,
-        expiredBodyCodes: const <int>{},
-      ),
-    );
-    dio.interceptors.add(TimeoutInterceptor());
-    return dio;
-  }
+  // YTM 自行按接口注入 Authorization/Cookie 头，这里仅做被动的会话过期捕获。
+  late final Dio _dio = buildSourceDio(
+    sourceId: YouTubeMusicSource.id,
+    readCredentials: credentialReader,
+    onSessionExpired: onSessionExpired,
+    injectCredentials: false,
+    expiredBodyCodes: const <int>{},
+    headers: <String, String>{
+      'Content-Type': 'application/json',
+      'Origin': 'https://music.youtube.com',
+      'User-Agent':
+          'Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 '
+          '(KHTML, like Gecko) Chrome/140.0.0.0 Mobile Safari/537.36',
+    },
+  );
 
   // ---------- WebLoginCapable ----------
 
@@ -118,7 +105,13 @@ class YouTubeMusicSource extends MusicSource implements WebLoginCapable {
   Future<AuthResult> loginWithWebCookies(Map<String, String> cookies) async {
     try {
       final account = await loginWithCookies(cookies);
-      return AuthSuccess(account, credentials: cookies);
+      // 只持久化会话所需的最小 Cookie 集合：采集阶段会读到
+      // accounts.google.com 域下的全部 Cookie，直接落盘会超出最小权限
+      // （P1 安全回归）。
+      return AuthSuccess(
+        account,
+        credentials: filterYoutubeSessionCookies(cookies),
+      );
     } on SourceException catch (e) {
       return AuthFailure(
         reason: AuthFailureReason.invalidCredentials,
@@ -135,7 +128,8 @@ class YouTubeMusicSource extends MusicSource implements WebLoginCapable {
   /// 非私密凭据：该 key 公开嵌在 YouTube 网页源码中，仅作客户端标识。
   /// 字面量分段拼接仅为避免 GitHub secret scanning 模式误报。
   static const String _innerTubeKey =
-      'AIzaSy' 'C9XL3ZjWddXya6X74dJoCTL-WEYFDNX30';
+      'AIzaSy'
+      'C9XL3ZjWddXya6X74dJoCTL-WEYFDNX30';
 
   Map<String, dynamic> _webRemixContext() => <String, dynamic>{
     'client': <String, dynamic>{
@@ -216,7 +210,7 @@ class YouTubeMusicSource extends MusicSource implements WebLoginCapable {
 
   @override
   Future<ResolvedStream> resolveStream(Track track) async {
-    final videoId = track.sourceData?['videoId'] as String? ?? track.id;
+    final videoId = asStringOrNull(track.sourceData?['videoId']) ?? track.id;
     if (videoId.isEmpty) {
       throw UnavailableStreamException('曲目缺少渠道标识', sourceId: sourceId);
     }
@@ -245,23 +239,25 @@ class YouTubeMusicSource extends MusicSource implements WebLoginCapable {
         },
       );
       final root = _asMap(response.data);
-      final playability =
-          _asMap(root?['playabilityStatus'])?['status'] as String?;
+      final playability = asStringOrNull(
+        _asMap(root?['playabilityStatus'])?['status'],
+      );
       if (playability != 'OK') {
         final reason =
-            _asMap(root?['playabilityStatus'])?['reason'] as String? ?? '不可播放';
+            asStringOrNull(_asMap(root?['playabilityStatus'])?['reason']) ??
+            '不可播放';
         throw UnavailableStreamException(reason, sourceId: sourceId);
       }
       final streamingData = _asMap(root?['streamingData']);
       final formats = <(int, String)>[]; // (bitrate, url) 仅音频
       for (final key in const ['adaptiveFormats', 'formats']) {
-        final list = streamingData?[key] as List<dynamic>?;
+        final list = asList(streamingData?[key]);
         if (list == null) continue;
         for (final raw in list) {
           final f = _asMap(raw);
-          final mime = f?['mimeType'] as String? ?? '';
-          final url = f?['url'] as String?;
-          final bitrate = f?['bitrate'] as int? ?? 0;
+          final mime = asStringOrNull(f?['mimeType']) ?? '';
+          final url = asStringOrNull(f?['url']);
+          final bitrate = asIntOrNull(f?['bitrate']) ?? 0;
           if (url != null && url.isNotEmpty && mime.startsWith('audio/')) {
             formats.add((bitrate, url));
           }
@@ -297,7 +293,80 @@ class YouTubeMusicSource extends MusicSource implements WebLoginCapable {
   }
 
   @override
-  Future<LyricBundle?> fetchLyrics(Track track) async => null;
+  Future<LyricBundle?> fetchLyrics(Track track) async {
+    final videoId = asStringOrNull(track.sourceData?['videoId']) ?? track.id;
+    if (videoId.isEmpty) return null;
+    try {
+      final lrc = await _fetchLyricsLrc(videoId);
+      if (lrc == null || lrc.trim().isEmpty) return null;
+      final bundle = LrcParser.parse(lrc);
+      return bundle.isEmpty ? null : bundle;
+    } catch (_) {
+      return null; // 歌词失败不影响播放
+    }
+  }
+
+  /// 拉取原始 LRC：优先 captions 轨道，回退 `next` 的 timedLyrics。
+  Future<String?> _fetchLyricsLrc(String videoId) async {
+    Map<String, String> authHeaders = const <String, String>{};
+    try {
+      authHeaders = await _youtubeAuthHeaders();
+    } catch (_) {}
+
+    // 1) player 响应里的 captionTracks.baseUrl
+    final player = await _dio.post<dynamic>(
+      'https://music.youtube.com/youtubei/v1/player',
+      queryParameters: const <String, dynamic>{
+        'prettyPrint': false,
+        'key': _innerTubeKey,
+      },
+      options: Options(
+        headers: <String, String>{
+          'X-YouTube-Client-Name': '67',
+          'X-YouTube-Client-Version': _webRemixVersion,
+          ...authHeaders,
+        },
+      ),
+      data: <String, dynamic>{
+        'context': _webRemixContext(),
+        'videoId': videoId,
+      },
+    );
+    final trackUrl = extractCaptionTrackUrl(_asMap(player.data));
+    if (trackUrl != null) {
+      final xml = await _dio.get<String>(
+        trackUrl,
+        options: Options(responseType: ResponseType.plain),
+      );
+      final lrc = timedTextXmlToLrc(xml.data ?? '');
+      if (lrc != null) return lrc;
+    }
+
+    // 2) next 响应的 timedLyricsModel.lyricsData（部分曲目带时间戳）
+    final next = await _dio.post<dynamic>(
+      'https://music.youtube.com/youtubei/v1/next',
+      queryParameters: const <String, dynamic>{
+        'prettyPrint': false,
+        'key': _innerTubeKey,
+      },
+      options: Options(
+        headers: <String, String>{
+          'X-YouTube-Client-Name': '67',
+          'X-YouTube-Client-Version': _webRemixVersion,
+          ...authHeaders,
+        },
+      ),
+      data: <String, dynamic>{
+        'context': _webRemixContext(),
+        'videoId': videoId,
+      },
+    );
+    final timed = extractTimedLyricsText(_asMap(next.data));
+    if (timed == null) return null;
+    // lyricsData 已经是 `[mm:ss.xx] 文本` 形态时直接可用；
+    // 否则当作纯文本，按行均分时间轴意义不大，此处仅接受带时间戳者。
+    return timed.contains(RegExp(r'\[\d{1,2}:\d{2}')) ? timed : null;
+  }
 
   // ---------- 账号能力（WebView 登录 + Cookie 凭据） ----------
 
@@ -369,9 +438,9 @@ class YouTubeMusicSource extends MusicSource implements WebLoginCapable {
       if (nickname == null || nickname.isEmpty) return null;
       return (nickname, accountid);
     } on DioException catch (e) {
-      developer.log(
+      AppLog.debug(
         'account_menu 失败: status=${e.response?.statusCode}',
-        name: 'MusaicYTM',
+        tag: 'MusaicYTM',
       );
       if (strict && e.response == null) {
         throw NetworkSourceException(
@@ -458,6 +527,5 @@ class YouTubeMusicSource extends MusicSource implements WebLoginCapable {
     return account.copyWith(nickname: info.$1);
   }
 
-  Map<String, dynamic>? _asMap(dynamic value) =>
-      value is Map ? Map<String, dynamic>.from(value) : null;
+  Map<String, dynamic>? _asMap(dynamic value) => asMap(value);
 }

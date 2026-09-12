@@ -2,40 +2,40 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:musaic/sources/ytm/ytm_search_parser.dart';
 
 Map<String, dynamic> _wrappedSong() => <String, dynamic>{
-      'musicResponsiveListItemRenderer': <String, dynamic>{
-        'playlistItemData': <String, dynamic>{'videoId': 'abc123'},
-        'flexColumns': <dynamic>[
-          <String, dynamic>{
-            'musicResponsiveListItemFlexColumnRenderer': <String, dynamic>{
-              'text': <String, dynamic>{
-                'runs': <dynamic>[
-                  <String, dynamic>{'text': '晴天'},
-                ],
-              },
-            },
-          },
-          <String, dynamic>{
-            'musicResponsiveListItemFlexColumnRenderer': <String, dynamic>{
-              'text': <String, dynamic>{
-                'runs': <dynamic>[
-                  <String, dynamic>{'text': '周杰伦'},
-                  <String, dynamic>{'text': '3:45'},
-                ],
-              },
-            },
-          },
-        ],
-        'thumbnail': <String, dynamic>{
-          'musicThumbnailRenderer': <String, dynamic>{
-            'thumbnail': <String, dynamic>{
-              'thumbnails': <dynamic>[
-                <String, dynamic>{'url': 'https://i.ytimg.com/vi/abc123/hq.jpg'},
-              ],
-            },
+  'musicResponsiveListItemRenderer': <String, dynamic>{
+    'playlistItemData': <String, dynamic>{'videoId': 'abc123'},
+    'flexColumns': <dynamic>[
+      <String, dynamic>{
+        'musicResponsiveListItemFlexColumnRenderer': <String, dynamic>{
+          'text': <String, dynamic>{
+            'runs': <dynamic>[
+              <String, dynamic>{'text': '晴天'},
+            ],
           },
         },
       },
-    };
+      <String, dynamic>{
+        'musicResponsiveListItemFlexColumnRenderer': <String, dynamic>{
+          'text': <String, dynamic>{
+            'runs': <dynamic>[
+              <String, dynamic>{'text': '周杰伦'},
+              <String, dynamic>{'text': '3:45'},
+            ],
+          },
+        },
+      },
+    ],
+    'thumbnail': <String, dynamic>{
+      'musicThumbnailRenderer': <String, dynamic>{
+        'thumbnail': <String, dynamic>{
+          'thumbnails': <dynamic>[
+            <String, dynamic>{'url': 'https://i.ytimg.com/vi/abc123/hq.jpg'},
+          ],
+        },
+      },
+    },
+  },
+};
 
 void main() {
   test('解开 musicResponsiveListItemRenderer 包装', () {

@@ -24,13 +24,27 @@
 | 设置中心 | 账号管理、外观、播放与性能（超时/缓存）、数据清除、关于 |
 | 安全 | 凭据仅入 Keychain/Keystore/DPAPI，永不明文落盘；日志脱敏；一键清除所有账号数据 |
 
+### 各渠道歌词精度（实测口径，勿按「计划」推断）
+
+| 渠道 | 歌词能力 | 实现位置 |
+|---|---|---|
+| 网易云 | **逐字（YRC）**，含翻译合并 | `core/lyrics/yrc_parser.dart` |
+| QQ 音乐 | 逐行（LRC，含翻译 `trans` 字段） | `qq_music_source.dart fetchLyrics` |
+| 酷狗 | 逐行（LRC；服务端返回 base64 时自动解码） | `kugou_source.dart fetchLyrics` |
+| YTM | 逐行（InnerTube captions timedtext → LRC 转换） | `sources/ytm/ytm_lyrics_parser.dart` |
+| 本地文件 | 逐行（同名 `.lrc` 与 ID3 USLT） | `sources/local/local_file_source.dart` |
+
+> 注意：只有网易云提供**词级**（逐字）时间轴；其余渠道为**逐行**。README 早期版本
+> 笼统写「三级降级」易被误读为全渠道逐字，此处按实测修正。
+
 ## 快速开始
 
 ```bash
 flutter pub get
 flutter run            # 默认设备
 flutter test           # 单元 + Widget 测试
-flutter analyze        # 静态检查（当前零警告基线）
+flutter analyze        # 静态检查（零警告基线）
+dart format lib test   # 格式门禁（CI 会校验）
 ```
 
 平台支持：Android / iOS / macOS / Windows。
@@ -38,20 +52,39 @@ flutter analyze        # 静态检查（当前零警告基线）
 > macOS 首次运行需在 Xcode 中确认 Runner 已启用 App Sandbox 并包含
 > `keychain-access-groups` entitlement（仓库内已配置），否则安全存储不可用。
 
+## 持续集成
+
+`.github/workflows/ci.yml` 在 push / PR 时执行三道门禁：
+
+1. `dart format --set-exit-if-changed lib test`（格式）
+2. `flutter analyze --no-pub`（零警告基线）
+3. `flutter test --no-pub`（单元 + Widget + 架构守护）
+
+并通过 `flutter build apk --debug` 做 Android 构建冒烟。
+
+**架构守护测试**：`test/architecture_test.dart` 断言分层依赖铁律
+（`core` 不依赖 `features`/`sources`；`features` 不 import `sources`；
+`sources` 不依赖 `features`），唯一豁免是 `lib/core/di/` 组合根。
+这条规则此前只是文档约定，现在不可回退。
+
+**版本号单一来源**：`lib/core/app_info.dart`，由 `test/core/app_info_test.dart`
+断言与 `pubspec.yaml` 一致。
+
 ## 架构速览
 
 ```
 lib/
 ├── app/                  # AppShell 自适应骨架 + go_router 路由表
 ├── core/
+│   ├── app_info.dart     # 版本号单一来源（与 pubspec 由测试守护）
 │   ├── theme/            # AppTokens 设计令牌（深色优先）
 │   ├── model/            # Track / RemotePlaylist 统一模型
 │   ├── auth/             # 跨渠道契约：AuthCapability / SourceAccount / QrLoginPoll
 │   ├── lyrics/           # LyricBundle + TTML/YRC/LRC 解析器（渠道共用的领域层）
 │   ├── source/           # MusicSource 抽象 + SourceRegistry + 可选能力接口
-│   ├── network/          # SourceAuthInterceptor（凭据注入/过期捕获）
+│   ├── network/          # source_dio 装配 / response_decoder 安全读取 / 认证拦截器
 │   ├── error/            # SourceException 异常族
-│   └── di/               # 组合根 Provider（override 注入）
+│   └── di/               # 组合根 Provider（override 注入；唯一允许跨层引用）
 ├── features/
 │   ├── auth/             # 账号系统（application/data/presentation）
 │   │   └── presentation/ # 通用登录 UI：QrLoginPage / WebLoginPage / 动态表单弹窗
@@ -76,6 +109,8 @@ lib/
 3. 渠道实现只依赖领域层；
 4. 凭据只能经 `AccountRepository` 进出安全存储。
 
+以上四条由 `test/architecture_test.dart` 自动校验，违反即 CI 失败。
+
 ## 新增一个渠道 = 三步
 
 1. 新建 `lib/sources/<id>/xxx_source.dart` 实现 `MusicSource`；
@@ -98,29 +133,42 @@ lib/
 
 ## 测试策略（Master Plan §15）
 
-- **单元**：Track 序列化、队列逻辑（模式/洗牌/回开头规则）、TTML/YRC/LRC 解析、ID3 解析、凭据存储命名空间隔离 / 输入清洗 / 读取缓存与失效、歌单批量写入与历史裁剪
+- **单元**：Track 序列化、队列逻辑（模式/洗牌/回开头规则）、TTML/YRC/LRC 解析、
+  YTM timedtext → LRC 转换、ID3 解析、凭据存储命名空间隔离 / 输入清洗 /
+  读取缓存与失效、歌单批量写入与历史裁剪、备份导入原子性与回滚、
+  会话过期被动捕获（含 `ResponseType.plain` 的 JSON 字符串体）、
+  QQ MQTT 等待队列语义、播放器自动推进闸门与洗牌越界守卫
 - **Widget**：登录弹窗动态表单渲染、失败提示、成功关闭路径、搜索结果页多渠道渲染
+- **架构**：分层依赖铁律（见上方「持续集成」）
+- **守护**：`AppInfo` 版本号与 `pubspec.yaml` 一致性
 
 ```bash
-flutter test   # 单元 + Widget 测试（含 MQTT 编解码）
+flutter test   # 单元 + Widget + 架构守护测试
 ```
 
-> 已知构建问题：`flutter_inappwebview_android` 1.1.3 与 AGP 9 的 proguard 配置不兼容，
-> 干净 pub cache 环境下构建 Android 前需执行 `bash tool/patch_inappwebview_gradle.sh`
-> （直接改本机 pub cache，**不可复现**，计划内替换为 `dependency_overrides` 指向已修 fork，见 TODO）。
+> **Android 构建**：`flutter_inappwebview_android` 1.1.3 的 Gradle 脚本使用了
+> AGP 9 已移除的 `proguard-android.txt`，会直接构建失败。官方在
+> 1.2.0-beta.3 修复，但该系列要求 `platform_interface ^1.4.0-beta`，
+> 与父插件 6.1.5 的 `^1.3.0` 约束冲突，无法直接升级。
+>
+> 现由 `android/settings.gradle.kts` 的 `gradle.beforeProject` 钩子在配置阶段
+> 改写插件脚本完成兼容，**不依赖 pub cache 状态，干净环境（CI / 新机器）
+> 同样生效**。此前的 `tool/patch_inappwebview_gradle.sh`（改本机 pub cache、
+> 不可复现）已删除。
 
 ## 路线图状态
 
-- [x] P0 地基（令牌/模型；CI 暂未启用）
+- [x] P0 地基（令牌/模型；CI 已启用）
 - [x] P1 播放核心（本地渠道 + MiniPlayer + 骨架）
 - [x] P2 多渠道骨架（抽象/注册中心/网易云匿名能力）
 - [x] P3 账号系统（声明式登录/安全存储/生命周期）
 - [x] P4 沉浸式播放器
-- [x] P5 逐字歌词
+- [x] P5 逐字歌词（网易云逐字 + 其余渠道逐行，见上方精度表）
 - [x] P6 内容页面
-- [x] P7 打磨（平台配置/测试/文档）
-- [x] V1.1 三渠道真实登录（网易云 weapi 手机+扫码 / QQ 音乐 App 扫码 / 酷狗 h5 扫码）
-- [ ] V1.2 YTM Google 授权、WebDAV 同步、自定义渠道（见 musaic-master-plan.md §18）
+- [x] P7 打磨（平台配置/测试/文档；集成测试与覆盖率门槛仍待补）
+- [x] V1.1 四渠道真实登录（网易云 weapi 手机+扫码 / QQ 音乐 App 扫码 / 酷狗 h5 扫码 / YTM WebView）
+- [ ] V1.2 WebDAV 同步、自定义渠道（见 musaic-master-plan.md §18）
+- [ ] 待实测：真机 release 性能与功耗基线（见 `docs/benchmarks.md`）
 
 ## 免责声明
 
