@@ -9,6 +9,7 @@ import '../../core/logging/app_logger.dart';
 import '../../core/di/app_providers.dart';
 import '../../core/error/source_exception.dart';
 import '../../core/model/track.dart';
+import '../../core/model/work_grouping.dart';
 import '../../core/source/music_source.dart' show ResolvedStream;
 import '../../core/network/network_config.dart';
 import '../../core/theme/app_tokens.dart';
@@ -33,6 +34,7 @@ class PlayerState {
     this.sleepTimerEndsAt,
     this.sleepSongsRemaining,
     this.error,
+    this.sourceSwitchNotice,
   });
 
   final List<Track> queue;
@@ -64,6 +66,12 @@ class PlayerState {
 
   final String? error;
 
+  /// 一次性换源提示（如「网易云不可用，已切换到 QQ 音乐」）。
+  ///
+  /// 放在 state 而非 notifier 私有字段：UI 需要 `ref.listen` 到它才能弹提示，
+  /// 私有字段无法被响应式观察到。消费后由 UI 调用 [clearSourceSwitchNotice]。
+  final String? sourceSwitchNotice;
+
   bool get hasQueue => queue.isNotEmpty;
 
   PlayerState copyWith({
@@ -80,6 +88,7 @@ class PlayerState {
     Object? sleepTimerEndsAt = _unset,
     Object? sleepSongsRemaining = _unset,
     Object? error = _unset,
+    Object? sourceSwitchNotice = _unset,
   }) {
     return PlayerState(
       queue: identical(queue, _unset) ? this.queue : queue! as List<Track>,
@@ -102,6 +111,10 @@ class PlayerState {
               ? this.sleepSongsRemaining
               : sleepSongsRemaining as int?,
       error: identical(error, _unset) ? this.error : error as String?,
+      sourceSwitchNotice:
+          identical(sourceSwitchNotice, _unset)
+              ? this.sourceSwitchNotice
+              : sourceSwitchNotice as String?,
     );
   }
 
@@ -135,6 +148,12 @@ class PlayerNotifier extends Notifier<PlayerState> {
 
   /// 随机模式洗牌序列（shuffleOn=false 时忽略）。
   List<int>? _shuffleOrder;
+
+  /// 跨渠道换源候选：曲目 key → 同作品在其它渠道的记录（D7）。
+  ///
+  /// 在 [playQueue] 时**一次性**算好（纯内存分组，零额外请求），
+  /// 播放失败时直接查表，避免在失败路径上再做网络或计算。
+  Map<String, List<Track>> _alternatives = const <String, List<Track>>{};
 
   @override
   PlayerState build() {
@@ -269,6 +288,8 @@ class PlayerNotifier extends Notifier<PlayerState> {
       _shuffleOrder = QueueLogic.shuffledOrder(tracks.length, random: _random);
       _moveCurrentToShuffleHead(currentIndex: index);
     }
+    // 换源候选只在整队列变更时重算：同一队列内切歌无需重复分组
+    _alternatives = buildAlternatives(tracks);
     state = state.copyWith(
       queue: List<Track>.unmodifiable(tracks),
       currentIndex: index,
@@ -569,26 +590,23 @@ class PlayerNotifier extends Notifier<PlayerState> {
     _autoAdvancing = false;
 
     try {
-      final registry = ref.read(sourceRegistryProvider);
-      final source = registry.resolve(track.sourceId);
-      if (source == null) {
-        throw NetworkSourceException(
-          '「${track.sourceId}」渠道不可用',
-          sourceId: track.sourceId,
-        );
-      }
-      final ResolvedStream resolved;
-      try {
-        resolved = await source
-            .resolveStream(track)
-            .timeout(Duration(seconds: NetworkConfig.instance.seconds * 2));
-      } on TimeoutException {
-        throw NetworkSourceException('解析播放地址超时', sourceId: track.sourceId);
-      }
-      if (seq != _loadSeq) return; // 已被更新的加载请求取代
+      // 跨渠道换源（D7）：先试当前渠道，仅在「确定不可用」时前进到下一渠道。
+      //
+      // 错误语义是设计的一部分，不是实现细节：
+      // - UnavailableStreamException（无版权/地区限制/需会员）→ 换源有意义
+      // - AuthRequiredException（未登录）→ 换源有意义（换匿名可用渠道）
+      // - NetworkSourceException（断网/超时）→ **不换源**，否则用户断网时
+      //   播放器会在四个渠道间空转数十秒，最后报一个与真实原因无关的错误
+      final resolved = await _resolveWithFallback(track, seq);
+      if (resolved == null) return; // 已被更新的加载请求取代
+
+      // 换源成功时 track 已更新为实际播放的那条记录，
+      // 后续元数据/历史/断点都必须用新记录，否则显示与实听不一致。
+      final effectiveTrack = _lastResolvedTrack ?? track;
+      if (seq != _loadSeq) return;
       if (kDebugMode) {
         AppLog.debug(
-          'MusaicPlayer stream: source=${track.sourceId} '
+          'MusaicPlayer stream: source=${effectiveTrack.sourceId} '
           '(local=${resolved.isLocalFile})',
         );
       }
@@ -607,7 +625,10 @@ class PlayerNotifier extends Notifier<PlayerState> {
             .timeout(const Duration(seconds: 25));
       }
       if (seq != _loadSeq) return;
-      _handler.updateNowPlaying(trackToMediaItem(track), queueIndex: index);
+      _handler.updateNowPlaying(
+        trackToMediaItem(effectiveTrack),
+        queueIndex: index,
+      );
       // 倍速跨曲目保持（部分平台 load 后重置）
       if (state.speed != 1.0) {
         try {
@@ -619,7 +640,7 @@ class PlayerNotifier extends Notifier<PlayerState> {
       state = state.copyWith(loading: false, playing: true);
 
       // 记录最近播放与断点快照起点（本地优先存储，失败静默）
-      unawaited(_recordHistory(track));
+      unawaited(_recordHistory(effectiveTrack));
       _persistResume(force: true);
     } on SourceException catch (e) {
       if (seq != _loadSeq) return;
@@ -639,6 +660,83 @@ class PlayerNotifier extends Notifier<PlayerState> {
       );
     }
   }
+
+  /// 最近一次成功解析所用的曲目（换源后与队列里的原始记录不同）。
+  Track? _lastResolvedTrack;
+
+  /// 解析播放地址，必要时按换源候选依次尝试（D7）。
+  ///
+  /// 返回 null 表示本次加载已被更新的请求取代（调用方应直接 return）。
+  /// 全部候选都失败时抛出**最后一次**的异常——它最能反映真实原因。
+  Future<ResolvedStream?> _resolveWithFallback(Track track, int seq) async {
+    final registry = ref.read(sourceRegistryProvider);
+    final candidates = <Track>[
+      track,
+      ...orderFallbackCandidates(
+        alternatives: _alternatives[track.key] ?? const <Track>[],
+        failedSourceId: track.sourceId,
+      ),
+    ];
+
+    Object? lastError;
+    for (var i = 0; i < candidates.length; i++) {
+      final candidate = candidates[i];
+      final source = registry.resolve(candidate.sourceId);
+      if (source == null) {
+        lastError = NetworkSourceException(
+          '「${candidate.sourceId}」渠道不可用',
+          sourceId: candidate.sourceId,
+        );
+        continue;
+      }
+      try {
+        final resolved = await source
+            .resolveStream(candidate)
+            .timeout(Duration(seconds: NetworkConfig.instance.seconds * 2));
+        if (seq != _loadSeq) return null;
+        _lastResolvedTrack = candidate;
+        // 换源成功时告知用户，避免「怎么换了个版本」的困惑
+        if (i > 0) {
+          _notifySourceSwitched(from: track, to: candidate);
+        }
+        return resolved;
+      } on TimeoutException {
+        // 超时归入网络问题，**不换源**：断网时每个候选都会各自超时，
+        // 4 个候选 × 8s 超时 = 用户干等 30 秒以上，比直接报错更糟。
+        // 只有「确定不可用」才值得换源（见上方注释的错误语义）。
+        throw NetworkSourceException('解析播放地址超时', sourceId: candidate.sourceId);
+      } on UnavailableStreamException catch (e) {
+        lastError = e;
+        continue; // 无版权/需会员 → 换源
+      } on AuthRequiredException catch (e) {
+        lastError = e;
+        continue; // 未登录 → 换匿名可用渠道
+      } on NetworkSourceException {
+        // 断网/连接失败：换源没有意义，立即失败并保留真实原因
+        rethrow;
+      } catch (e) {
+        lastError = e;
+        continue; // 渠道内部异常：值得试下一个
+      }
+    }
+
+    if (lastError != null) throw lastError;
+    throw NetworkSourceException('无可用播放源', sourceId: track.sourceId);
+  }
+
+  /// 换源提示：写入 state，由 UI `ref.listen` 后弹 SnackBar，不打断播放。
+  ///
+  /// 用 state 而非私有字段：私有字段无法被响应式观察到，
+  /// UI 就没有办法知道发生了换源。
+  void _notifySourceSwitched({required Track from, required Track to}) {
+    state = state.copyWith(
+      sourceSwitchNotice: '「${from.sourceId}」不可用，已切换到「${to.sourceId}」',
+    );
+  }
+
+  /// 清空换源提示（UI 弹出提示后调用）。
+  void clearSourceSwitchNotice() =>
+      state = state.copyWith(sourceSwitchNotice: null);
 
   Future<void> _recordHistory(Track track) async {
     try {

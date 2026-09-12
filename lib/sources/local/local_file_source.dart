@@ -4,6 +4,7 @@ import 'dart:io';
 import 'dart:isolate';
 import 'dart:typed_data';
 
+import 'package:crypto/crypto.dart' as crypto;
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
@@ -200,7 +201,7 @@ class LocalFileSource extends MusicSource implements LibraryScanCapable {
 
   @override
   Future<Track> getTrackDetail(Track track) async {
-    final filePath = track.sourceData?['path'] as String?;
+    final filePath = localFilePathOf(track);
     if (filePath == null) return track;
     final file = File(filePath);
     if (!file.existsSync()) return track;
@@ -209,7 +210,9 @@ class LocalFileSource extends MusicSource implements LibraryScanCapable {
 
   @override
   Future<ResolvedStream> resolveStream(Track track) async {
-    final filePath = track.sourceData?['path'] as String?;
+    // 只认路径，不认 id：新数据的 id 是内容指纹（`local:<size>:<hash>`），
+    // 路径只存在 sourceData 里；旧数据的 id 就是路径，由 localFilePathOf 兜底。
+    final filePath = localFilePathOf(track);
     if (filePath == null || !File(filePath).existsSync()) {
       throw UnavailableStreamException('文件已被移动或删除', sourceId: sourceId);
     }
@@ -219,7 +222,7 @@ class LocalFileSource extends MusicSource implements LibraryScanCapable {
   /// 歌词：同名 .lrc > 内嵌 USLT(含时间戳时按 LRC 解析) > 无。
   @override
   Future<LyricBundle?> fetchLyrics(Track track) async {
-    final filePath = track.sourceData?['path'] as String?;
+    final filePath = localFilePathOf(track);
     if (filePath == null) return null;
 
     final lrcPath = '${p.withoutExtension(filePath)}.lrc';
@@ -348,19 +351,45 @@ void _collectAudioFiles(Directory root, List<String> out) {
   }
 }
 
-/// 单文件解析结果（标签与封面 URL）。
+/// 单文件解析结果（标签与封面 URL + 稳定 id 所需的内容指纹）。
+///
+/// [fileSize] 与 [headHash] 由解析时顺带算出：扫描已经在后台 isolate 读文件，
+/// 复用同一次 IO 顺带取指纹，避免主 isolate 为算 id 再读一遍磁盘。
 typedef ParsedTrack =
-    ({String title, String artist, String? album, String? coverUrl});
+    ({
+      String title,
+      String artist,
+      String? album,
+      String? coverUrl,
+      int fileSize,
+      String headHash,
+    });
 
 /// 在后台 isolate 中解析单个音频文件：只读标签所需字节，封面落盘缓存。
+///
+/// 同时返回内容指纹（文件大小 + 前 64KB 哈希），供 [localTrackIdFor] 生成稳定 id。
 Future<ParsedTrack> parseTrackFile(String path, String coverDirPath) async {
   var title = p.basenameWithoutExtension(path);
   String artist = '';
   String? album;
   Uint8List? coverBytes;
+  // 指纹默认值：文件不可读（权限/已删除）时退化为「大小 0 + 空哈希」，
+  // 此时同一目录下的坏文件会撞 id，但坏文件本来就无法播放，不影响正常曲目。
+  var fileSize = 0;
+  var headHash = '';
+
+  final file = File(path);
+  // 指纹与标签分开 try：指纹读取失败不应连累标签解析（反之亦然），
+  // 两者各自退回默认值，保证「文件读得到多少就用多少」。
+  try {
+    fileSize = await file.length();
+    headHash = await readHeadHash(file);
+  } catch (_) {
+    // 文件不可读：保留默认指纹，交给下面的标签分支再试一次
+  }
 
   try {
-    final bytes = await readTagBytes(File(path));
+    final bytes = await readTagBytes(file);
     final tags = Id3Parser.parse(bytes);
     if (tags != null) {
       if (tags.title?.isNotEmpty ?? false) title = tags.title!;
@@ -376,7 +405,14 @@ Future<ParsedTrack> parseTrackFile(String path, String coverDirPath) async {
   if (coverBytes != null) {
     coverUrl = await persistCover(path, coverBytes, coverDirPath);
   }
-  return (title: title, artist: artist, album: album, coverUrl: coverUrl);
+  return (
+    title: title,
+    artist: artist,
+    album: album,
+    coverUrl: coverUrl,
+    fileSize: fileSize,
+    headHash: headHash,
+  );
 }
 
 Track _trackFromParsed(
@@ -388,7 +424,10 @@ Track _trackFromParsed(
   String? fallbackCoverUrl,
 }) {
   return Track(
-    id: path,
+    // id 用内容指纹而非路径：移动 / 重命名文件后，收藏与歌单里的本地曲目
+    // 仍然指向同一首（路径变化不再让记录静默失效）。真实路径照旧写进
+    // sourceData，播放时以它为准。
+    id: localTrackIdFor(fileSize: parsed.fileSize, headHash: parsed.headHash),
     sourceId: LocalFileSource.id,
     title: parsed.title,
     artist: parsed.artist.isEmpty ? (fallbackArtist ?? '未知歌手') : parsed.artist,
@@ -397,6 +436,50 @@ Track _trackFromParsed(
     coverUrl: parsed.coverUrl ?? fallbackCoverUrl,
     sourceData: <String, dynamic>{'path': path},
   );
+}
+
+/// 本地曲目稳定 id：优先内容指纹，路径仅作兜底。
+///
+/// 返回形如 `local:<size>:<headHash>` 的稳定标识。同一文件被移动 / 重命名 /
+/// 换容器目录（macOS/iOS 沙盒路径会随版本变化）后，只要内容不变，
+/// id 就不变，收藏与歌单里的引用不会静默失效。
+///
+/// 纯函数：不碰文件系统，便于单测。
+String localTrackIdFor({required int fileSize, required String headHash}) =>
+    'local:$fileSize:$headHash';
+
+/// 取本地曲目应播放的真实路径。
+///
+/// 优先 `sourceData['path']`（当前写法）；缺失时回退到 `id`——**旧数据**的
+/// id 就是绝对路径，没有这一步升级后老收藏会全部播不了。兜底只在 id 长得
+/// 像绝对路径（`/` 开头，或 Windows 盘符 `C:\`）时生效，避免把
+/// `local:<size>:<hash>` 这种指纹误当成路径。
+String? localFilePathOf(Track track) {
+  final path = track.sourceData?['path'];
+  if (path is String && path.trim().isNotEmpty) return path;
+  final id = track.id;
+  if (id.startsWith('/')) return id;
+  if (_windowsDrivePathPattern.hasMatch(id)) return id;
+  return null;
+}
+
+/// Windows 绝对路径形态：盘符 + `:` + `\` 或 `/`。
+final RegExp _windowsDrivePathPattern = RegExp(r'^[A-Za-z]:[\\/]');
+
+/// 文件头部采样长度：只看头部是因为音频文件动辄几十 MB，
+/// 全文件哈希的 IO 代价无法接受；而容器头 + 首批音频帧
+/// 足以区分绝大多数曲目（同大小同头部的不同曲目极罕见）。
+const int _headHashBytes = 64 * 1024;
+
+/// 读取文件前 64KB 的 sha1 十六进制摘要（IO 由调用方所在 isolate 承担）。
+Future<String> readHeadHash(File file) async {
+  final raf = await file.open();
+  try {
+    final head = await raf.read(_headHashBytes);
+    return crypto.sha1.convert(head).toString();
+  } finally {
+    await raf.close();
+  }
 }
 
 /// 只读取标签所需字节，避免整文件载入内存（性能预算 §10.2）。

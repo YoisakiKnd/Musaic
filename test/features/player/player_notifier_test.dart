@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -10,6 +11,7 @@ import 'package:musaic/core/auth/auth_capability.dart';
 import 'package:musaic/core/error/source_exception.dart';
 import 'package:musaic/core/lyrics/lyric_bundle.dart';
 import 'package:musaic/core/model/track.dart';
+import 'package:musaic/core/network/network_config.dart';
 import 'package:musaic/core/source/music_source.dart';
 import 'package:musaic/core/source/source_registry.dart';
 import 'package:musaic/features/player/audio_handler.dart';
@@ -307,6 +309,281 @@ void main() {
     });
   });
 
+  group('跨渠道换源（D7）', () {
+    /// 构造「同一首歌在两个渠道」的队列，并让指定渠道按指定方式失败。
+    ProviderContainer fallbackContainer({
+      required String failSourceId,
+      required Object failure,
+    }) {
+      return ProviderContainer(
+        overrides: [
+          playerNotifierProvider.overrideWith(_TestPlayerNotifier.new),
+          audioHandlerProvider.overrideWithValue(
+            _NoopAudioHandler(player: _FakePlayer()),
+          ),
+          resumeRepositoryProvider.overrideWithValue(
+            ResumeRepository(box: resumeBox),
+          ),
+          sourceRegistryProvider.overrideWith((ref) {
+            final registry = SourceRegistry();
+            // 失败渠道
+            registry.register(
+              _FakeSource(
+                failResolve: false,
+                failure: failure,
+                sourceIdOverride: failSourceId,
+              ),
+            );
+            // 可用渠道
+            registry.register(
+              _FakeSource(failResolve: false, sourceIdOverride: 'backup'),
+            );
+            return registry;
+          }),
+        ],
+      );
+    }
+
+    Track songOn(String sourceId, String id) => Track(
+      id: id,
+      sourceId: sourceId,
+      title: '海阔天空',
+      artist: 'Beyond',
+      duration: const Duration(seconds: 30),
+    );
+
+    test('无版权时自动切换到其它渠道并播放', () async {
+      final container = fallbackContainer(
+        failSourceId: 'primary',
+        failure: UnavailableStreamException('无版权'),
+      );
+      final notifier =
+          container.read(playerNotifierProvider.notifier)
+              as _TestPlayerNotifier;
+
+      await notifier.playQueue([songOn('primary', '1'), songOn('backup', '2')]);
+
+      expect(notifier.state.error, isNull, reason: '换源成功不应报错');
+      expect(notifier.state.playing, isTrue, reason: '应已在备用渠道开始播放');
+      container.dispose();
+    });
+
+    test('需要登录时同样换源（换匿名可用渠道）', () async {
+      final container = fallbackContainer(
+        failSourceId: 'primary',
+        failure: AuthRequiredException('请先登录'),
+      );
+      final notifier =
+          container.read(playerNotifierProvider.notifier)
+              as _TestPlayerNotifier;
+
+      await notifier.playQueue([songOn('primary', '1'), songOn('backup', '2')]);
+
+      expect(notifier.state.error, isNull);
+      expect(notifier.state.playing, isTrue);
+      container.dispose();
+    });
+
+    test('**断网时不换源**，直接报错（避免多渠道路由空转）', () async {
+      final container = fallbackContainer(
+        failSourceId: 'primary',
+        failure: NetworkSourceException('断网'),
+      );
+      final notifier =
+          container.read(playerNotifierProvider.notifier)
+              as _TestPlayerNotifier;
+
+      await notifier.playQueue([songOn('primary', '1'), songOn('backup', '2')]);
+
+      expect(notifier.state.error, isNotNull, reason: '网络问题必须立即失败，而不是在多个渠道间空转');
+      expect(notifier.state.playing, isFalse);
+      container.dispose();
+    });
+
+    test('**超时不换源**（否则断网时多候选会累计等待数十秒）', () async {
+      // 用真实时间而非 fakeAsync：一旦代码错误地继续换源，备用渠道会成功
+      // 并进入播放链路（含 Hive 写），fakeAsync 下这些真实 IO 永不完成，
+      // 测试会挂起而不是干净地失败。真实时间下能直接断言出错误。
+      //
+      // 把超时压到下限（4s → 解析超时 8s），控制该用例耗时。
+      final originalSeconds = NetworkConfig.instance.seconds;
+      NetworkConfig.instance.set(NetworkConfig.minSeconds);
+      addTearDown(() => NetworkConfig.instance.set(originalSeconds));
+
+      final container = ProviderContainer(
+        overrides: [
+          playerNotifierProvider.overrideWith(_TestPlayerNotifier.new),
+          audioHandlerProvider.overrideWithValue(
+            _NoopAudioHandler(player: _FakePlayer()),
+          ),
+          resumeRepositoryProvider.overrideWithValue(
+            ResumeRepository(box: resumeBox),
+          ),
+          sourceRegistryProvider.overrideWith((ref) {
+            final registry = SourceRegistry();
+            final hanging = _FakeSource(
+              failResolve: false,
+              sourceIdOverride: 'primary',
+            )..hang = true;
+            registry.register(hanging);
+            registry.register(
+              _FakeSource(failResolve: false, sourceIdOverride: 'backup'),
+            );
+            return registry;
+          }),
+        ],
+      );
+      final notifier =
+          container.read(playerNotifierProvider.notifier)
+              as _TestPlayerNotifier;
+
+      await notifier
+          .playQueue([songOn('primary', '1'), songOn('backup', '2')])
+          .timeout(const Duration(seconds: 30));
+
+      expect(
+        notifier.state.error,
+        isNotNull,
+        reason:
+            '超时属于网络问题，必须直接失败；'
+            '若继续换源，备用渠道会成功，error 将为 null',
+      );
+      expect(notifier.state.playing, isFalse, reason: '不得因为换源而在断网时「看起来播上了」');
+      container.dispose();
+    });
+
+    test('全部候选都不可用时，报最后一次的错误', () async {
+      final container = ProviderContainer(
+        overrides: [
+          playerNotifierProvider.overrideWith(_TestPlayerNotifier.new),
+          audioHandlerProvider.overrideWithValue(
+            _NoopAudioHandler(player: _FakePlayer()),
+          ),
+          resumeRepositoryProvider.overrideWithValue(
+            ResumeRepository(box: resumeBox),
+          ),
+          sourceRegistryProvider.overrideWith((ref) {
+            final registry = SourceRegistry();
+            registry.register(
+              _FakeSource(
+                failResolve: false,
+                failure: UnavailableStreamException('A 无版权'),
+                sourceIdOverride: 'a',
+              ),
+            );
+            registry.register(
+              _FakeSource(
+                failResolve: false,
+                failure: UnavailableStreamException('B 无版权'),
+                sourceIdOverride: 'b',
+              ),
+            );
+            return registry;
+          }),
+        ],
+      );
+      final notifier =
+          container.read(playerNotifierProvider.notifier)
+              as _TestPlayerNotifier;
+
+      await notifier.playQueue([songOn('a', '1'), songOn('b', '2')]);
+
+      expect(notifier.state.error, isNotNull);
+      expect(
+        notifier.state.error,
+        contains('B'),
+        reason: '应报最后尝试的那个渠道的错误，它最能反映现状',
+      );
+      container.dispose();
+    });
+
+    test('换源成功时写入一次性提示，可被 UI 观察与清除', () async {
+      final container = fallbackContainer(
+        failSourceId: 'primary',
+        failure: UnavailableStreamException('无版权'),
+      );
+      final notifier =
+          container.read(playerNotifierProvider.notifier)
+              as _TestPlayerNotifier;
+
+      await notifier.playQueue([songOn('primary', '1'), songOn('backup', '2')]);
+
+      // 提示必须出现在 state 里：私有字段无法被 ref.listen 观察到
+      final notice = notifier.state.sourceSwitchNotice;
+      expect(notice, isNotNull, reason: '换源必须告知用户，否则会困惑于版本变化');
+      expect(notice, contains('primary'));
+      expect(notice, contains('backup'));
+
+      notifier.clearSourceSwitchNotice();
+      expect(notifier.state.sourceSwitchNotice, isNull);
+      container.dispose();
+    });
+
+    test('未发生换源时不产生提示（避免无意义打扰）', () async {
+      final container = ProviderContainer(
+        overrides: [
+          playerNotifierProvider.overrideWith(_TestPlayerNotifier.new),
+          audioHandlerProvider.overrideWithValue(
+            _NoopAudioHandler(player: _FakePlayer()),
+          ),
+          resumeRepositoryProvider.overrideWithValue(
+            ResumeRepository(box: resumeBox),
+          ),
+          sourceRegistryProvider.overrideWith((ref) {
+            final registry = SourceRegistry();
+            registry.register(
+              _FakeSource(failResolve: false, sourceIdOverride: 'solo'),
+            );
+            return registry;
+          }),
+        ],
+      );
+      final notifier =
+          container.read(playerNotifierProvider.notifier)
+              as _TestPlayerNotifier;
+
+      await notifier.playQueue([songOn('solo', '1')]);
+
+      expect(notifier.state.sourceSwitchNotice, isNull);
+      expect(notifier.state.playing, isTrue);
+      container.dispose();
+    });
+
+    test('单渠道曲目失败时不换源（无候选）', () async {
+      final container = fallbackContainer(
+        failSourceId: 'primary',
+        failure: UnavailableStreamException('无版权'),
+      );
+      final notifier =
+          container.read(playerNotifierProvider.notifier)
+              as _TestPlayerNotifier;
+
+      // 队列里只有 primary 一条，没有替代候选
+      await notifier.playQueue([songOn('primary', '1')]);
+
+      expect(notifier.state.error, isNotNull);
+      container.dispose();
+    });
+
+    test('不同歌曲不会互相换源', () async {
+      final container = fallbackContainer(
+        failSourceId: 'primary',
+        failure: UnavailableStreamException('无版权'),
+      );
+      final notifier =
+          container.read(playerNotifierProvider.notifier)
+              as _TestPlayerNotifier;
+
+      await notifier.playQueue(const [
+        Track(id: '1', sourceId: 'primary', title: '甲歌曲', artist: 'X'),
+        Track(id: '2', sourceId: 'backup', title: '乙歌曲', artist: 'Y'),
+      ]);
+
+      expect(notifier.state.error, isNotNull, reason: '不同歌曲不应被视为可互换');
+      container.dispose();
+    });
+  });
+
   group('_loadAndPlay 越界守卫（P0-3 第二道防线）', () {
     test('越界下标被静默忽略而非抛异常', () async {
       final container = createContainer(queue: [track('a')]);
@@ -355,13 +632,27 @@ class _TestPlayerNotifier extends PlayerNotifier {
 
 /// 假渠道：resolveStream 恒失败或恒成功（本地文件路径）。
 class _FakeSource extends MusicSource {
-  _FakeSource({required this.failResolve})
-    : super(credentialReader: () async => const <String, String>{});
+  _FakeSource({
+    required this.failResolve,
+    this.failure,
+    this.sourceIdOverride = 'fake',
+  }) : super(credentialReader: () async => const <String, String>{});
 
   final bool failResolve;
 
+  /// 允许同一测试里注册多个渠道（换源需要「主渠道 + 备用渠道」）。
+  final String sourceIdOverride;
+
+  /// 挂起不返回：用于触发真实的 `.timeout()` 路径。
+  /// 换源语义里「超时」与「无版权」必须区别对待，需要能单独构造超时。
+  bool hang = false;
+
+  /// 精确控制抛出的异常类型（换源语义测试依赖它区分
+  /// 「确定不可用」与「网络问题」）。
+  final Object? failure;
+
   @override
-  String get sourceId => 'fake';
+  String get sourceId => sourceIdOverride;
 
   @override
   String get displayName => 'Fake';
@@ -381,6 +672,12 @@ class _FakeSource extends MusicSource {
 
   @override
   Future<ResolvedStream> resolveStream(Track track) async {
+    if (hang) {
+      // 永不完成：由调用方的 .timeout() 触发 TimeoutException
+      await Completer<void>().future;
+    }
+    final forced = failure;
+    if (forced != null) throw forced;
     if (failResolve) {
       throw UnavailableStreamException('测试失败');
     }

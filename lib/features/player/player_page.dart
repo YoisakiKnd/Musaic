@@ -123,6 +123,20 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
     final track = ref.watch(playerNotifierProvider.select((s) => s.current));
     final error = ref.watch(playerNotifierProvider.select((s) => s.error));
 
+    // 换源提示（D7）：以 SnackBar 告知「已切换到其它渠道」，
+    // 避免用户困惑于「怎么换了个版本 / 音质变了」。
+    // 用 ref.listen 而非 watch：这是一次性事件，不是持续状态。
+    ref.listen(playerNotifierProvider.select((s) => s.sourceSwitchNotice), (
+      _,
+      notice,
+    ) {
+      if (notice == null) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(notice)));
+      ref.read(playerNotifierProvider.notifier).clearSourceSwitchNotice();
+    });
+
     if (track == null) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted && Navigator.of(context).canPop()) {
