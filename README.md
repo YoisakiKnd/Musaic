@@ -167,8 +167,24 @@ flutter test   # 单元 + Widget + 架构守护测试
 - [x] P6 内容页面
 - [x] P7 打磨（平台配置/测试/文档；集成测试与覆盖率门槛仍待补）
 - [x] V1.1 四渠道真实登录（网易云 weapi 手机+扫码 / QQ 音乐 App 扫码 / 酷狗 h5 扫码 / YTM WebView）
-- [ ] V1.2 WebDAV 同步、自定义渠道（见 musaic-master-plan.md §18）
+- [ ] **V1.2 作品同一性层**（`Work` / `WorkId`）—— 见 `docs/architecture-evolution.md`
+- [ ] V1.3 WebDAV 同步（依赖作品同一性层）
 - [ ] 待实测：真机 release 性能与功耗基线（见 `docs/benchmarks.md`）
+
+## 架构演进设计
+
+`docs/architecture-evolution.md` 记录了下一步的**结构性**工作与理由。
+
+核心判断：当前 `Track.key = "$sourceId:$id"` 同时承担「定位播放地址」与
+「标识同一首歌」两种冲突职责，导致**跨渠道聚合、播放回退、收藏同步、去重
+四件事都没有共同基准**。这不是缺功能，是缺一层模型。
+
+设计给出 `Work`（作品）+ `WorkId`（作品身份）层，以及三套同源基建：
+统一缓存层、存储 schema 版本化、本地曲目稳定 id。
+
+其中**归一化器已完成原型验证**：`lib/core/model/work_id.dart` 能把不同渠道
+对同一首歌的不同写法（版本后缀、艺人顺序、全角标点、feat. 标注）归一为同一
+身份，同时以对抗性用例确保**不误合并**不同歌曲。
 
 ## 免责声明
 
