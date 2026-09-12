@@ -277,20 +277,25 @@ abstract class CacheStore<T> {
 
 设置页「存储管理」展示分类占用 + 一键清理（`StorageMaintenanceService`）。
 
-### 3.2 存储 schema 版本化 `core/storage/schema_migrator.dart`
+### 3.2 存储 schema 版本化 ✅ **已实现（S1）**
 
-```dart
-/// 每个 Box 独立版本号，存于 Box 内的保留键 `__schema__`。
-class SchemaMigrator {
-  Future<void> migrate(Box<String> box, List<Migration> steps);
-}
-```
+`lib/core/storage/schema_migrator.dart`（机制）+ `lib/core/storage/app_schema.dart`（注册表）。
 
 规则：
-- 每个 Box 一个 `int` 版本，缺失视为 1（兼容现有数据）。
-- 迁移步骤是**有序纯函数**，`v1→v2`、`v2→v3`，逐级执行。
-- 迁移前**先备份原始内容**到 `musaic_migration_backup`，成功后保留一轮再清理。
-- 迁移失败：**回滚并保持旧版本号**，应用以降级模式启动（只读），不静默丢数据。
+- 每个 Box 一个 `int` 版本，存于保留键 `__musaic__ schema <box>`，缺失视为 1（兼容现有数据）。
+- 迁移步骤是**有序**的 `v1→v2`、`v2→v3`，逐级执行；步骤表不完整则**在动数据之前**拒绝。
+- 迁移前**落盘备份**到 `musaic_migration_backup`，成功后清理。
+- 迁移失败：**回滚并保持旧版本号**，应用以降级模式启动，不静默丢数据。
+- 数据版本高于应用（用户装过更新版本）：**拒绝迁移**，绝不降级迁移（会丢字段）。
+
+**关键设计：备份的存在性本身就是「迁移进行中」标记。**
+
+只做内存快照是不够的——迁移中途**进程被杀**（移动端被系统回收、用户强杀）时
+异常处理器根本不会运行，内存快照随之消失，Box 停留在「迁移到一半 + 版本号仍是旧值」。
+下次启动会**重复迁移**，对非幂等步骤（如「把键 A 改名成 B」）就会丢数据。
+
+因此流程是：迁移前落盘备份 → 执行 → 成功写版本号并删备份 → 启动时若发现备份残留，
+说明上次没走完，**先回滚再迁移**。无需额外状态机。
 
 **先做 §3.2 再做 §2.4** —— 否则收藏改造没有安全网。
 
@@ -325,7 +330,7 @@ String localTrackId(String path, int size, String headHash) => 'local:$size:$hea
 
 | 阶段 | 内容 | 验收标准 |
 |---|---|---|
-| **S1** | §3.2 schema 迁移框架 | 每个 Box 有版本号；迁移失败可回滚；单测覆盖 v1→v2 与失败回滚 |
+| **S1** | §3.2 schema 迁移框架 | ✅ **已实现**：`schema_migrator.dart` + `app_schema.dart` + 接入启动流程；30 个单测覆盖成功/失败回滚/**进程被杀恢复**/步骤表校验/高版本拒绝；4 处变异全部被测试捕获 |
 | **S2** | §2.1–2.2 Work/WorkId + 归一化 | ✅ **归一化器已原型验证**（26 用例：跨渠道同曲合并 + 对抗性不合并）；待补 `Work` 聚合与渠道接入 |
 | **S3** | §3.3 本地 id 稳定化 | 移动文件后收藏仍有效（单测模拟路径变化） |
 | **S4** | §2.4 收藏/历史迁移到 workId | 迁移后旧收藏完整保留；跨渠道收藏点亮（集成验证） |
@@ -366,3 +371,16 @@ String localTrackId(String path, int size, String headHash) => 'local:$size:$hea
 - `musaic-iteration-plan.md`：排期与 Bug 表；本文档的 S1–S6 应回填为其新里程碑。
 - `musaic-improvement-plan.md`：本文档承接其「文档漂移」教训——**所有结论均附代码位置证据**。
 - `docs/benchmarks.md`：缓存层落地后需补「二次访问零请求」与「缓存占用」两项实测。
+
+---
+
+## 9. 实施进度
+
+| 阶段 | 状态 | 产物 |
+|---|---|---|
+| S1 schema 迁移框架 | ✅ 已完成 | `core/storage/schema_migrator.dart`、`core/storage/app_schema.dart`、`test/core/storage/*`（30 用例） |
+| S2 Work/WorkId + 归一化 | 🟡 归一化器已完成并验证 | `core/model/work_id.dart`、`test/core/model/work_id_test.dart`（26 用例）；待补 `Work` 聚合与渠道接入 |
+| S3 本地曲目稳定 id | ⬜ 待开始 | — |
+| S4 收藏/历史迁移到 workId | ⬜ 待开始（依赖 S1 ✅ + S2） | — |
+| S5 回退链 | ⬜ 待开始（依赖 S2） | — |
+| S6 缓存层 | ⬜ 待开始 | — |

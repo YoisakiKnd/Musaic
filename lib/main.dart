@@ -14,10 +14,12 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:window_manager/window_manager.dart';
 
 import 'core/logging/app_logger.dart';
+import 'core/storage/app_schema.dart';
+import 'core/storage/hive_recovery.dart';
+import 'core/storage/schema_migrator.dart';
 import 'app/lifecycle/app_lifecycle.dart';
 import 'app/router.dart';
 import 'core/network/network_config.dart';
-import 'core/storage/hive_recovery.dart';
 import 'core/theme/app_tokens.dart';
 import 'features/auth/data/account_repository.dart';
 import 'features/library/data/library_repository.dart';
@@ -62,6 +64,37 @@ class _Bootstrap {
       // 不允许静默：Activity 继承错误曾让这里失败 0 日志（EMU 实测教训）。
       AppLog.debug('MusaicAudioService init 失败: $e');
       return MusaicAudioHandler(player: AudioPlayer());
+    }
+  }
+
+  /// 执行存储 schema 迁移（架构演进设计 §3.2 / S1）。
+  ///
+  /// 设计要点：
+  /// - **在仓库读取任何数据之前**运行，否则会读到旧结构；
+  /// - 备份 Box 单独打开并常驻，用于抵御「迁移中途进程被杀」；
+  /// - 迁移失败或数据版本高于应用时**不阻断启动**：应用以降级模式
+  ///   进入首页（只读），并通过日志留下可诊断线索——白屏比降级更糟。
+  static Future<void> _migrateStorage(
+    Map<String, Box<String>> boxes,
+    String hiveDir,
+  ) async {
+    Box<String>? backupBox;
+    try {
+      backupBox = await openBoxSafely<String>(
+        SchemaMigrator.backupBoxName,
+        hiveDir,
+      );
+      final reports = await AppSchema.migrateAll(boxes, backupBox: backupBox);
+      if (AppSchema.hasUnusable(reports)) {
+        AppLog.error(
+          '部分本地数据不可用，已进入降级模式：'
+          '${reports.where((r) => !r.isUsable).map((r) => r.boxName).join(', ')}',
+        );
+      }
+    } catch (e, st) {
+      // 迁移基础设施本身出错（如备份 Box 打不开）：不能因此让应用起不来。
+      // 未迁移的数据仍可被旧代码读取，属于可接受的降级。
+      AppLog.error('存储迁移流程异常，已跳过：$e', stackTrace: st);
     }
   }
 
@@ -141,6 +174,20 @@ Future<void> main() async {
     ResumeRepository.boxName,
     hiveDir,
   );
+
+  // 存储 schema 迁移（架构演进设计 §3.2 / S1）：
+  // 必须在**任何仓库读取数据之前**执行，否则仓库会读到旧结构。
+  // 备份 Box 单独持有，用于「进程被杀后恢复」（见 SchemaMigrator 文档）。
+  await _Bootstrap._migrateStorage(<String, Box<String>>{
+    AccountRepository.accountBoxName: accountsBox,
+    LibraryRepository.favoritesBoxName: favoritesBox,
+    LibraryRepository.historyBoxName: historyBox,
+    LibraryRepository.playlistsBoxName: playlistsBox,
+    SearchHistoryRepository.boxName: searchHistoryBox,
+    LocalMusicSettingsRepository.boxName: localMusicSettingsBox,
+    AppSettingsRepository.boxName: appSettingsBox,
+    ResumeRepository.boxName: resumeBox,
+  }, hiveDir);
 
   await _Bootstrap._configureDesktopWindow();
 
