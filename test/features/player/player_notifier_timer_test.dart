@@ -11,6 +11,7 @@ import 'package:musaic/core/di/app_providers.dart';
 import 'package:musaic/features/player/audio_handler.dart';
 import 'package:musaic/features/player/data/resume_repository.dart';
 import 'package:musaic/features/player/player_notifier.dart';
+import 'package:musaic/features/settings/settings_providers.dart';
 
 /// 位置轮询定时器生命周期与后台降级验证
 /// （功耗计划 PW-01 / PW-03 / PW-04，B21）。
@@ -19,21 +20,24 @@ void main() {
 
   late Directory tempDir;
   late Box<String> resumeBox;
+  late Box<String> settingsBox;
 
   setUpAll(() async {
     tempDir = await Directory.systemTemp.createTemp('musaic_pw_timer_test');
     Hive.init(tempDir.path);
     resumeBox = await Hive.openBox<String>('pw_resume');
+    settingsBox = await Hive.openBox<String>('pw_settings');
   });
 
   tearDownAll(() async {
     await resumeBox.close();
+    await settingsBox.close();
     if (tempDir.existsSync()) await tempDir.delete(recursive: true);
   });
 
   test('空闲零唤醒；播放创建定时器；暂停取消（PW-01/PW-04）', () {
     fakeAsync((async) {
-      final container = _createContainer(resumeBox);
+      final container = _createContainer(resumeBox, settingsBox);
       final notifier =
           container.read(playerNotifierProvider.notifier)
               as _TestPlayerNotifier;
@@ -64,7 +68,7 @@ void main() {
 
   test('后台降级为 1Hz；回前台恢复 100ms（PW-03）', () {
     fakeAsync((async) {
-      final container = _createContainer(resumeBox);
+      final container = _createContainer(resumeBox, settingsBox);
       final notifier =
           container.read(playerNotifierProvider.notifier)
               as _TestPlayerNotifier;
@@ -96,7 +100,7 @@ void main() {
 
   test('停止可见化标记：dispose 后无定时器残留', () {
     fakeAsync((async) {
-      final container = _createContainer(resumeBox);
+      final container = _createContainer(resumeBox, settingsBox);
       final notifier =
           container.read(playerNotifierProvider.notifier)
               as _TestPlayerNotifier;
@@ -109,7 +113,10 @@ void main() {
   });
 }
 
-ProviderContainer _createContainer(Box<String> resumeBox) {
+ProviderContainer _createContainer(
+  Box<String> resumeBox,
+  Box<String> settingsBox,
+) {
   return ProviderContainer(
     overrides: [
       playerNotifierProvider.overrideWith(_TestPlayerNotifier.new),
@@ -118,6 +125,10 @@ ProviderContainer _createContainer(Box<String> resumeBox) {
       ),
       resumeRepositoryProvider.overrideWithValue(
         ResumeRepository(box: resumeBox),
+      ),
+      // PlayerNotifier.build() 读取设置以恢复音量/倍速/模式
+      appSettingsRepositoryProvider.overrideWithValue(
+        AppSettingsRepository(box: settingsBox),
       ),
     ],
   );

@@ -18,8 +18,16 @@ import 'package:musaic/features/player/audio_handler.dart';
 import 'package:musaic/features/player/data/resume_repository.dart';
 import 'package:musaic/features/player/domain/queue_logic.dart';
 import 'package:musaic/features/player/player_notifier.dart';
+import 'package:musaic/features/settings/settings_providers.dart';
 
 /// PlayerNotifier 核心逻辑回归测试。
+///
+/// ## 测试基建约定
+///
+/// `PlayerNotifier.build()` 会读取 `appSettingsRepositoryProvider` 以恢复
+/// 音量 / 倍速 / 播放模式。因此**任何**构建 PlayerNotifier 的测试都必须
+/// override 该 provider，否则抛「必须在启动时 override」。
+/// 新增播放器相关测试时请直接复用本文件的容器构造函数。
 ///
 /// 覆盖三个曾长期潜伏的 P0（原先完全没有测试覆盖）：
 /// 1. `_autoAdvancing` 在队列尽头 / 「剩余 N 首」停止后不复位，
@@ -31,17 +39,25 @@ void main() {
 
   late Directory tempDir;
   late Box<String> resumeBox;
+  late Box<String> settingsBox;
 
   setUpAll(() async {
     tempDir = await Directory.systemTemp.createTemp('musaic_player_test');
     Hive.init(tempDir.path);
     resumeBox = await Hive.openBox<String>('player_resume');
+    settingsBox = await Hive.openBox<String>('player_settings');
     registerFallbackValue(Duration.zero);
   });
 
   tearDownAll(() async {
     await resumeBox.close();
+    await settingsBox.close();
     if (tempDir.existsSync()) await tempDir.delete(recursive: true);
+  });
+
+  setUp(() async {
+    // 每个用例清空设置，避免「持久化」用例相互污染
+    await settingsBox.clear();
   });
 
   Track track(String id) => Track(
@@ -66,6 +82,11 @@ void main() {
         ),
         resumeRepositoryProvider.overrideWithValue(
           ResumeRepository(box: resumeBox),
+        ),
+        // PlayerNotifier.build() 会读取设置以恢复音量/倍速/模式，
+        // 因此所有用例都必须注入设置仓库。
+        appSettingsRepositoryProvider.overrideWithValue(
+          AppSettingsRepository(box: _settingsBoxFor()),
         ),
         sourceRegistryProvider.overrideWith((ref) {
           final registry = SourceRegistry();
@@ -324,6 +345,9 @@ void main() {
           resumeRepositoryProvider.overrideWithValue(
             ResumeRepository(box: resumeBox),
           ),
+          appSettingsRepositoryProvider.overrideWithValue(
+            AppSettingsRepository(box: _settingsBoxFor()),
+          ),
           sourceRegistryProvider.overrideWith((ref) {
             final registry = SourceRegistry();
             // 失败渠道
@@ -412,6 +436,9 @@ void main() {
 
       final container = ProviderContainer(
         overrides: [
+          appSettingsRepositoryProvider.overrideWithValue(
+            AppSettingsRepository(box: _settingsBoxFor()),
+          ),
           playerNotifierProvider.overrideWith(_TestPlayerNotifier.new),
           audioHandlerProvider.overrideWithValue(
             _NoopAudioHandler(player: _FakePlayer()),
@@ -455,6 +482,9 @@ void main() {
     test('全部候选都不可用时，报最后一次的错误', () async {
       final container = ProviderContainer(
         overrides: [
+          appSettingsRepositoryProvider.overrideWithValue(
+            AppSettingsRepository(box: _settingsBoxFor()),
+          ),
           playerNotifierProvider.overrideWith(_TestPlayerNotifier.new),
           audioHandlerProvider.overrideWithValue(
             _NoopAudioHandler(player: _FakePlayer()),
@@ -522,6 +552,9 @@ void main() {
     test('未发生换源时不产生提示（避免无意义打扰）', () async {
       final container = ProviderContainer(
         overrides: [
+          appSettingsRepositoryProvider.overrideWithValue(
+            AppSettingsRepository(box: _settingsBoxFor()),
+          ),
           playerNotifierProvider.overrideWith(_TestPlayerNotifier.new),
           audioHandlerProvider.overrideWithValue(
             _NoopAudioHandler(player: _FakePlayer()),
@@ -580,6 +613,308 @@ void main() {
       ]);
 
       expect(notifier.state.error, isNotNull, reason: '不同歌曲不应被视为可互换');
+      container.dispose();
+    });
+  });
+
+  group('播放器记忆：音量 / 倍速 / 模式持久化（P0）', () {
+    /// 造一个带真实设置仓库的容器，验证「写入后被记住」。
+    ProviderContainer settingsContainer() {
+      final settingsBox = _settingsBoxFor();
+      return ProviderContainer(
+        overrides: [
+          playerNotifierProvider.overrideWith(_TestPlayerNotifier.new),
+          audioHandlerProvider.overrideWithValue(
+            _NoopAudioHandler(player: _FakePlayer()),
+          ),
+          resumeRepositoryProvider.overrideWithValue(
+            ResumeRepository(box: resumeBox),
+          ),
+          appSettingsRepositoryProvider.overrideWithValue(
+            AppSettingsRepository(box: settingsBox),
+          ),
+          sourceRegistryProvider.overrideWith((ref) => SourceRegistry()),
+        ],
+      );
+    }
+
+    test('设置倍速会写入持久化设置', () async {
+      final container = settingsContainer();
+      final notifier =
+          container.read(playerNotifierProvider.notifier)
+              as _TestPlayerNotifier;
+      final settings = container.read(appSettingsRepositoryProvider);
+
+      await notifier.setSpeed(1.5);
+
+      expect(notifier.state.speed, 1.5);
+      expect(settings.playbackSpeed, 1.5, reason: '倍速常被长期固定（播客/有声书），必须记住');
+      container.dispose();
+    });
+
+    test('倍速被钳制在允许区间内', () async {
+      final container = settingsContainer();
+      final notifier =
+          container.read(playerNotifierProvider.notifier)
+              as _TestPlayerNotifier;
+
+      await notifier.setSpeed(99);
+      expect(notifier.state.speed, maxPlaybackSpeed);
+
+      await notifier.setSpeed(0.01);
+      expect(notifier.state.speed, minPlaybackSpeed);
+      container.dispose();
+    });
+
+    test('设置音量会写入持久化设置', () async {
+      final container = settingsContainer();
+      final notifier =
+          container.read(playerNotifierProvider.notifier)
+              as _TestPlayerNotifier;
+      final settings = container.read(appSettingsRepositoryProvider);
+
+      await notifier.setVolume(0.3);
+
+      expect(
+        settings.volume,
+        closeTo(0.3, 0.001),
+        reason: '夜间戴耳机时音量突满会真实困扰用户，必须记住',
+      );
+      container.dispose();
+    });
+
+    test('设置播放模式会写入持久化设置', () async {
+      final container = settingsContainer();
+      final notifier =
+          container.read(playerNotifierProvider.notifier)
+              as _TestPlayerNotifier;
+      final settings = container.read(appSettingsRepositoryProvider);
+
+      notifier.setMode(PlayMode.loopAll);
+      expect(notifier.state.mode, PlayMode.loopAll);
+      // 持久化是 unawaited 的，让微任务跑完
+      await Future<void>.delayed(Duration.zero);
+      expect(settings.playMode, PlayMode.loopAll);
+      container.dispose();
+    });
+
+    test('切换随机播放会写入持久化设置', () async {
+      final container = settingsContainer();
+      final notifier =
+          container.read(playerNotifierProvider.notifier)
+              as _TestPlayerNotifier;
+      final settings = container.read(appSettingsRepositoryProvider);
+
+      notifier.toggleShuffle();
+      await Future<void>.delayed(Duration.zero);
+
+      expect(notifier.state.shuffleOn, isTrue);
+      expect(settings.shuffleOn, isTrue);
+      container.dispose();
+    });
+
+    test('启动时恢复上次的倍速 / 模式 / 随机状态', () async {
+      final settingsBox = _settingsBoxFor();
+      final repo = AppSettingsRepository(box: settingsBox);
+      await repo.setPlaybackSpeed(1.25);
+      await repo.setPlayMode(PlayMode.loopOne);
+      await repo.setShuffleOn(true);
+
+      final container = ProviderContainer(
+        overrides: [
+          playerNotifierProvider.overrideWith(_TestPlayerNotifier.new),
+          audioHandlerProvider.overrideWithValue(
+            _NoopAudioHandler(player: _FakePlayer()),
+          ),
+          resumeRepositoryProvider.overrideWithValue(
+            ResumeRepository(box: resumeBox),
+          ),
+          appSettingsRepositoryProvider.overrideWithValue(repo),
+          sourceRegistryProvider.overrideWith((ref) => SourceRegistry()),
+        ],
+      );
+      final state = container.read(playerNotifierProvider);
+
+      expect(state.speed, 1.25, reason: '倍速必须跨启动保持');
+      expect(state.mode, PlayMode.loopOne);
+      expect(state.shuffleOn, isTrue);
+      container.dispose();
+    });
+  });
+
+  group('播放失败自动跳过（P1）', () {
+    ProviderContainer failingQueue(List<Track> queue, {PlayMode? mode}) {
+      final settingsBox = _settingsBoxFor();
+      return ProviderContainer(
+        overrides: [
+          playerNotifierProvider.overrideWith(_TestPlayerNotifier.new),
+          audioHandlerProvider.overrideWithValue(
+            _NoopAudioHandler(player: _FakePlayer()),
+          ),
+          resumeRepositoryProvider.overrideWithValue(
+            ResumeRepository(box: resumeBox),
+          ),
+          appSettingsRepositoryProvider.overrideWithValue(
+            AppSettingsRepository(box: settingsBox),
+          ),
+          sourceRegistryProvider.overrideWith((ref) {
+            final registry = SourceRegistry();
+            registry.register(
+              _FakeSource(
+                failResolve: false,
+                failure: UnavailableStreamException('不可播'),
+                sourceIdOverride: 'broken',
+              ),
+            );
+            return registry;
+          }),
+        ],
+      );
+    }
+
+    Track brokenSong(String id) =>
+        Track(id: id, sourceId: 'broken', title: '曲$id', artist: 'X');
+
+    /// 可播曲目：resolveStream 成功（走本地文件路径分支）。
+    Track okSong(String id) =>
+        Track(id: id, sourceId: 'good', title: '可播$id', artist: 'X');
+
+    /// 混合队列容器：`broken` 渠道恒失败，`good` 渠道恒成功。
+    ///
+    /// 只有这样才能验证「跳过」与「不跳过」的差异——全失败队列下
+    /// 两种行为都会停在错误态，无法区分。
+    ProviderContainer mixedQueueContainer({
+      required List<Track> failing,
+      required List<Track> playable,
+    }) {
+      return ProviderContainer(
+        overrides: [
+          appSettingsRepositoryProvider.overrideWithValue(
+            AppSettingsRepository(box: _settingsBoxFor()),
+          ),
+          playerNotifierProvider.overrideWith(_TestPlayerNotifier.new),
+          audioHandlerProvider.overrideWithValue(
+            _NoopAudioHandler(player: _FakePlayer()),
+          ),
+          resumeRepositoryProvider.overrideWithValue(
+            ResumeRepository(box: resumeBox),
+          ),
+          sourceRegistryProvider.overrideWith((ref) {
+            final registry = SourceRegistry();
+            registry.register(
+              _FakeSource(
+                failResolve: false,
+                failure: UnavailableStreamException('不可播'),
+                sourceIdOverride: 'broken',
+              ),
+            );
+            registry.register(
+              _FakeSource(failResolve: false, sourceIdOverride: 'good'),
+            );
+            return registry;
+          }),
+        ],
+      );
+    }
+
+    /// 等待自动跳过链走完。
+    ///
+    /// `_skipAfterFailure` 是 unawaited 的，且刻意延迟 350ms 再切歌
+    /// （让用户有机会看到失败提示），因此 `await playQueue(...)` 返回时
+    /// 跳过尚未发生，必须显式等待。
+    Future<void> waitForSkips(int expectedMs) =>
+        Future<void>.delayed(Duration(milliseconds: expectedMs));
+
+    test('失败后自动跳到下一首（多渠道路由下个别失败是常态）', () async {
+      final container = failingQueue(const []);
+      final notifier =
+          container.read(playerNotifierProvider.notifier)
+              as _TestPlayerNotifier;
+
+      await notifier.playQueue([
+        brokenSong('1'),
+        brokenSong('2'),
+        brokenSong('3'),
+      ]);
+      // 三首全不可播：跳两次到队尾后停止（每次约 350ms）
+      await waitForSkips(1500);
+
+      // 全部不可播 → 连跳后停在错误态，而不是静默刷完整个队列
+      expect(notifier.state.error, isNotNull);
+      expect(
+        notifier.state.currentIndex,
+        greaterThan(0),
+        reason: '应至少尝试过后续曲目，而不是卡在第一首',
+      );
+      container.dispose();
+    });
+
+    test('单曲循环模式不自动跳过（用户明确要求重复这一首）', () async {
+      // 关键：第 2 首是**可播**的。若守卫失效，播放器会跳过去并成功播放，
+      // currentIndex 变成 1 —— 用「全部不可播」的队列无法区分这两种情况
+      // （跳与不跳都停在错误态），那样的测试是假的。
+      final container = mixedQueueContainer(
+        failing: [brokenSong('1')],
+        playable: [okSong('2')],
+      );
+      final notifier =
+          container.read(playerNotifierProvider.notifier)
+              as _TestPlayerNotifier;
+      notifier.setMode(PlayMode.loopOne);
+
+      await notifier.playQueue([brokenSong('1'), okSong('2')]);
+      await waitForSkips(900);
+
+      expect(notifier.state.error, isNotNull);
+      expect(notifier.state.currentIndex, 0, reason: '单曲循环下失败应如实报错，不得跳到下一首');
+      container.dispose();
+    });
+
+    test('队列只有一首时不跳过', () async {
+      final container = mixedQueueContainer(
+        failing: [brokenSong('1')],
+        playable: const [],
+      );
+      final notifier =
+          container.read(playerNotifierProvider.notifier)
+              as _TestPlayerNotifier;
+
+      await notifier.playQueue([brokenSong('1')]);
+      await waitForSkips(900);
+
+      expect(notifier.state.error, isNotNull);
+      expect(notifier.state.currentIndex, 0);
+      container.dispose();
+    });
+
+    test('可播的下一首确实会被自动播上（证明跳过链真的在工作）', () async {
+      // 反向验证：确保上面的「不跳」断言不是因为跳过功能整体失效。
+      final container = mixedQueueContainer(
+        failing: [brokenSong('1')],
+        playable: [okSong('2')],
+      );
+      final notifier =
+          container.read(playerNotifierProvider.notifier)
+              as _TestPlayerNotifier;
+
+      await notifier.playQueue([brokenSong('1'), okSong('2')]);
+      await waitForSkips(1200);
+
+      expect(notifier.state.currentIndex, 1, reason: '第一首不可播时应自动播上第二首');
+      expect(notifier.state.playing, isTrue);
+      container.dispose();
+    });
+
+    test('顺序模式到队尾即停止，不绕回开头', () async {
+      final container = failingQueue(const []);
+      final notifier =
+          container.read(playerNotifierProvider.notifier)
+              as _TestPlayerNotifier;
+
+      await notifier.playQueue([brokenSong('1'), brokenSong('2')]);
+      await Future<void>.delayed(const Duration(milliseconds: 1200));
+
+      expect(notifier.state.currentIndex, lessThan(2), reason: '顺序模式不得越界或绕回');
       container.dispose();
     });
   });
@@ -784,3 +1119,7 @@ class _NoopAudioHandler extends MusaicAudioHandler {
   @override
   Future<void> stop() async {}
 }
+
+/// 设置 Box 由 setUpAll 打开、setUp 清空（见文件顶部）。
+/// 抽成函数只是为了让用例读起来更直白。
+Box<String> _settingsBoxFor() => Hive.box<String>('player_settings');

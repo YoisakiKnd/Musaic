@@ -68,7 +68,9 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
         SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
       }
     });
-    _volume = (ref.read(audioHandlerProvider).player.volume).clamp(0.0, 1.0);
+    // 音量取自持久化设置：PlayerNotifier 在 build 时已把存储值应用到播放器，
+    // 这里读取实际生效值，保证滑条与真实音量一致。
+    _volume = ref.read(audioHandlerProvider).player.volume.clamp(0.0, 1.0);
   }
 
   @override
@@ -531,7 +533,8 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
                 value: _volume,
                 onChanged: (value) {
                   setState(() => _volume = value);
-                  ref.read(audioHandlerProvider).player.setVolume(value);
+                  // 经 Notifier 设置以便持久化，而不是直接改播放器
+                  ref.read(playerNotifierProvider.notifier).setVolume(value);
                 },
               ),
             ),

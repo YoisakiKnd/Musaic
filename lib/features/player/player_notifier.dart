@@ -13,6 +13,7 @@ import '../../core/model/work_grouping.dart';
 import '../../core/source/music_source.dart' show ResolvedStream;
 import '../../core/network/network_config.dart';
 import '../../core/theme/app_tokens.dart';
+import '../settings/settings_providers.dart';
 import '../../app/lifecycle/app_lifecycle.dart';
 import 'audio_handler.dart';
 import 'data/resume_repository.dart';
@@ -149,6 +150,15 @@ class PlayerNotifier extends Notifier<PlayerState> {
   /// 随机模式洗牌序列（shuffleOn=false 时忽略）。
   List<int>? _shuffleOrder;
 
+  /// 连续自动跳过的次数。
+  ///
+  /// 用于防止「整队列全部不可播」时无限跳歌：跳完一轮仍失败就停下报错，
+  /// 而不是把用户整个队列静默刷完（那会让用户完全不知道发生了什么）。
+  int _consecutiveSkips = 0;
+
+  /// 一轮最多连续跳过多少首。超过则停止并报错。
+  static const int _maxConsecutiveSkips = 5;
+
   /// 跨渠道换源候选：曲目 key → 同作品在其它渠道的记录（D7）。
   ///
   /// 在 [playQueue] 时**一次性**算好（纯内存分组，零额外请求），
@@ -189,7 +199,24 @@ class PlayerNotifier extends Notifier<PlayerState> {
       }
     });
 
-    return const PlayerState();
+    // 恢复用户上次的音量 / 倍速 / 播放模式（播放器该记住的东西）。
+    //
+    // 放在 build() 末尾而非异步初始化：这些值必须**在任何播放开始前**
+    // 生效，否则首曲会用默认音量/倍速播出去（夜间戴耳机时很突兀）。
+    final settings = ref.read(appSettingsRepositoryProvider);
+    final restored = PlayerState(
+      speed: settings.playbackSpeed,
+      mode: settings.playMode,
+      shuffleOn: settings.shuffleOn,
+    );
+    final player = _handler.player;
+    player.setVolume(settings.volume);
+    player.setSpeed(restored.speed);
+    if (restored.shuffleOn) {
+      _shuffleOrder = QueueLogic.shuffledOrder(0, random: _random);
+    }
+
+    return restored;
   }
 
   void Function(bool degraded)? _onVisibilityChanged;
@@ -471,7 +498,10 @@ class PlayerNotifier extends Notifier<PlayerState> {
     state = state.copyWith(position: position);
   }
 
-  void setMode(PlayMode mode) => state = state.copyWith(mode: mode);
+  void setMode(PlayMode mode) {
+    state = state.copyWith(mode: mode);
+    unawaited(ref.read(appSettingsRepositoryProvider).setPlayMode(mode));
+  }
 
   void toggleShuffle() {
     final shuffleOn = !state.shuffleOn;
@@ -483,6 +513,7 @@ class PlayerNotifier extends Notifier<PlayerState> {
       _moveCurrentToShuffleHead(currentIndex: state.currentIndex);
     }
     state = state.copyWith(shuffleOn: shuffleOn);
+    unawaited(ref.read(appSettingsRepositoryProvider).setShuffleOn(shuffleOn));
   }
 
   /// 定时关闭（倒计时）：传 null 取消（对齐 Mei 的定时播放）。
@@ -523,12 +554,26 @@ class PlayerNotifier extends Notifier<PlayerState> {
 
   /// 倍速播放；平台不支持时置错误提示并保持原速。
   Future<void> setSpeed(double value) async {
+    final clamped = value.clamp(minPlaybackSpeed, maxPlaybackSpeed);
     try {
-      await _handler.player.setSpeed(value);
-      state = state.copyWith(speed: value, error: null);
+      await _handler.player.setSpeed(clamped);
+      state = state.copyWith(speed: clamped, error: null);
+      // 持久化：倍速常被长期固定（播客/有声书），不记住会每次重设
+      unawaited(
+        ref.read(appSettingsRepositoryProvider).setPlaybackSpeed(clamped),
+      );
     } catch (_) {
       state = state.copyWith(error: '当前平台不支持倍速播放');
     }
+  }
+
+  /// 设置音量并持久化。
+  ///
+  /// 音量此前只存在播放页的局部 `_volume` 里，退出应用即丢失。
+  Future<void> setVolume(double value) async {
+    final clamped = value.clamp(0.0, 1.0);
+    await _handler.player.setVolume(clamped);
+    unawaited(ref.read(appSettingsRepositoryProvider).setVolume(clamped));
   }
 
   void clearError() => state = state.copyWith(error: null);
@@ -638,6 +683,7 @@ class PlayerNotifier extends Notifier<PlayerState> {
       await player.play();
       if (seq != _loadSeq) return;
       state = state.copyWith(loading: false, playing: true);
+      _consecutiveSkips = 0; // 播放成功即重置连续跳过计数
 
       // 记录最近播放与断点快照起点（本地优先存储，失败静默）
       unawaited(_recordHistory(effectiveTrack));
@@ -646,6 +692,7 @@ class PlayerNotifier extends Notifier<PlayerState> {
       if (seq != _loadSeq) return;
       AppLog.debug('MusaicPlayer SourceException: ${e.message}');
       state = state.copyWith(loading: false, playing: false, error: e.message);
+      unawaited(_skipAfterFailure(index));
     } catch (e, st) {
       if (seq != _loadSeq) return;
       AppLog.debug('MusaicPlayer 播放异常: $e');
@@ -658,6 +705,7 @@ class PlayerNotifier extends Notifier<PlayerState> {
         playing: false,
         error: '播放失败，请稍后重试',
       );
+      unawaited(_skipAfterFailure(index));
     }
   }
 
@@ -722,6 +770,47 @@ class PlayerNotifier extends Notifier<PlayerState> {
 
     if (lastError != null) throw lastError;
     throw NetworkSourceException('无可用播放源', sourceId: track.sourceId);
+  }
+
+  /// 播放失败后自动跳下一首。
+  ///
+  /// 为什么需要：Musaic 是多渠道路由，个别曲目不可播是**常态**
+  /// （版权变动、渠道限流、本地文件被删）。若失败即停，用户听一张专辑
+  /// 会频繁被打断并手动点下一首。
+  ///
+  /// 何时**不**跳：
+  /// - 队列只有一首（跳了等于没播，报错更有信息量）；
+  /// - 已连续跳过 [_maxConsecutiveSkips] 首（大概率是网络/登录等系统性问题，
+  ///   继续跳会把整个队列静默刷完，用户反而不知道出了什么事）；
+  /// - 单曲循环模式（用户明确要求重复这一首，失败应如实报错）。
+  Future<void> _skipAfterFailure(int failedIndex) async {
+    if (!state.hasQueue) return;
+    // 注：单曲循环与「队列只有一首」两种情况**无需在此特判**——
+    // `QueueLogic.nextIndex` 在 loopOne 下返回当前下标、在 length<=1 时返回
+    // null，两种情况都不会产生「跳到别处」的结果。此前写了冗余守卫，
+    // 变异测试显示删掉它们测试仍全绿，即守卫无效——故移除，避免给出
+    // 「这里做过特殊处理」的错觉。
+    if (_consecutiveSkips >= _maxConsecutiveSkips) {
+      AppLog.warning('连续 $_consecutiveSkips 首播放失败，停止自动跳过并保留错误提示');
+      return;
+    }
+
+    // 用当前模式算出下一首；顺序模式到队尾即停止（不绕回）
+    final advance = QueueLogic.nextIndex(
+      currentIndex: failedIndex,
+      length: state.queue.length,
+      mode: state.mode,
+      shuffleOn: state.shuffleOn,
+      shuffleOrder: _shuffleOrder,
+    );
+    if (advance == null) return; // 队尾：保留错误提示，不再跳
+
+    _consecutiveSkips++;
+    AppLog.debug('第 $_consecutiveSkips 首连续失败，自动跳到下标 ${advance.index}');
+    // 让 UI 有机会看到失败提示再跳：立刻切歌会让用户完全没察觉
+    await Future<void>.delayed(const Duration(milliseconds: 350));
+    if (!state.hasQueue || failedIndex >= state.queue.length) return;
+    await _loadAndPlay(advance.index);
   }
 
   /// 换源提示：写入 state，由 UI `ref.listen` 后弹 SnackBar，不打断播放。

@@ -11,6 +11,7 @@ import 'package:musaic/features/library/data/library_repository.dart';
 import 'package:musaic/features/library/widgets/add_to_playlist_sheet.dart';
 import 'package:musaic/features/shared/widgets/track_tile.dart';
 import 'package:musaic/features/player/audio_handler.dart';
+import 'package:musaic/features/settings/settings_providers.dart';
 import 'package:musaic/features/player/data/resume_repository.dart';
 import 'package:hive/hive.dart';
 import 'package:just_audio/just_audio.dart' as ja;
@@ -35,15 +36,18 @@ void main() {
   late _FakeLibraryRepository repository;
   late Directory tempDir;
   late Box<String> resumeBox;
+  late Box<String> settingsBox;
 
   setUpAll(() async {
     tempDir = await Directory.systemTemp.createTemp('musaic_sheet_test');
     Hive.init(tempDir.path);
     resumeBox = await Hive.openBox<String>('sheet_resume');
+    settingsBox = await Hive.openBox<String>('sheet_settings');
   });
 
   tearDownAll(() async {
     if (resumeBox.isOpen) await resumeBox.close();
+    if (settingsBox.isOpen) await settingsBox.close();
     await Hive.close();
     if (tempDir.existsSync()) {
       try {
@@ -72,6 +76,11 @@ void main() {
         ),
         resumeRepositoryProvider.overrideWithValue(
           ResumeRepository(box: resumeBox),
+        ),
+        // PlayerNotifier.build() 会读取设置以恢复音量/倍速/模式，
+        // 因此任何触发播放器构建的用例都必须注入设置仓库。
+        appSettingsRepositoryProvider.overrideWithValue(
+          AppSettingsRepository(box: settingsBox),
         ),
       ],
       child: MaterialApp(
@@ -357,6 +366,17 @@ class _StubPlayer extends Mock implements ja.AudioPlayer {
 
   @override
   double get speed => 1.0;
+
+  @override
+  double get volume => 1.0;
+
+  // PlayerNotifier.build() 会恢复持久化的音量/倍速并应用到播放器，
+  // 因此桩必须实现这两个方法，否则 mocktail 返回 null 触发类型错误。
+  @override
+  Future<void> setVolume(double volume) async {}
+
+  @override
+  Future<void> setSpeed(double speed) async {}
 
   @override
   Future<void> dispose() async {}

@@ -6,6 +6,14 @@ import 'package:hive_flutter/hive_flutter.dart';
 
 import '../../core/network/network_config.dart';
 import '../../core/network/network_status.dart';
+import '../player/domain/queue_logic.dart';
+
+/// 倍速的取值范围。
+///
+/// 下限 0.5 而非 0.75：有声书/课程常需要 0.75x 以下；
+/// 上限 2.0 是 just_audio 各平台都能稳定支持的边界。
+const double minPlaybackSpeed = 0.5;
+const double maxPlaybackSpeed = 2.0;
 
 /// 应用设置仓库：外观与性能偏好持久化（Hive）。
 class AppSettingsRepository {
@@ -83,6 +91,48 @@ class AppSettingsRepository {
   Future<void> setAudioQuality(AudioQuality quality) =>
       box.put(_qualityKey, quality.name);
 
+  /// 播放音量（0.0–1.0）。
+  ///
+  /// 持久化的理由：音量是「播放器该记住的东西」。每次启动都回到 100%
+  /// 会逼用户重新调——尤其夜间戴耳机时突然满音量是真实困扰。
+  double get volume {
+    final raw = double.tryParse(box.get(_volumeKey) ?? '');
+    if (raw == null) return 1.0;
+    return raw.clamp(0.0, 1.0);
+  }
+
+  Future<void> setVolume(double value) =>
+      box.put(_volumeKey, value.clamp(0.0, 1.0).toString());
+
+  /// 播放倍速（0.5–2.0）。
+  ///
+  /// 听播客/有声书常长期固定在 1.25x 或 1.5x，不记住会每次重设。
+  double get playbackSpeed {
+    final raw = double.tryParse(box.get(_speedKey) ?? '');
+    if (raw == null) return 1.0;
+    return raw.clamp(minPlaybackSpeed, maxPlaybackSpeed);
+  }
+
+  Future<void> setPlaybackSpeed(double value) => box.put(
+    _speedKey,
+    value.clamp(minPlaybackSpeed, maxPlaybackSpeed).toString(),
+  );
+
+  /// 上次使用的播放模式（顺序 / 列表循环 / 单曲循环）。
+  PlayMode get playMode => switch (box.get(_playModeKey)) {
+    'loopAll' => PlayMode.loopAll,
+    'loopOne' => PlayMode.loopOne,
+    _ => PlayMode.sequential,
+  };
+
+  Future<void> setPlayMode(PlayMode mode) => box.put(_playModeKey, mode.name);
+
+  /// 随机播放开关（与 [playMode] 正交，可叠加）。
+  bool get shuffleOn => box.get(_shuffleKey) == 'true';
+
+  Future<void> setShuffleOn(bool value) =>
+      box.put(_shuffleKey, value ? 'true' : 'false');
+
   /// 渠道网络请求超时（秒）；null 表示用默认档位。
   int? get networkTimeoutSeconds => int.tryParse(box.get(_timeoutKey) ?? '');
 
@@ -95,6 +145,10 @@ class AppSettingsRepository {
   static const String _lyricOffsetKey = 'lyric_offset_ms';
   static const String _qualityKey = 'audio_quality';
   static const String _timeoutKey = 'network_timeout_seconds';
+  static const String _volumeKey = 'player_volume';
+  static const String _speedKey = 'player_speed';
+  static const String _playModeKey = 'player_play_mode';
+  static const String _shuffleKey = 'player_shuffle';
   static const String _cellularDowngradeKey = 'cellular_auto_downgrade';
   static const String _dynamicColorKey = 'dynamic_cover_color';
   static const String _autoResumeKey = 'auto_resume_on_launch';
