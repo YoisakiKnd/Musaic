@@ -12,7 +12,10 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  FLUTTER_VERSION: '3.29.0'
+  # 与本机开发环境保持一致：pubspec 只要求 >=3.29.0，但门禁必须跑在
+  # 开发实际使用的版本上，否则「本地绿、CI 红」或反之都失去意义。
+  # 升级 Flutter 时请同步此处与本机版本。
+  FLUTTER_VERSION: '3.44.8'
 
 jobs:
   analyze-and-test:
@@ -36,8 +39,13 @@ jobs:
       - name: 静态分析（零警告基线）
         run: flutter analyze --no-pub
 
-      - name: 单元 + Widget 测试
-        run: flutter test --no-pub --reporter expanded
+      - name: 单元 + Widget 测试（含覆盖率）
+        run: flutter test --coverage --no-pub --reporter expanded
+
+      # 覆盖率门禁（T2）：脚本零依赖（纯标准库解析 lcov.info），
+      # 因此无需在 CI 安装 lcov。分层阈值见 tool/check_coverage.py。
+      - name: 覆盖率门槛
+        run: python3 tool/check_coverage.py --verbose
 
   build-android:
     name: Android 构建冒烟

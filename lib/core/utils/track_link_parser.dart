@@ -38,6 +38,14 @@ class TrackLink {
   String toString() => 'TrackLink($sourceId:$id)';
 }
 
+/// YouTube Music 渠道 id。
+///
+/// **必须与 `YouTubeMusicSource.id` 一致**：渠道注册用的是 `ytmusic`。
+/// 这里不 import 渠道实现（架构守护测试禁止 core 依赖 sources），
+/// 因此以常量形式声明，并由 `test/core/di/app_providers_test.dart`
+/// 断言它与真实注册的渠道 id 相同——避免再次出现「解析出的 id 找不到渠道」。
+const String youtubeMusicSourceId = 'ytmusic';
+
 /// 各渠道的已知域名（用于判定，而非用于猜测）。
 const List<String> _neteaseHosts = <String>[
   'music.163.com',
@@ -132,13 +140,13 @@ TrackLink? _parseUrl(Uri uri) {
     // music.youtube.com/watch?v=ID
     final v = uri.queryParameters['v'];
     if (v != null && _ytmVideoPattern.hasMatch(v)) {
-      return TrackLink(sourceId: 'ytm', id: v);
+      return TrackLink(sourceId: youtubeMusicSourceId, id: v);
     }
     // youtu.be/ID
     if (host == 'youtu.be') {
       final id = uri.pathSegments.isNotEmpty ? uri.pathSegments.first : '';
       if (_ytmVideoPattern.hasMatch(id)) {
-        return TrackLink(sourceId: 'ytm', id: id);
+        return TrackLink(sourceId: youtubeMusicSourceId, id: id);
       }
     }
     // youtube.com/shorts/ID 或 /embed/ID
@@ -147,7 +155,7 @@ TrackLink? _parseUrl(Uri uri) {
       if (segments[i] == 'shorts' || segments[i] == 'embed') {
         final id = segments[i + 1];
         if (_ytmVideoPattern.hasMatch(id)) {
-          return TrackLink(sourceId: 'ytm', id: id);
+          return TrackLink(sourceId: youtubeMusicSourceId, id: id);
         }
       }
     }
@@ -259,11 +267,11 @@ bool _hostMatches(String host, List<String> candidates) {
   return false;
 }
 
-bool _isKnownSource(String sourceId) => const <String>{
+bool _isKnownSource(String sourceId) => <String>{
   'netease',
   'qqmusic',
   'kugou',
-  'ytm',
+  youtubeMusicSourceId,
   'local',
 }.contains(sourceId);
 
@@ -273,7 +281,7 @@ bool _looksLikeIdFor(String sourceId, String id) {
     'netease' => _neteaseIdPattern.hasMatch(id),
     'qqmusic' => _qqMidPattern.hasMatch(id),
     'kugou' => _kugouHashPattern.hasMatch(id),
-    'ytm' => _ytmVideoPattern.hasMatch(id),
+    youtubeMusicSourceId => _ytmVideoPattern.hasMatch(id),
     // 本地路径不做形态校验（可以是任意路径）
     'local' => true,
     _ => false,

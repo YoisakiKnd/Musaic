@@ -166,7 +166,8 @@ class _SearchPageState extends ConsumerState<SearchPage> {
     },
     'qqmusic' => <String, dynamic>{'songmid': link.id},
     'kugou' => <String, dynamic>{'hash': link.id},
-    'ytm' => <String, dynamic>{'videoId': link.id},
+    // 必须与 YouTubeMusicSource.id（ytmusic）一致
+    youtubeMusicSourceId => <String, dynamic>{'videoId': link.id},
     'local' => <String, dynamic>{'path': link.id},
     _ => <String, dynamic>{},
   };

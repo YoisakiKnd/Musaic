@@ -128,24 +128,27 @@ void main() {
   });
 
   group('YouTube Music', () {
+    // 注意：渠道 id 是 `ytmusic`（见 YouTubeMusicSource.id），不是 `ytm`。
+    // 这里用常量而非字面量，并由 test/core/di/app_providers_test.dart
+    // 断言它与真实注册的渠道 id 一致——避免「解析成功但找不到渠道」。
     test('watch?v= 形态', () {
       expect(
         parseTrackLink('https://music.youtube.com/watch?v=dQw4w9WgXcQ'),
-        const TrackLink(sourceId: 'ytm', id: 'dQw4w9WgXcQ'),
+        const TrackLink(sourceId: youtubeMusicSourceId, id: 'dQw4w9WgXcQ'),
       );
     });
 
     test('youtu.be 短链', () {
       expect(
         parseTrackLink('https://youtu.be/dQw4w9WgXcQ'),
-        const TrackLink(sourceId: 'ytm', id: 'dQw4w9WgXcQ'),
+        const TrackLink(sourceId: youtubeMusicSourceId, id: 'dQw4w9WgXcQ'),
       );
     });
 
     test('shorts 形态', () {
       expect(
         parseTrackLink('https://www.youtube.com/shorts/dQw4w9WgXcQ'),
-        const TrackLink(sourceId: 'ytm', id: 'dQw4w9WgXcQ'),
+        const TrackLink(sourceId: youtubeMusicSourceId, id: 'dQw4w9WgXcQ'),
       );
     });
 
@@ -154,7 +157,7 @@ void main() {
         parseTrackLink(
           'https://music.youtube.com/watch?v=dQw4w9WgXcQ&list=RDAMVMxyz',
         ),
-        const TrackLink(sourceId: 'ytm', id: 'dQw4w9WgXcQ'),
+        const TrackLink(sourceId: youtubeMusicSourceId, id: 'dQw4w9WgXcQ'),
       );
     });
   });
