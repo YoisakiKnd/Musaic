@@ -47,8 +47,33 @@ android {
         }
     }
 
+    // ABI 分割：默认会把 x86_64 / arm64-v8a / armeabi-v7a 三套 native 库
+    // 全部打进同一个 APK（实测各约 17–20MB，合计 ~56MB）。
+    // x86_64 只用于模拟器，真机安装包完全不需要。
+    // 开启后每个 ABI 产出独立 APK，用户只下载自己机型那一份。
+    splits {
+        abi {
+            isEnable = true
+            reset()
+            include("arm64-v8a", "armeabi-v7a", "x86_64")
+            isUniversalApk = true // 保留一个全量包，供分发给不确定机型时使用
+        }
+    }
+
     buildTypes {
         release {
+            // R8 代码混淆 + 资源压缩。
+            //
+            // 关闭时（原先的状态）classes.dex 约 3.5MB 且**未做无用代码消除**；
+            // Tika / Kotlin stdlib 等库中未被调用的部分会被全部保留。
+            // Flutter 引擎与 Dart 代码（libapp.so）不受影响——
+            // 那部分是 AOT 产物，与 R8 无关。
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro",
+            )
             signingConfig = when {
                 keystorePropertiesFile.exists() -> signingConfigs.getByName("release")
                 allowDebugSigning -> signingConfigs.getByName("debug")

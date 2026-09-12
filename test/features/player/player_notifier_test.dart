@@ -1057,6 +1057,78 @@ void main() {
     });
   });
 
+  group('交叉淡入（N4）', () {
+    test('默认关闭：crossfadeSeconds 为 0，不启用', () async {
+      final container = createContainer(queue: [track('a')]);
+      final settings = container.read(appSettingsRepositoryProvider);
+      expect(settings.crossfadeSeconds, 0, reason: '交叉淡入需双路解码，默认必须关闭');
+      container.dispose();
+    });
+
+    test('时长被钳制在 0–12 秒', () async {
+      final box = _settingsBoxFor();
+      final repo = AppSettingsRepository(box: box);
+
+      await repo.setCrossfadeSeconds(99);
+      expect(repo.crossfadeSeconds, maxCrossfadeSeconds);
+
+      await repo.setCrossfadeSeconds(-5);
+      expect(repo.crossfadeSeconds, 0);
+    });
+
+    test('开启后未进入淡入窗口时不推进（剩余时间充足）', () async {
+      final box = _settingsBoxFor();
+      await AppSettingsRepository(box: box).setCrossfadeSeconds(4);
+
+      final container = createContainer(queue: [track('a'), track('b')]);
+      final notifier =
+          container.read(playerNotifierProvider.notifier)
+              as _TestPlayerNotifier;
+
+      await notifier.playQueue([track('a'), track('b')]);
+      // 曲长 30 秒，远大于 4 秒窗口
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+
+      expect(notifier.debugCrossfading, isFalse, reason: '剩余时间充足时不该开始淡入');
+      container.dispose();
+    });
+
+    test('手动切歌会取消进行中的交叉淡入', () async {
+      final box = _settingsBoxFor();
+      await AppSettingsRepository(box: box).setCrossfadeSeconds(4);
+
+      final container = createContainer(queue: [track('a'), track('b')]);
+      final notifier =
+          container.read(playerNotifierProvider.notifier)
+              as _TestPlayerNotifier;
+
+      await notifier.playQueue([track('a'), track('b')]);
+      await notifier.next();
+
+      expect(
+        notifier.debugCrossfading,
+        isFalse,
+        reason: '手动切歌必须取消淡入，否则音量会停在半途',
+      );
+      container.dispose();
+    });
+
+    test('dispose 时不因读 provider 而抛异常（回归）', () async {
+      final box = _settingsBoxFor();
+      await AppSettingsRepository(box: box).setCrossfadeSeconds(4);
+
+      final container = createContainer(queue: [track('a')]);
+      final notifier =
+          container.read(playerNotifierProvider.notifier)
+              as _TestPlayerNotifier;
+      await notifier.playQueue([track('a')]);
+
+      // 曾在此处抛「Tried to read a provider from a ProviderContainer
+      // that was already disposed」——dispose 路径不得读 provider
+      expect(container.dispose, returnsNormally);
+    });
+  });
+
   group('_loadAndPlay 越界守卫（P0-3 第二道防线）', () {
     test('越界下标被静默忽略而非抛异常', () async {
       final container = createContainer(queue: [track('a')]);

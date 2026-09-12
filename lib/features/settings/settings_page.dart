@@ -15,6 +15,7 @@ import '../../core/utils/cover_cache.dart';
 import '../../core/theme/app_tokens.dart';
 import '../auth/presentation/channel/account_manage_page.dart';
 import '../library/data/backup_service.dart';
+import '../player/domain/crossfade.dart';
 import 'local_music_settings_page.dart';
 import 'settings_providers.dart';
 
@@ -369,6 +370,65 @@ class PlaybackPage extends ConsumerWidget {
                       ref.read(autoResumeOnLaunchProvider.notifier).set(value),
             ),
           ),
+
+          // ---------- 交叉淡入 ----------
+          const SizedBox(height: 12),
+          _CrossfadeCard(),
+        ],
+      ),
+    );
+  }
+}
+
+/// 交叉淡入设置（N4）。
+///
+/// 默认关闭：交叉淡入需要**两路音频同时解码**（双播放器），
+/// 在低端机上是实打实的额外开销；且它会改变「曲末听感」，
+/// 不适合替用户默认开启。
+class _CrossfadeCard extends ConsumerWidget {
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final seconds = ref.watch(crossfadeSecondsProvider);
+    final enabled = seconds > 0;
+    return Card(
+      child: Column(
+        children: [
+          SwitchListTile(
+            title: const Text('交叉淡入淡出'),
+            subtitle: const Text(
+              '曲末与下一首重叠渐变，消除曲间停顿（默认关闭）',
+              style: TextStyle(fontSize: 12),
+            ),
+            value: enabled,
+            onChanged:
+                (value) => ref
+                    .read(crossfadeSecondsProvider.notifier)
+                    // 开启时用默认 4 秒；关闭置 0
+                    .set(value ? Crossfade.defaultDuration.inSeconds : 0),
+          ),
+          if (enabled)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+              child: Row(
+                children: [
+                  const Text('时长', style: TextStyle(fontSize: 13)),
+                  Expanded(
+                    child: Slider(
+                      value: seconds.toDouble(),
+                      min: 1,
+                      max: maxCrossfadeSeconds.toDouble(),
+                      divisions: maxCrossfadeSeconds - 1,
+                      label: '$seconds 秒',
+                      onChanged:
+                          (value) => ref
+                              .read(crossfadeSecondsProvider.notifier)
+                              .set(value.round()),
+                    ),
+                  ),
+                  Text('$seconds 秒', style: const TextStyle(fontSize: 13)),
+                ],
+              ),
+            ),
         ],
       ),
     );

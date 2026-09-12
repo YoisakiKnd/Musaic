@@ -17,6 +17,7 @@ import '../settings/settings_providers.dart';
 import '../../app/lifecycle/app_lifecycle.dart';
 import 'audio_handler.dart';
 import 'data/resume_repository.dart';
+import 'domain/crossfade.dart';
 import 'domain/queue_logic.dart';
 import 'domain/stream_prefetcher.dart';
 
@@ -151,6 +152,12 @@ class PlayerNotifier extends Notifier<PlayerState> {
   /// 随机模式洗牌序列（shuffleOn=false 时忽略）。
   List<int>? _shuffleOrder;
 
+  /// 交叉淡入是否正在进行。
+  ///
+  /// 进度无需缓存：[_tickCrossfade] 每次都从「剩余时长」重算，
+  /// 缓存反而会引入与真实位置不一致的风险。
+  bool _crossfading = false;
+
   /// 播放地址预取器（P2：降低「点歌到出声」延迟）。
   ///
   /// 在切歌成功、且当前曲目剩余时间充足时预取下一首的解析结果，
@@ -210,6 +217,8 @@ class PlayerNotifier extends Notifier<PlayerState> {
       _positionTimer?.cancel();
       _positionTimer = null;
       _sleepTimer?.cancel();
+      // dispose 期间禁止读 provider，故不恢复音量
+      _cancelCrossfade(restoreVolume: false);
       if (_onVisibilityChanged != null) {
         AppUiVisibility.removeListener(_onVisibilityChanged!);
         _onVisibilityChanged = null;
@@ -269,6 +278,10 @@ class PlayerNotifier extends Notifier<PlayerState> {
   }
 
   // ---------- 仅供测试观察（PW-04 空闲纪律断言） ----------
+
+  /// 交叉淡入是否正在进行（供测试断言）。
+  @visibleForTesting
+  bool get debugCrossfading => _crossfading;
 
   /// 位置轮询定时器是否存活。
   @visibleForTesting
@@ -420,6 +433,7 @@ class PlayerNotifier extends Notifier<PlayerState> {
     if (result.queue.isEmpty) {
       _shuffleOrder = null;
       _sleepTimer?.cancel();
+      _cancelCrossfade();
       await _resume?.clear();
       await _handler.stop();
       state = state.copyWith(
@@ -449,7 +463,7 @@ class PlayerNotifier extends Notifier<PlayerState> {
   }
 
   Future<void> toggle() async {
-    final player = _handler.player;
+    final player = _handler.activePlayer;
     if (player.playing) {
       await player.pause();
       state = state.copyWith(playing: false);
@@ -463,6 +477,7 @@ class PlayerNotifier extends Notifier<PlayerState> {
   /// 上一首：超 3 秒先回开头（Mei 行为对齐，见 QueueLogic）。
   Future<void> previous() async {
     if (!state.hasQueue) return;
+    _cancelCrossfade();
     if (QueueLogic.shouldRestartOnPrevious(position: state.position)) {
       await seekTo(Duration.zero);
       return;
@@ -480,6 +495,8 @@ class PlayerNotifier extends Notifier<PlayerState> {
 
   Future<void> next() async {
     if (!state.hasQueue) return;
+    // 用户手动切歌：取消进行中的交叉淡入，避免音量停在半途
+    _cancelCrossfade();
     final advance = QueueLogic.nextIndex(
       currentIndex: state.currentIndex,
       length: state.queue.length,
@@ -878,6 +895,83 @@ class PlayerNotifier extends Notifier<PlayerState> {
     return null;
   }
 
+  /// 当前配置的交叉淡入时长（0 = 关闭）。
+  Duration get _crossfadeDuration =>
+      Duration(seconds: ref.read(crossfadeSecondsProvider));
+
+  /// 交叉淡入是否可用。
+  ///
+  /// 需要：功能已开启 + 次播放器存在（handler 未注入时为 null）。
+  bool get _crossfadeAvailable =>
+      _crossfadeDuration > Duration.zero && _handler.secondaryPlayer != null;
+
+  /// 推进交叉淡入的音量斜坡。
+  ///
+  /// 由定时器按 50ms 驱动——足以让 4 秒斜坡平滑（80 步），
+  /// 又不会像逐帧那样频繁调用平台通道。
+  void _tickCrossfade() {
+    final secondary = _handler.secondaryPlayer;
+    if (secondary == null) return;
+    final duration = _crossfadeDuration;
+    if (duration <= Duration.zero) return;
+    // 只在正在播放时推进：暂停时不该继续降音量
+    if (!state.playing) return;
+
+    final remaining = (state.duration ?? Duration.zero) - state.position;
+    final progress = Crossfade.progress(
+      remaining: remaining,
+      duration: duration,
+    );
+    if (progress <= 0) return; // 尚未进入淡入窗口
+    _crossfading = true;
+
+    final levels = Crossfade.levelsFor(
+      remaining: remaining,
+      duration: duration,
+      baseVolume: ref.read(appSettingsRepositoryProvider).volume,
+    );
+
+    // 两路音量反向斜坡
+    unawaited(_handler.player.setVolume(levels.outgoingVolume));
+    unawaited(secondary.setVolume(levels.incomingVolume));
+
+    // 淡入完成：把主播放器切到新曲，释放旧路
+    if (progress >= 1.0) {
+      unawaited(_finishCrossfade());
+    }
+  }
+
+  /// 交叉淡入结束：停旧路、把次播放器扶正。
+  Future<void> _finishCrossfade() async {
+    final secondary = _handler.secondaryPlayer;
+    if (secondary == null) return;
+    // 主播放器音量恢复为用户设定值（淡出把它降到 0 了）
+    await _handler.player.setVolume(
+      ref.read(appSettingsRepositoryProvider).volume,
+    );
+    await _handler.player.stop();
+    _handler.setActivePlayer(null); // 交回主播放器
+    _crossfading = false;
+  }
+
+  /// 取消进行中的交叉淡入（用户手动切歌/暂停时）。
+  /// [restoreVolume] 为 false 时不读设置恢复音量——**dispose 期间不可读
+  /// provider**（Riverpod 会抛「container already disposed」）。应用退出时
+  /// 也无需恢复音量，播放器即将销毁。
+  void _cancelCrossfade({bool restoreVolume = true}) {
+    _crossfading = false;
+    _handler.setActivePlayer(null);
+    final secondary = _handler.secondaryPlayer;
+    if (secondary != null) unawaited(secondary.stop());
+    if (restoreVolume) {
+      unawaited(
+        _handler.player.setVolume(
+          ref.read(appSettingsRepositoryProvider).volume,
+        ),
+      );
+    }
+  }
+
   /// 预取下一首（在切歌成功后调用）。
   ///
   /// 只在「当前曲目剩余时间充足」时预取：太早取会因签名过期而白费，
@@ -987,6 +1081,8 @@ class PlayerNotifier extends Notifier<PlayerState> {
   /// 进度节流刷新（可见 100ms / 不可见 1s，性能预算 §10.2 + 功耗 PW-03）。
   void _tickPosition() {
     debugPositionTicks++;
+    // 交叉淡入随位置采样推进（复用同一生命周期，不额外起定时器）
+    if (_crossfadeAvailable) _tickCrossfade();
     final player = _handler.player;
     final pos = player.position;
     final dur = player.duration;

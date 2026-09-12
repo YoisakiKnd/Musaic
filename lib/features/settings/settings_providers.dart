@@ -8,6 +8,9 @@ import '../../core/network/network_config.dart';
 import '../../core/network/network_status.dart';
 import '../player/domain/queue_logic.dart';
 
+/// 交叉淡入的最大时长（秒）。与 `Crossfade.maxDuration` 保持一致。
+const int maxCrossfadeSeconds = 12;
+
 /// 倍速的取值范围。
 ///
 /// 下限 0.5 而非 0.75：有声书/课程常需要 0.75x 以下；
@@ -133,6 +136,20 @@ class AppSettingsRepository {
   Future<void> setShuffleOn(bool value) =>
       box.put(_shuffleKey, value ? 'true' : 'false');
 
+  /// 交叉淡入时长（秒）。0 = 关闭（默认）。
+  ///
+  /// 默认关闭的理由：交叉淡入需要**两路音频同时解码**（双播放器），
+  /// 在低端机上是实打实的额外开销；且它会改变「曲末听感」，
+  /// 不适合替用户默认开启。用户在设置里显式开启后才生效。
+  int get crossfadeSeconds {
+    final raw = int.tryParse(box.get(_crossfadeKey) ?? '');
+    if (raw == null) return 0;
+    return raw.clamp(0, maxCrossfadeSeconds);
+  }
+
+  Future<void> setCrossfadeSeconds(int value) =>
+      box.put(_crossfadeKey, value.clamp(0, maxCrossfadeSeconds).toString());
+
   /// 渠道网络请求超时（秒）；null 表示用默认档位。
   int? get networkTimeoutSeconds => int.tryParse(box.get(_timeoutKey) ?? '');
 
@@ -149,6 +166,7 @@ class AppSettingsRepository {
   static const String _speedKey = 'player_speed';
   static const String _playModeKey = 'player_play_mode';
   static const String _shuffleKey = 'player_shuffle';
+  static const String _crossfadeKey = 'player_crossfade_seconds';
   static const String _cellularDowngradeKey = 'cellular_auto_downgrade';
   static const String _dynamicColorKey = 'dynamic_cover_color';
   static const String _autoResumeKey = 'auto_resume_on_launch';
@@ -265,6 +283,27 @@ class AudioQualityNotifier extends Notifier<AudioQuality> {
     await ref.read(appSettingsRepositoryProvider).setAudioQuality(quality);
   }
 }
+
+/// 交叉淡入时长（0 = 关闭）。
+class CrossfadeNotifier extends Notifier<int> {
+  @override
+  int build() => ref.watch(appSettingsRepositoryProvider).crossfadeSeconds;
+
+  Future<void> set(int seconds) async {
+    final clamped = seconds.clamp(0, maxCrossfadeSeconds);
+    state = clamped;
+    await ref.read(appSettingsRepositoryProvider).setCrossfadeSeconds(clamped);
+  }
+}
+
+final crossfadeSecondsProvider = NotifierProvider<CrossfadeNotifier, int>(
+  CrossfadeNotifier.new,
+);
+
+/// 交叉淡入是否启用（时长 > 0）。
+final crossfadeEnabledProvider = Provider<bool>(
+  (ref) => ref.watch(crossfadeSecondsProvider) > 0,
+);
 
 final audioQualityProvider =
     NotifierProvider<AudioQualityNotifier, AudioQuality>(

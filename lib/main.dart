@@ -51,7 +51,13 @@ class _Bootstrap {
   static Future<MusaicAudioHandler> _initAudioHandler() async {
     try {
       return await AudioService.init(
-        builder: () => MusaicAudioHandler(player: AudioPlayer()),
+        // 交叉淡入（N4）需要第二路音频同时出声，故预建次播放器。
+        // 默认不启用（crossfadeSeconds = 0），此时它不参与播放。
+        builder:
+            () => MusaicAudioHandler(
+              player: AudioPlayer(),
+              secondary: AudioPlayer(),
+            ),
         config: const AudioServiceConfig(
           androidNotificationChannelId: 'dev.musaic.audio.playback',
           androidNotificationChannelName: 'Musaic 播放',

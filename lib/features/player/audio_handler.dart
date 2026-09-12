@@ -11,7 +11,8 @@ import '../../core/utils/cover_network.dart';
 /// （媒体键、队列点跳、删除）转发回 Notifier 回调。
 /// 队列的唯一事实源在 PlayerNotifier，这里只做镜像与转发。
 class MusaicAudioHandler extends BaseAudioHandler with SeekHandler {
-  MusaicAudioHandler({required this.player}) {
+  MusaicAudioHandler({required this.player, AudioPlayer? secondary})
+    : _secondary = secondary {
     player.playbackEventStream.listen(
       _broadcastState,
       onError: (Object _, StackTrace __) {},
@@ -19,7 +20,33 @@ class MusaicAudioHandler extends BaseAudioHandler with SeekHandler {
     _broadcastState(player.playbackEvent);
   }
 
+  /// 主播放器：**系统媒体状态的事实源**。
+  ///
+  /// 双播放器仅用于交叉淡入（N4）。无论哪一路在出声，通知栏/锁屏/媒体键
+  /// 都只反映 [player] 的状态——这是刻意设计：让第二路去驱动 playbackState
+  /// 会造成「通知栏显示暂停、实际还在出声」这类脱同步
+  /// （本项目已多次修过同类问题：`_autoAdvancing` 泄漏、系统队列删歌）。
   final AudioPlayer player;
+
+  /// 次播放器：仅在交叉淡入期间使用，不参与状态广播。
+  ///
+  /// 为 null 表示未启用交叉淡入（默认）。
+  final AudioPlayer? _secondary;
+
+  /// 交叉淡入用的次播放器（未启用时为 null）。
+  AudioPlayer? get secondaryPlayer => _secondary;
+
+  /// 当前**正在出声**的播放器。
+  ///
+  /// 交叉淡入切换期间，实际出声的可能不是 [player]。播放控制
+  /// （play/pause/seek）需作用于它，否则会出现「暂停了但还在响」。
+  AudioPlayer? _activeOverride;
+
+  /// 标记当前由哪一路出声；传 null 恢复主播放器。
+  void setActivePlayer(AudioPlayer? active) => _activeOverride = active;
+
+  /// 实际出声的播放器（默认主播放器）。
+  AudioPlayer get activePlayer => _activeOverride ?? player;
 
   /// 由 PlayerNotifier 注入的系统操作转发回调。
   Future<void> Function()? onNext;
@@ -50,13 +77,20 @@ class MusaicAudioHandler extends BaseAudioHandler with SeekHandler {
   // ---------- 播放控制转发 ----------
 
   @override
-  Future<void> play() => player.play();
+  Future<void> play() => activePlayer.play();
 
   @override
-  Future<void> pause() => player.pause();
+  Future<void> pause() async {
+    // 交叉淡入期间两路可能同时在放，必须都停——只停一路会「按了暂停还在响」
+    await activePlayer.pause();
+    if (!identical(activePlayer, player)) await player.pause();
+    if (_secondary != null && !identical(activePlayer, _secondary)) {
+      await _secondary.pause();
+    }
+  }
 
   @override
-  Future<void> seek(Duration position) => player.seek(position);
+  Future<void> seek(Duration position) => activePlayer.seek(position);
 
   @override
   Future<void> skipToNext() async => onNext?.call();
@@ -104,6 +138,8 @@ class MusaicAudioHandler extends BaseAudioHandler with SeekHandler {
   @override
   Future<void> stop() async {
     await player.stop();
+    await _secondary?.stop();
+    _activeOverride = null;
     await super.stop();
   }
 
