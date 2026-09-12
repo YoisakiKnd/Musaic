@@ -11,6 +11,7 @@ import '../../core/model/track.dart';
 import '../../core/theme/app_tokens.dart';
 import '../../core/utils/cover_network.dart';
 import '../library/data/library_providers.dart';
+import '../library/widgets/add_to_playlist_sheet.dart';
 import '../lyrics/presentation/lyrics_view.dart';
 import '../settings/settings_providers.dart';
 import '../theme/dynamic_color_provider.dart'
@@ -354,6 +355,15 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
             ),
           ),
           const Spacer(),
+          // 正在听的歌直接加入歌单（日常可用性计划 D2）
+          IconButton(
+            tooltip: '加入歌单',
+            onPressed: () => AddToPlaylistSheet.show(context, [track]),
+            icon: Icon(
+              Icons.playlist_add_rounded,
+              color: scheme.onSurface.withValues(alpha: 0.8),
+            ),
+          ),
           IconButton(
             tooltip: '喜欢',
             onPressed: () => _toggleFavorite(track),

@@ -7,6 +7,7 @@ import 'package:go_router/go_router.dart';
 
 import '../../core/theme/app_tokens.dart';
 import '../../core/utils/cover_network.dart';
+import '../library/widgets/add_to_playlist_sheet.dart';
 import 'player_notifier.dart';
 
 /// 迷你播放条（传统 Material 风格）：全宽方角、贴于底部导航上方，
@@ -127,6 +128,18 @@ class _MiniPlayerState extends ConsumerState<MiniPlayer> {
                     ),
                     onPressed: notifier.next,
                     icon: const Icon(Icons.skip_next_rounded),
+                  ),
+                  // 正在听的歌直接加入歌单（日常可用性计划 D2）：
+                  // 此前必须回搜索页重新找，这是最高频的摩擦点。
+                  // track 已在 build 开头做 null 收窄，此处无需再判空。
+                  IconButton(
+                    tooltip: '加入歌单',
+                    constraints: const BoxConstraints(
+                      minWidth: 44,
+                      minHeight: 48,
+                    ),
+                    onPressed: () => AddToPlaylistSheet.show(context, [track]),
+                    icon: const Icon(Icons.playlist_add_rounded),
                   ),
                   const SizedBox(width: 6),
                 ],

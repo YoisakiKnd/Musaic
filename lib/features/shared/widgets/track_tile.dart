@@ -11,6 +11,7 @@ import '../../../core/model/track.dart';
 import '../../../core/theme/app_tokens.dart';
 import '../../../core/utils/cover_network.dart';
 import '../../library/data/library_providers.dart';
+import '../../library/widgets/add_to_playlist_sheet.dart';
 import '../../player/player_notifier.dart';
 
 /// 统一曲目行：封面 + 标题/歌手 + 渠道徽章 + 收藏心。
@@ -24,6 +25,7 @@ class TrackTile extends ConsumerWidget {
     this.onLongPress,
     this.onTapOverride,
     this.dense = false,
+    this.leadingCheckbox,
   });
 
   final Track track;
@@ -35,6 +37,12 @@ class TrackTile extends ConsumerWidget {
 
   /// 点击覆盖（多选模式下用于切换选中）；缺省为播放行为。
   final VoidCallback? onTapOverride;
+
+  /// 多选模式下的勾选态：null 表示不在多选模式。
+  ///
+  /// 由列表页传入而非内部维护——选中集合属于列表级状态，
+  /// 放在 tile 内部会随列表滚动回收而丢失。
+  final bool? leadingCheckbox;
   final bool dense;
 
   @override
@@ -66,7 +74,20 @@ class TrackTile extends ConsumerWidget {
           },
       onLongPress:
           onLongPress ?? (onRemove ?? () => _quickPlayNext(context, ref)),
-      leading: _TileCover(coverUrl: track.coverUrl),
+      leading:
+          leadingCheckbox != null
+              ? Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Checkbox(
+                    value: leadingCheckbox,
+                    onChanged: (_) => onTapOverride?.call(),
+                    visualDensity: VisualDensity.compact,
+                  ),
+                  _TileCover(coverUrl: track.coverUrl),
+                ],
+              )
+              : _TileCover(coverUrl: track.coverUrl),
       title: Text(
         track.title,
         maxLines: 1,
@@ -122,6 +143,17 @@ class TrackTile extends ConsumerWidget {
             ),
           IconButton(
             visualDensity: VisualDensity.compact,
+            tooltip: '更多',
+            onPressed: () => _openActions(context, ref),
+            icon: Icon(
+              Icons.more_vert_rounded,
+              size: 20,
+              color: scheme.onSurface.withValues(alpha: 0.45),
+            ),
+          ),
+          IconButton(
+            visualDensity: VisualDensity.compact,
+            tooltip: isFavorite ? '取消喜欢' : '喜欢',
             onPressed:
                 () => ref.read(libraryRepositoryProvider).toggleFavorite(track),
             icon: Icon(
@@ -138,6 +170,72 @@ class TrackTile extends ConsumerWidget {
         ],
       ),
     );
+  }
+
+  /// 曲目操作菜单（日常可用性计划 D2）。
+  ///
+  /// 此前收藏 / 历史 / 歌单详情里的曲目**只能播放或收藏**，
+  /// 想加入歌单必须回搜索页重新找。此菜单把常用操作收在一处，
+  /// 所有使用 [TrackTile] 的页面自动获得完整能力。
+  Future<void> _openActions(BuildContext context, WidgetRef ref) async {
+    final action = await showModalBottomSheet<String>(
+      context: context,
+      showDragHandle: true,
+      builder:
+          (sheetContext) => SafeArea(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
+                  child: Text(
+                    track.title,
+                    style: const TextStyle(fontWeight: FontWeight.w700),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+                ListTile(
+                  leading: const Icon(Icons.playlist_add_rounded),
+                  title: const Text('加入歌单'),
+                  onTap: () => Navigator.of(sheetContext).pop('playlist'),
+                ),
+                ListTile(
+                  leading: const Icon(Icons.playlist_play_rounded),
+                  title: const Text('下一首播放'),
+                  onTap: () => Navigator.of(sheetContext).pop('next'),
+                ),
+                ListTile(
+                  leading: const Icon(Icons.queue_music_rounded),
+                  title: const Text('添加到队列末尾'),
+                  onTap: () => Navigator.of(sheetContext).pop('queue'),
+                ),
+                if (onRemove != null)
+                  ListTile(
+                    leading: const Icon(Icons.remove_circle_outline_rounded),
+                    title: const Text('从当前列表移除'),
+                    onTap: () => Navigator.of(sheetContext).pop('remove'),
+                  ),
+              ],
+            ),
+          ),
+    );
+    if (!context.mounted || action == null) return;
+
+    switch (action) {
+      case 'playlist':
+        await AddToPlaylistSheet.show(context, [track]);
+      case 'next':
+        await _quickPlayNext(context, ref);
+      case 'queue':
+        ref.read(playerNotifierProvider.notifier).addToQueue(track);
+        if (!context.mounted) return;
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('已添加「${track.title}」到队列')));
+      case 'remove':
+        onRemove?.call();
+    }
   }
 
   /// 无自定义长按行为的曲目：快捷「下一首播放」。

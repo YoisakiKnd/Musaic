@@ -209,6 +209,38 @@ class LibraryRepository {
     return _withPlaylistLock(name, () => _playlists.delete(name));
   }
 
+  /// 重命名歌单（日常可用性计划 D4）。
+  ///
+  /// 歌单以**名字为键**（`_playlists` 的 key 就是名称），因此重命名 =
+  /// 「读出内容 → 写新键 → 删旧键」。整个过程必须持锁，否则并发写会出现
+  /// 「新旧两个歌单同时存在」或「改名后内容丢失」。
+  ///
+  /// 返回 false 表示：旧名不存在，或新名已被占用（**不覆盖**已有歌单）。
+  Future<bool> renamePlaylist(String rawOldName, String rawNewName) {
+    final oldName = _normalizePlaylistName(rawOldName);
+    final newName = _normalizePlaylistName(rawNewName);
+    if (oldName == newName) return Future<bool>.value(true);
+
+    // 两个名字都要上锁：只锁一个会让另一端并发写进来。
+    // 按字典序加锁可避免 A→B 与 B→A 同时发生时的死锁。
+    final ascending = oldName.compareTo(newName) <= 0;
+    final first = ascending ? oldName : newName;
+    final second = ascending ? newName : oldName;
+
+    return _withPlaylistLock(
+      first,
+      () => _withPlaylistLock(second, () async {
+        final raw = _playlists.get(oldName);
+        if (raw == null) return false;
+        // 不覆盖已有歌单：撞名时保持原状，由 UI 提示用户
+        if (_playlists.containsKey(newName)) return false;
+        await _playlists.put(newName, raw);
+        await _playlists.delete(oldName);
+        return true;
+      }),
+    );
+  }
+
   Future<void> addToPlaylist(String rawName, Track track) {
     final name = _normalizePlaylistName(rawName);
     return _withPlaylistLock(name, () async {

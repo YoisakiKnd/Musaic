@@ -180,4 +180,73 @@ void main() {
       });
     });
   });
+
+  group('歌单重命名（日常可用性计划 D4）', () {
+    test('改名后内容完整保留，旧名消失', () async {
+      await repository.createPlaylist('旧名');
+      await repository.addManyToPlaylist('旧名', [
+        sameSongOn('netease', '1'),
+        sameSongOn('qqmusic', '2'),
+      ]);
+
+      final ok = await repository.renamePlaylist('旧名', '新名');
+
+      expect(ok, isTrue);
+      expect(repository.playlistNames, contains('新名'));
+      expect(repository.playlistNames, isNot(contains('旧名')));
+      expect(repository.playlistTracks('新名'), hasLength(2), reason: '重命名不得丢内容');
+      expect(repository.playlistTracks('新名').map((t) => t.sourceId), [
+        'netease',
+        'qqmusic',
+      ]);
+    });
+
+    test('改名撞名时拒绝，且不覆盖已有歌单', () async {
+      await repository.createPlaylist('A');
+      await repository.addManyToPlaylist('A', [sameSongOn('netease', '1')]);
+      await repository.createPlaylist('B');
+      await repository.addManyToPlaylist('B', [sameSongOn('qqmusic', '2')]);
+
+      final ok = await repository.renamePlaylist('A', 'B');
+
+      expect(ok, isFalse, reason: '撞名必须拒绝而非静默覆盖');
+      expect(repository.playlistTracks('A'), hasLength(1));
+      expect(repository.playlistTracks('B'), hasLength(1));
+      expect(repository.playlistTracks('B').first.sourceId, 'qqmusic');
+    });
+
+    test('旧名不存在时返回 false', () async {
+      expect(await repository.renamePlaylist('不存在', '新名'), isFalse);
+    });
+
+    test('同名重命名是 no-op 且返回 true', () async {
+      await repository.createPlaylist('同名');
+      expect(await repository.renamePlaylist('同名', '同名'), isTrue);
+      expect(repository.playlistNames, contains('同名'));
+    });
+
+    test('空名 / 超长名被拒绝（沿用既有校验，同步抛错）', () async {
+      await repository.createPlaylist('有效');
+      // 名字校验在进入异步流程**之前**同步完成，
+      // 因此这里用 expect(() => ...) 而非 expectLater（后者接不到同步抛错）。
+      expect(() => repository.renamePlaylist('有效', '   '), throwsArgumentError);
+      expect(
+        () => repository.renamePlaylist('有效', 'x' * 100),
+        throwsArgumentError,
+      );
+      // 失败后原歌单仍在
+      expect(repository.playlistNames, contains('有效'));
+    });
+
+    test('重命名保留 createdAt（不重置创建时间）', () async {
+      await repository.createPlaylist('原始');
+      final before = repository.playlistSnapshot()['原始'];
+      final ok = await repository.renamePlaylist('原始', '改名后');
+      expect(ok, isTrue);
+      final after = repository.playlistSnapshot()['改名后'];
+      expect(after, isNotNull);
+      // 快照是原始 JSON，重命名应原样搬运
+      expect(after, before);
+    });
+  });
 }

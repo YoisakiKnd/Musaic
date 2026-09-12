@@ -2,11 +2,14 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 
 import '../../core/di/app_providers.dart';
 import '../../core/model/track.dart';
 import '../../core/source/music_source.dart';
 import '../../core/theme/app_tokens.dart';
+import '../../core/utils/track_link_parser.dart';
+import '../player/player_notifier.dart';
 import 'search_results_page.dart';
 
 enum _AggregateMode { grouped, merged }
@@ -63,9 +66,76 @@ class _SearchPageState extends ConsumerState<SearchPage> {
     super.dispose();
   }
 
+  /// 打开解析出的链接：按渠道补全曲目详情后直接播放。
+  ///
+  /// 用「补全详情 → 播放」而非「搜索 id」：分享链接给的是精确的曲目标识，
+  /// 搜索会引入歧义（可能匹配到翻唱/同名曲）。
+  Future<void> _openTrackLink(TrackLink link) async {
+    final source = ref.read(sourceRegistryProvider).resolve(link.sourceId);
+    if (source == null) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('渠道「${link.sourceId}」不可用')));
+      return;
+    }
+
+    // 先构造最小 Track，再让渠道补全（封面/时长/专辑）
+    final placeholder = Track(
+      id: link.id,
+      sourceId: link.sourceId,
+      title: '正在载入…',
+      artist: '',
+      sourceData: _sourceDataFor(link),
+    );
+
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text('正在载入 ${source.displayName} 曲目…')));
+
+    try {
+      final detail = await source.getTrackDetail(placeholder);
+      if (!mounted) return;
+      await ref.read(playerNotifierProvider.notifier).playQueue([detail]);
+      if (!mounted) return;
+      // push 的 Future 在页面 pop 时才完成，此处无需等待
+      unawaited(context.push('/player'));
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('无法载入该链接：$e')));
+    }
+  }
+
+  /// 各渠道的 `sourceData` 键名不同，需按渠道填对，
+  /// 否则渠道解析播放地址时会取不到标识。
+  Map<String, dynamic> _sourceDataFor(TrackLink link) => switch (link
+      .sourceId) {
+    'netease' => <String, dynamic>{
+      'neteaseId': int.tryParse(link.id) ?? link.id,
+    },
+    'qqmusic' => <String, dynamic>{'songmid': link.id},
+    'kugou' => <String, dynamic>{'hash': link.id},
+    'ytm' => <String, dynamic>{'videoId': link.id},
+    'local' => <String, dynamic>{'path': link.id},
+    _ => <String, dynamic>{},
+  };
+
   Future<void> _submit(String rawQuery) async {
     final query = rawQuery.trim();
     if (query.isEmpty) return;
+
+    // 分享链接 / 裸 ID 直达（日常可用性计划 D1）。
+    //
+    // 搜索框一直提示「搜索 / 链接 / ID」，但此前没有解析实现——
+    // 粘链接会被当关键字搜出空结果。现在真正支持：
+    // 识别到渠道与曲目 id 时直接拉详情并播放，跳过搜索。
+    final link = parseTrackLink(query);
+    if (link != null) {
+      await _openTrackLink(link);
+      return;
+    }
+
     final generation = ++_searchGeneration;
     final registry = ref.read(sourceRegistryProvider);
     final List<MusicSource> sources;

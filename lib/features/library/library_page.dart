@@ -5,12 +5,14 @@ import 'package:go_router/go_router.dart';
 import '../../core/di/app_providers.dart'
     show libraryRepositoryProvider, sourceRegistryProvider;
 import '../../core/model/remote_playlist.dart';
+import '../../core/model/track.dart';
 import '../../core/source/capabilities.dart';
 import '../../core/source/music_source.dart';
 import '../../core/theme/app_tokens.dart';
 import 'data/library_repository.dart';
 import 'data/remote_playlists_provider.dart';
 import 'remote_playlist_page.dart';
+import '../player/player_notifier.dart';
 import '../shared/widgets/track_tile.dart';
 import 'data/library_providers.dart';
 
@@ -46,23 +48,24 @@ class _FavoritesTab extends ConsumerWidget {
     return favoritesAsync.when(
       loading: () => const Center(child: CircularProgressIndicator()),
       error: (e, _) => Center(child: Text('加载失败：$e')),
-      data:
-          (favorites) =>
-              favorites.isEmpty
-                  ? const _EmptyHint(
-                    icon: Icons.favorite_border_rounded,
-                    text: '喜欢的歌曲会出现在这里',
-                  )
-                  : ListView.builder(
-                    padding: AppTokens.pagePadding,
-                    itemCount: favorites.length,
-                    itemBuilder:
-                        (context, index) => TrackTile(
-                          track: favorites[index],
-                          queue: favorites,
-                          dense: true,
-                        ),
-                  ),
+      data: (favorites) {
+        if (favorites.isEmpty) {
+          return const _EmptyHint(
+            icon: Icons.favorite_border_rounded,
+            text: '喜欢的歌曲会出现在这里',
+          );
+        }
+        // 播放全部 + 批量管理（日常可用性计划 D3）：
+        // 此前收藏只有单曲 tile，没有「播放全部」，也无法批量整理。
+        return _TrackListWithActions(
+          tracks: favorites,
+          storageKey: 'favorites',
+          onClear: () async {
+            await ref.read(libraryRepositoryProvider).clearFavorites();
+          },
+          clearLabel: '清空喜欢的音乐',
+        );
+      },
     );
   }
 }
@@ -83,13 +86,9 @@ class _HistoryTab extends ConsumerWidget {
             text: '播放过的歌曲会出现在这里',
           );
         }
-        return ListView.builder(
-          padding: AppTokens.pagePadding,
-          itemCount: history.length,
-          itemBuilder:
-              (context, index) =>
-                  TrackTile(track: history[index], queue: history, dense: true),
-        );
+        // 最近播放同样支持播放全部与批量删除（D3）。
+        // 历史无「清空」语义上的歧义，故不提供一键清空入口。
+        return _TrackListWithActions(tracks: history, storageKey: 'history');
       },
     );
   }
@@ -181,6 +180,177 @@ class _PlaylistsTab extends ConsumerWidget {
             },
             icon: const Icon(Icons.add_rounded),
             label: const Text('新建歌单'),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// 带「播放全部」与批量管理的曲目列表（日常可用性计划 D3）。
+///
+/// 收藏与最近播放共用：两者都是「一维曲目列表」，此前只有单曲 tile，
+/// 既不能一键播放全部，也无法批量删除。抽成一个组件避免两处重复实现。
+class _TrackListWithActions extends ConsumerStatefulWidget {
+  const _TrackListWithActions({
+    required this.tracks,
+    required this.storageKey,
+    this.onClear,
+    this.clearLabel,
+  });
+
+  final List<Track> tracks;
+
+  /// 仅用于区分选中态（切换 tab 时重置）。
+  final String storageKey;
+
+  /// 一键清空回调；为 null 时不显示该入口。
+  final Future<void> Function()? onClear;
+  final String? clearLabel;
+
+  @override
+  ConsumerState<_TrackListWithActions> createState() =>
+      _TrackListWithActionsState();
+}
+
+class _TrackListWithActionsState extends ConsumerState<_TrackListWithActions> {
+  bool _selecting = false;
+  final Set<String> _selected = <String>{};
+
+  void _exitSelection() {
+    setState(() {
+      _selecting = false;
+      _selected.clear();
+    });
+  }
+
+  void _toggle(String key) {
+    setState(() {
+      if (!_selected.remove(key)) _selected.add(key);
+      if (_selected.isEmpty) _selecting = false;
+    });
+  }
+
+  Future<void> _removeSelected() async {
+    final repository = ref.read(libraryRepositoryProvider);
+    final keys = Set<String>.of(_selected);
+    if (keys.isEmpty) return;
+
+    // 逐条删除是唯一可行路径（Hive 无按谓词批量删），
+    // 但先收集再删，避免在遍历中修改集合。
+    for (final track in widget.tracks) {
+      if (keys.contains(track.key)) {
+        await repository.toggleFavorite(track); // 收藏态取反 = 移除
+      }
+    }
+    if (!mounted) return;
+    _exitSelection();
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text('已移除 ${keys.length} 首')));
+  }
+
+  Future<void> _confirmClear() async {
+    final onClear = widget.onClear;
+    if (onClear == null) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder:
+          (dialogContext) => AlertDialog(
+            title: Text(widget.clearLabel ?? '确认清空'),
+            content: const Text('该操作不可恢复。'),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(dialogContext).pop(false),
+                child: const Text('取消'),
+              ),
+              FilledButton(
+                style: FilledButton.styleFrom(
+                  backgroundColor: AppTokens.accent,
+                ),
+                onPressed: () => Navigator.of(dialogContext).pop(true),
+                child: const Text('清空'),
+              ),
+            ],
+          ),
+    );
+    if (confirmed != true) return;
+    await onClear();
+    if (!mounted) return;
+    _exitSelection();
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text('${widget.clearLabel ?? '已清空'}完成')));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final tracks = widget.tracks;
+    return Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 8, 8, 0),
+          child: Row(
+            children: [
+              FilledButton.icon(
+                style: FilledButton.styleFrom(
+                  backgroundColor: AppTokens.accent,
+                  visualDensity: VisualDensity.compact,
+                ),
+                onPressed: () {
+                  ref.read(playerNotifierProvider.notifier).playQueue(tracks);
+                  context.push('/player');
+                },
+                icon: const Icon(Icons.play_arrow_rounded, size: 18),
+                label: Text('播放全部（${tracks.length}）'),
+              ),
+              const Spacer(),
+              if (_selecting) ...[
+                Text(
+                  '已选 ${_selected.length}',
+                  style: const TextStyle(fontSize: 12),
+                ),
+                IconButton(
+                  tooltip: '移除所选',
+                  onPressed: _selected.isEmpty ? null : _removeSelected,
+                  icon: const Icon(Icons.delete_outline_rounded, size: 20),
+                ),
+                IconButton(
+                  tooltip: '取消',
+                  onPressed: _exitSelection,
+                  icon: const Icon(Icons.close_rounded, size: 20),
+                ),
+              ] else ...[
+                IconButton(
+                  tooltip: '批量选择',
+                  onPressed: () => setState(() => _selecting = true),
+                  icon: const Icon(Icons.checklist_rounded, size: 20),
+                ),
+                if (widget.onClear != null)
+                  IconButton(
+                    tooltip: widget.clearLabel ?? '清空',
+                    onPressed: _confirmClear,
+                    icon: const Icon(Icons.delete_sweep_outlined, size: 20),
+                  ),
+              ],
+            ],
+          ),
+        ),
+        Expanded(
+          child: ListView.builder(
+            padding: AppTokens.pagePadding,
+            itemCount: tracks.length,
+            itemBuilder: (context, index) {
+              final track = tracks[index];
+              final checked = _selected.contains(track.key);
+              return TrackTile(
+                track: track,
+                queue: tracks,
+                dense: true,
+                onTapOverride: _selecting ? () => _toggle(track.key) : null,
+                leadingCheckbox: _selecting ? checked : null,
+              );
+            },
           ),
         ),
       ],
