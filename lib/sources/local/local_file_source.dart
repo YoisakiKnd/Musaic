@@ -16,6 +16,7 @@ import '../../core/auth/auth_capability.dart';
 import '../../core/auth/auth_result.dart';
 import '../../core/lyrics/lrc_parser.dart';
 import '../../core/lyrics/lyric_bundle.dart';
+import '../../core/utils/cover_cache.dart';
 import 'id3_parser.dart';
 
 /// 本地文件渠道（Master Plan §5.2，免登录）。
@@ -77,15 +78,10 @@ class LocalFileSource extends MusicSource implements LibraryScanCapable {
 
   /// 内嵌封面落盘目录。
   ///
-  /// 放在**应用支持目录**而非临时目录：系统可随时清理 temp，
-  /// 会导致已扫描曲目的封面 URL 失效（列表封面集体变占位图）。
-  /// 支持目录由应用负责清理，配合 `_djb2(path)` 命名可复用已有文件。
-  static Future<Directory> defaultCoverCache() async {
-    final base = await getApplicationSupportDirectory();
-    final dir = Directory(p.join(base.path, 'musaic_covers'));
-    if (!dir.existsSync()) dir.createSync(recursive: true);
-    return dir;
-  }
+  /// 委托给 `core/utils/cover_cache.dart`（单一事实源）：
+  /// 写入与设置页的统计/清理必须指向同一目录，各自计算路径必然漂移
+  /// （历史上就因此出现过「清除缓存按钮实际什么也没清」）。
+  static Future<Directory> defaultCoverCache() => coverCacheDirectory();
 
   // ---------- 音乐能力 ----------
 

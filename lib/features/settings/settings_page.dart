@@ -11,6 +11,7 @@ import 'package:path_provider/path_provider.dart';
 import '../../core/app_info.dart';
 import '../../core/di/app_providers.dart';
 import '../../core/logging/app_logger.dart';
+import '../../core/utils/cover_cache.dart';
 import '../../core/theme/app_tokens.dart';
 import '../auth/presentation/channel/account_manage_page.dart';
 import '../library/data/backup_service.dart';
@@ -437,17 +438,29 @@ class DataPage extends ConsumerWidget {
                   },
                 ),
                 const Divider(height: 1, indent: 56),
-                ListTile(
-                  leading: const Icon(Icons.image_outlined),
-                  title: const Text('清除封面缓存'),
-                  subtitle: const Text(
-                    '删除本地扫描生成的内嵌封面缓存',
-                    style: TextStyle(fontSize: 12),
-                  ),
-                  onTap: () async {
-                    final cleared = await _clearCoverCache();
-                    if (!context.mounted) return;
-                    _toast(context, cleared ? '封面缓存已清除' : '暂无需要清理的缓存');
+                FutureBuilder<int>(
+                  future: coverCacheBytes(),
+                  builder: (context, snapshot) {
+                    final bytes = snapshot.data;
+                    final sizeText =
+                        bytes == null
+                            ? '正在统计…'
+                            : bytes == 0
+                            ? '暂无缓存'
+                            : '当前占用 ${formatBytes(bytes)}';
+                    return ListTile(
+                      leading: const Icon(Icons.image_outlined),
+                      title: const Text('清除封面缓存'),
+                      subtitle: Text(
+                        '本地扫描生成的内嵌封面；$sizeText',
+                        style: const TextStyle(fontSize: 12),
+                      ),
+                      onTap: () async {
+                        final cleared = await clearCoverCache();
+                        if (!context.mounted) return;
+                        _toast(context, cleared ? '封面缓存已清除' : '暂无需要清理的缓存');
+                      },
+                    );
                   },
                 ),
                 const Divider(height: 1, indent: 56),
@@ -657,18 +670,6 @@ class AboutPage extends StatelessWidget {
         ],
       ),
     );
-  }
-}
-
-Future<bool> _clearCoverCache() async {
-  try {
-    final temp = await getTemporaryDirectory();
-    final dir = Directory(p.join(temp.path, 'musaic_covers'));
-    if (!dir.existsSync()) return false;
-    await dir.delete(recursive: true);
-    return true;
-  } catch (_) {
-    return false;
   }
 }
 

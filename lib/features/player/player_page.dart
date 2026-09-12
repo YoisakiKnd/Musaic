@@ -6,7 +6,10 @@ import 'package:flutter/services.dart' show SystemChrome, SystemUiMode;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/di/app_providers.dart'
-    show audioHandlerProvider, libraryRepositoryProvider;
+    show
+        audioHandlerProvider,
+        libraryRepositoryProvider,
+        sourceRegistryProvider;
 import '../../core/model/track.dart';
 import '../../core/theme/app_tokens.dart';
 import '../../core/utils/cover_network.dart';
@@ -422,14 +425,22 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
                   ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700),
                 ),
                 const SizedBox(height: 2),
-                Text(
-                  track.artist,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    fontSize: 15,
-                    color: scheme.onSurface.withValues(alpha: 0.62),
-                  ),
+                Row(
+                  children: [
+                    Text(
+                      track.artist,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: 15,
+                        color: scheme.onSurface.withValues(alpha: 0.62),
+                      ),
+                    ),
+                    // 音源渠道徽标（D8）：用户需要知道当前听的是哪个渠道——
+                    // 换源后尤其重要，否则「怎么音质/版本变了」无从解释。
+                    const SizedBox(width: 8),
+                    _SourceBadge(sourceId: track.sourceId),
+                  ],
                 ),
               ],
             ),
@@ -1120,6 +1131,36 @@ class _PlayerErrorBanner extends StatelessWidget {
               ),
             ],
           ),
+        ),
+      ),
+    );
+  }
+}
+
+/// 音源渠道徽标（日常可用性计划 D8）。
+///
+/// 播放页此前完全不显示音源渠道：换源后用户只看到「歌还是那首」，
+/// 无法解释音质/版本变化。徽标给出明确归属。
+class _SourceBadge extends ConsumerWidget {
+  const _SourceBadge({required this.sourceId});
+
+  final String sourceId;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final source = ref.watch(sourceRegistryProvider).resolve(sourceId);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+      decoration: BoxDecoration(
+        color: AppTokens.accent.withValues(alpha: 0.15),
+        borderRadius: BorderRadius.circular(AppTokens.radiusChip / 2),
+      ),
+      child: Text(
+        source?.displayName ?? sourceId,
+        style: const TextStyle(
+          fontSize: 10,
+          color: AppTokens.accent,
+          fontWeight: FontWeight.w600,
         ),
       ),
     );
