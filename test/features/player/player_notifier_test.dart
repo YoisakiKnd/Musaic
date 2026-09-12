@@ -919,6 +919,144 @@ void main() {
     });
   });
 
+  group('播放地址预取（P2）', () {
+    /// 计数渠道：记录 resolveStream 被调用的次数，用于验证「预取后不再解析」。
+    ProviderContainer countingContainer(_CountingSource source) {
+      return ProviderContainer(
+        overrides: [
+          appSettingsRepositoryProvider.overrideWithValue(
+            AppSettingsRepository(box: _settingsBoxFor()),
+          ),
+          playerNotifierProvider.overrideWith(_TestPlayerNotifier.new),
+          audioHandlerProvider.overrideWithValue(
+            _NoopAudioHandler(player: _FakePlayer()),
+          ),
+          resumeRepositoryProvider.overrideWithValue(
+            ResumeRepository(box: resumeBox),
+          ),
+          sourceRegistryProvider.overrideWith((ref) {
+            final registry = SourceRegistry();
+            registry.register(source);
+            return registry;
+          }),
+        ],
+      );
+    }
+
+    Track song(String id) =>
+        Track(id: id, sourceId: 'counting', title: 't$id', artist: 'a');
+
+    test('播放后预取下一首，点下一首时不再走网络解析', () async {
+      final source = _CountingSource();
+      final container = countingContainer(source);
+      final notifier =
+          container.read(playerNotifierProvider.notifier)
+              as _TestPlayerNotifier;
+
+      await notifier.playQueue([song('1'), song('2')]);
+      // 等预取完成（unawaited）
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+
+      final afterFirst = source.resolveCount;
+      expect(
+        afterFirst,
+        greaterThanOrEqualTo(2),
+        reason: '第 1 首解析 + 预取第 2 首，共至少 2 次',
+      );
+
+      await notifier.next();
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+
+      expect(source.resolveCount, afterFirst, reason: '预取命中时不应再发起解析请求');
+      container.dispose();
+    });
+
+    test('预取命中不产生「已切换渠道」提示（用户还没点下一首）', () async {
+      final source = _CountingSource();
+      final container = countingContainer(source);
+      final notifier =
+          container.read(playerNotifierProvider.notifier)
+              as _TestPlayerNotifier;
+
+      await notifier.playQueue([song('1'), song('2')]);
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+
+      expect(
+        notifier.state.sourceSwitchNotice,
+        isNull,
+        reason: '预取是后台优化，不该弹任何用户可见提示',
+      );
+      container.dispose();
+    });
+
+    test('队列替换作废旧预取（新队列首曲与预取目标不同时）', () async {
+      // 这个用例的关键在于**新队列的首曲不能是被预取的那首**。
+      //
+      // 若新队列首曲恰是预取目标（如 [2,3] 对预取 2），`take()` 会把它
+      // 消费掉，于是「有没有 invalidate」结果一样——变异测试连续 6 次
+      // 未捕获，正是因为构造错了场景。
+      //
+      // 这里用 [9,2]：首曲 9 与预取目标 2 不匹配，take 不会消费它。
+      // 此时若未作废，残留的 2 会被误用（带着上一队列的换源上下文）。
+      final source = _CountingSource();
+      final container = countingContainer(source);
+      final notifier =
+          container.read(playerNotifierProvider.notifier)
+              as _TestPlayerNotifier;
+
+      await notifier.playQueue([song('1'), song('2')]);
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      expect(
+        notifier.debugHasFreshPrefetch,
+        isTrue,
+        reason: '播放稳定后应已预取下一首（song 2）',
+      );
+
+      // 新队列首曲是 song('9')，与预取目标 song('2') 不同
+      final pending = notifier.playQueue([song('9'), song('2')]);
+      expect(
+        notifier.debugHasFreshPrefetch,
+        isFalse,
+        reason: '换队列必须立即作废旧预取，不得等到解析完成',
+      );
+
+      await pending;
+      container.dispose();
+    });
+
+    test('预取失败不影响播放（静默降级为实时解析）', () async {
+      final source = _CountingSource(failPrefetch: true);
+      final container = countingContainer(source);
+      final notifier =
+          container.read(playerNotifierProvider.notifier)
+              as _TestPlayerNotifier;
+
+      await notifier.playQueue([song('1'), song('2')]);
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+
+      await notifier.next();
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+
+      expect(notifier.state.error, isNull, reason: '预取失败不该变成播放错误');
+      expect(notifier.state.current?.id, '2');
+      container.dispose();
+    });
+
+    test('队尾不预取（没有下一首）', () async {
+      final source = _CountingSource();
+      final container = countingContainer(source);
+      final notifier =
+          container.read(playerNotifierProvider.notifier)
+              as _TestPlayerNotifier;
+
+      await notifier.playQueue([song('1')]);
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+
+      expect(source.resolveCount, 1, reason: '只有一首时无下一首可预取');
+      container.dispose();
+    });
+  });
+
   group('_loadAndPlay 越界守卫（P0-3 第二道防线）', () {
     test('越界下标被静默忽略而非抛异常', () async {
       final container = createContainer(queue: [track('a')]);
@@ -1123,3 +1261,53 @@ class _NoopAudioHandler extends MusaicAudioHandler {
 /// 设置 Box 由 setUpAll 打开、setUp 清空（见文件顶部）。
 /// 抽成函数只是为了让用例读起来更直白。
 Box<String> _settingsBoxFor() => Hive.box<String>('player_settings');
+
+/// 计数渠道：用于验证预取是否真的减少了 resolveStream 调用。
+class _CountingSource extends MusicSource {
+  _CountingSource({this.failPrefetch = false})
+    : super(credentialReader: () async => const <String, String>{});
+
+  /// 让**第 2 次**解析（即预取那一次）失败，随后恢复正常。
+  ///
+  /// 刻意只失败一次：预取的语义是「失败就静默放弃，真实播放时重新解析」。
+  /// 若让失败持续，真正点下一首时也会失败——那测的是「渠道坏了」，
+  /// 而不是「预取失败不影响播放」。
+  final bool failPrefetch;
+
+  int resolveCount = 0;
+
+  @override
+  String get sourceId => 'counting';
+
+  @override
+  String get displayName => '计数渠道';
+
+  @override
+  AuthCapability get authCapability => AuthCapability.noAuth;
+
+  @override
+  Future<List<Track>> search(
+    String query, {
+    int limit = 30,
+    int offset = 0,
+  }) async => const <Track>[];
+
+  @override
+  Future<Track> getTrackDetail(Track track) async => track;
+
+  @override
+  Future<ResolvedStream> resolveStream(Track track) async {
+    resolveCount++;
+    if (failPrefetch && resolveCount == 2) {
+      // 只让预取那一次失败
+      throw UnavailableStreamException('预取失败', sourceId: sourceId);
+    }
+    return const ResolvedStream(
+      url: '/nonexistent/file.mp3',
+      isLocalFile: true,
+    );
+  }
+
+  @override
+  Future<LyricBundle?> fetchLyrics(Track track) async => null;
+}

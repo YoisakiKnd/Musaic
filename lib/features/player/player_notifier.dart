@@ -18,6 +18,7 @@ import '../../app/lifecycle/app_lifecycle.dart';
 import 'audio_handler.dart';
 import 'data/resume_repository.dart';
 import 'domain/queue_logic.dart';
+import 'domain/stream_prefetcher.dart';
 
 /// 播放状态（前端文档 §6.2）。
 class PlayerState {
@@ -150,6 +151,12 @@ class PlayerNotifier extends Notifier<PlayerState> {
   /// 随机模式洗牌序列（shuffleOn=false 时忽略）。
   List<int>? _shuffleOrder;
 
+  /// 播放地址预取器（P2：降低「点歌到出声」延迟）。
+  ///
+  /// 在切歌成功、且当前曲目剩余时间充足时预取下一首的解析结果，
+  /// 使用户点「下一首」时跳过网络解析这一步。
+  late final StreamPrefetcher _prefetcher;
+
   /// 连续自动跳过的次数。
   ///
   /// 用于防止「整队列全部不可播」时无限跳歌：跳完一轮仍失败就停下报错，
@@ -177,6 +184,16 @@ class PlayerNotifier extends Notifier<PlayerState> {
       if (index >= 0) return removeFromQueue(index);
       return Future.value();
     };
+
+    _prefetcher = StreamPrefetcher(
+      resolve: (track) async {
+        try {
+          return await _resolveWithFallbackQuiet(track);
+        } catch (_) {
+          return null; // 预取失败静默
+        }
+      },
+    );
 
     _stateSub = _handler.player.playerStateStream.listen(_onPlayerStateChanged);
 
@@ -301,6 +318,10 @@ class PlayerNotifier extends Notifier<PlayerState> {
   @visibleForTesting
   Future<void> debugAdvanceOnComplete() => _advanceOnComplete();
 
+  /// 预取器状态（仅供测试断言「队列替换是否作废旧预取」）。
+  @visibleForTesting
+  bool get debugHasFreshPrefetch => _prefetcher.hasEntry;
+
   /// 驱动加载路径（用于越界守卫断言）。
   @visibleForTesting
   Future<void> debugLoadAndPlay(int index) => _loadAndPlay(index);
@@ -317,6 +338,8 @@ class PlayerNotifier extends Notifier<PlayerState> {
     }
     // 换源候选只在整队列变更时重算：同一队列内切歌无需重复分组
     _alternatives = buildAlternatives(tracks);
+    // 队列换了，旧的预取结果（针对旧队列的下一首）已无意义
+    _prefetcher.invalidate();
     state = state.copyWith(
       queue: List<Track>.unmodifiable(tracks),
       currentIndex: index,
@@ -684,6 +707,8 @@ class PlayerNotifier extends Notifier<PlayerState> {
       if (seq != _loadSeq) return;
       state = state.copyWith(loading: false, playing: true);
       _consecutiveSkips = 0; // 播放成功即重置连续跳过计数
+      // 播放稳定后预取下一首（P2）
+      _prefetchNext(index);
 
       // 记录最近播放与断点快照起点（本地优先存储，失败静默）
       unawaited(_recordHistory(effectiveTrack));
@@ -717,6 +742,16 @@ class PlayerNotifier extends Notifier<PlayerState> {
   /// 返回 null 表示本次加载已被更新的请求取代（调用方应直接 return）。
   /// 全部候选都失败时抛出**最后一次**的异常——它最能反映真实原因。
   Future<ResolvedStream?> _resolveWithFallback(Track track, int seq) async {
+    // 预取命中：跳过网络解析（这是「点歌到出声」里最慢的一段）。
+    // take() 是一次性的——签名 URL 不复用，避免用到已失效地址。
+    final prefetched = _prefetcher.take(track);
+    if (prefetched != null) {
+      if (seq != _loadSeq) return null;
+      _lastResolvedTrack = track;
+      if (kDebugMode) AppLog.debug('MusaicPlayer 命中预取: ${track.key}');
+      return prefetched;
+    }
+
     final registry = ref.read(sourceRegistryProvider);
     final candidates = <Track>[
       track,
@@ -811,6 +846,55 @@ class PlayerNotifier extends Notifier<PlayerState> {
     await Future<void>.delayed(const Duration(milliseconds: 350));
     if (!state.hasQueue || failedIndex >= state.queue.length) return;
     await _loadAndPlay(advance.index);
+  }
+
+  /// 供预取使用的静默解析：不校验 seq、不发换源提示、不改状态。
+  ///
+  /// 预取发生在「当前曲还在播」时，此时不应产生任何用户可见副作用
+  /// （尤其不能弹「已切换到 XX 渠道」——用户还没点下一首）。
+  Future<ResolvedStream?> _resolveWithFallbackQuiet(Track track) async {
+    final registry = ref.read(sourceRegistryProvider);
+    final candidates = <Track>[
+      track,
+      ...orderFallbackCandidates(
+        alternatives: _alternatives[track.key] ?? const <Track>[],
+        failedSourceId: track.sourceId,
+      ),
+    ];
+
+    for (final candidate in candidates) {
+      final source = registry.resolve(candidate.sourceId);
+      if (source == null) continue;
+      try {
+        return await source
+            .resolveStream(candidate)
+            .timeout(Duration(seconds: NetworkConfig.instance.seconds * 2));
+      } on NetworkSourceException {
+        return null; // 网络问题：预取放弃，不重试其它渠道
+      } catch (_) {
+        continue; // 该渠道不可用，试下一个
+      }
+    }
+    return null;
+  }
+
+  /// 预取下一首（在切歌成功后调用）。
+  ///
+  /// 只在「当前曲目剩余时间充足」时预取：太早取会因签名过期而白费，
+  /// 且短曲目根本来不及听完就切了。
+  void _prefetchNext(int currentIndex) {
+    if (!state.hasQueue) return;
+    final advance = QueueLogic.nextIndex(
+      currentIndex: currentIndex,
+      length: state.queue.length,
+      mode: state.mode,
+      shuffleOn: state.shuffleOn,
+      shuffleOrder: _shuffleOrder,
+    );
+    if (advance == null) return; // 队尾：没有下一首
+    final next = state.queue[advance.index];
+    if (_prefetcher.isFreshFor(next)) return;
+    _prefetcher.prefetch(next);
   }
 
   /// 换源提示：写入 state，由 UI `ref.listen` 后弹 SnackBar，不打断播放。

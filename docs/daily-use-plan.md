@@ -66,6 +66,30 @@
 | T4 | 全平台构建冒烟 | 🟡 部分完成 | Android debug APK ✅；iOS/macOS 需完整 Xcode（本机仅有 CommandLineTools，**环境限制**，用户已明确暂不处理） |
 | T5 | 性能与功耗基线实测 | ⬜ 待开始 | 需真机，见 `docs/benchmarks.md` |
 
+### P2 预取（本轮追加）
+
+原计划列在 `musaic-improvement-plan.md` P2「点歌到出声延迟」，本轮落地了
+其中两项（第 ③ 项「埋点测量」需真机，留待 T5）：
+
+1. **HTTP 连接复用**：Dio 默认 `idleTimeout` 仅 **3 秒**，用户点歌时连接早已
+   过期，必须重做 DNS + TLS 握手。改为 90 秒并限制每 host 并发（8）。
+2. **播放地址预取**：播放稳定后预取下一首的 `resolveStream` 结果，
+   点「下一首」时跳过最慢的网络解析环节。
+
+预取器（`features/player/domain/stream_prefetcher.dart`）的设计约束：
+- **一次性消费**：命中即失效，绝不复用签名 URL（避免用到已过期地址）；
+- **有效期 3 分钟**：渠道地址多为短时效签名，过期宁可重新解析；
+- **失败静默**：预取只是优化，不产生任何用户可见错误或提示
+  （尤其不能弹「已切换到 XX 渠道」——用户还没点下一首）；
+- **队列替换即作废**：避免沿用上一队列的换源上下文。
+
+> **关于 gapless（曲间无缝）**：已核实 just_audio 在 Android / iOS / macOS /
+> Windows 四平台均支持（Musaic 目标平台全覆盖）。但它需要
+> `ConcatenatingAudioSource` 预排队**多个**音源，与「每次播放实时 resolve、
+> 不缓存过期 URL」的既有设计冲突较大，且四渠道多为短时效签名地址——
+> 提前太久排队会在播放时已失效。因此本轮先做预取（收益明确、风险低），
+> gapless 留待单独评估。
+
 ### 覆盖率阈值为什么分层
 
 `tool/check_coverage.py` 使用分层阈值，而非单一数字：

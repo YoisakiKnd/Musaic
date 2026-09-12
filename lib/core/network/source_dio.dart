@@ -1,7 +1,26 @@
+import 'dart:io' show HttpClient;
+
 import 'package:dio/dio.dart';
+import 'package:dio/io.dart' show IOHttpClientAdapter;
 
 import 'network_config.dart';
 import 'source_auth_interceptor.dart';
+
+/// 连接空闲超时。
+///
+/// Dio 默认仅 **3 秒**（见 `io_adapter.dart`）——用户点歌时连接早已过期，
+/// 必须重新做 DNS + TLS 握手，这是「点歌到出声」延迟的主要来源之一。
+///
+/// 延长到 90 秒：覆盖用户浏览列表、犹豫、再点歌的典型间隔，
+/// 让第二次请求复用已有连接。同时不会长期占用服务端连接
+/// （空闲连接由 HttpClient 自动回收）。
+const Duration kHttpIdleTimeout = Duration(seconds: 90);
+
+/// 每个 host 的最大并发连接数。
+///
+/// 默认不限制；QQ 封面补全曾有并发闸（4 路），这里给个上限避免
+/// 极端情况下打爆单个 host。
+const int kHttpMaxConnectionsPerHost = 8;
 
 /// 渠道 Dio 装配（Master Plan §5.1）。
 ///
@@ -32,6 +51,16 @@ Dio buildSourceDio({
       headers: headers ?? const <String, String>{},
       validateStatus: (int? code) => code != null && code >= 200 && code < 400,
     ),
+  );
+
+  // 连接复用：显著降低重复点歌/切歌时的握手开销。
+  dio.httpClientAdapter = IOHttpClientAdapter(
+    createHttpClient: () {
+      final client = HttpClient();
+      client.idleTimeout = kHttpIdleTimeout;
+      client.maxConnectionsPerHost = kHttpMaxConnectionsPerHost;
+      return client;
+    },
   );
 
   if (readCredentials != null || onSessionExpired != null) {
