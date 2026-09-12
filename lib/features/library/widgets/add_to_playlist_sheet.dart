@@ -107,38 +107,14 @@ class _AddToPlaylistSheetState extends ConsumerState<AddToPlaylistSheet> {
   }
 
   Future<void> _createAndAdd() async {
-    final controller = TextEditingController();
+    // 用自管理生命周期的对话框，而不是在外部创建 controller 后
+    // `showDialog` 返回即 dispose：对话框退场动画期间其 TextField 仍持有
+    // controller，提前 dispose 会抛「A TextEditingController was used after
+    // being disposed」（主链路 e2e 测试实测捕获）。
     final name = await showDialog<String>(
       context: context,
-      builder:
-          (dialogContext) => AlertDialog(
-            title: const Text('新建歌单'),
-            content: TextField(
-              controller: controller,
-              autofocus: true,
-              textInputAction: TextInputAction.done,
-              onSubmitted:
-                  (value) => Navigator.of(dialogContext).pop(value.trim()),
-              decoration: const InputDecoration(hintText: '歌单名称'),
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.of(dialogContext).pop(),
-                child: const Text('取消'),
-              ),
-              FilledButton(
-                style: FilledButton.styleFrom(
-                  backgroundColor: AppTokens.accent,
-                ),
-                onPressed:
-                    () =>
-                        Navigator.of(dialogContext).pop(controller.text.trim()),
-                child: const Text('创建'),
-              ),
-            ],
-          ),
+      builder: (_) => const _NewPlaylistDialog(),
     );
-    controller.dispose();
     if (name == null || name.isEmpty) return;
 
     final repository = ref.read(libraryRepositoryProvider);
@@ -171,5 +147,54 @@ class _AddToPlaylistSheetState extends ConsumerState<AddToPlaylistSheet> {
       setState(() => _busy = false);
       messenger.showSnackBar(SnackBar(content: Text('加入失败：$e')));
     }
+  }
+}
+
+/// 新建歌单对话框。
+///
+/// 独立成 [StatefulWidget] 是为了让 controller 的生命周期与对话框一致：
+/// 在 `showDialog` 调用方创建 controller 并 `await` 后立刻 dispose，
+/// 会在退场动画期间被仍存活的 TextField 使用而崩溃。
+class _NewPlaylistDialog extends StatefulWidget {
+  const _NewPlaylistDialog();
+
+  @override
+  State<_NewPlaylistDialog> createState() => _NewPlaylistDialogState();
+}
+
+class _NewPlaylistDialogState extends State<_NewPlaylistDialog> {
+  final TextEditingController _controller = TextEditingController();
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  void _submit() => Navigator.of(context).pop(_controller.text.trim());
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('新建歌单'),
+      content: TextField(
+        controller: _controller,
+        autofocus: true,
+        textInputAction: TextInputAction.done,
+        onSubmitted: (_) => _submit(),
+        decoration: const InputDecoration(hintText: '歌单名称'),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('取消'),
+        ),
+        FilledButton(
+          style: FilledButton.styleFrom(backgroundColor: AppTokens.accent),
+          onPressed: _submit,
+          child: const Text('创建'),
+        ),
+      ],
+    );
   }
 }

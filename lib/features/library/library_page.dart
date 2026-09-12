@@ -9,6 +9,7 @@ import '../../core/model/track.dart';
 import '../../core/source/capabilities.dart';
 import '../../core/source/music_source.dart';
 import '../../core/theme/app_tokens.dart';
+import '../../core/utils/nav_intent.dart';
 import 'data/library_repository.dart';
 import 'data/remote_playlists_provider.dart';
 import 'remote_playlist_page.dart';
@@ -17,23 +18,74 @@ import '../shared/widgets/track_tile.dart';
 import 'data/library_providers.dart';
 
 /// 资料库：喜欢 / 最近播放 / 自建歌单（Master Plan P6）。
-class LibraryPage extends ConsumerWidget {
-  const LibraryPage({super.key});
+///
+/// [initialTabIntent] 是首页快捷入口发起的一次「打开指定 Tab」请求
+/// （日常可用性计划 D6）；为 null 即用户点底部 Tab 进入，落在默认的「喜欢」。
+class LibraryPage extends ConsumerStatefulWidget {
+  const LibraryPage({super.key, this.initialTabIntent});
+
+  final NavIntent<int>? initialTabIntent;
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    return DefaultTabController(
-      length: 3,
-      child: Scaffold(
-        appBar: AppBar(
-          title: const Text('资料库'),
-          bottom: const TabBar(
-            tabs: [Tab(text: '喜欢'), Tab(text: '最近播放'), Tab(text: '歌单')],
-          ),
+  ConsumerState<LibraryPage> createState() => _LibraryPageState();
+}
+
+class _LibraryPageState extends ConsumerState<LibraryPage>
+    with SingleTickerProviderStateMixin {
+  /// Tab 顺序与 TabBar 一致：0 喜欢 / 1 最近播放 / 2 歌单。
+  static const int _tabCount = 3;
+
+  late final TabController _tabController;
+  int? _consumedSerial;
+
+  @override
+  void initState() {
+    super.initState();
+    // DefaultTabController 的 initialIndex 只在首次构建时生效，
+    // 而首页快捷入口可能在页面已存在时再次请求切 Tab（Tab 状态由
+    // StatefulShellRoute 保留），因此这里自己持有 controller。
+    _tabController = TabController(
+      length: _tabCount,
+      vsync: this,
+      initialIndex: _initialTabIndex(),
+    );
+    _consumedSerial = widget.initialTabIntent?.serial;
+  }
+
+  @override
+  void didUpdateWidget(LibraryPage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    final intent = widget.initialTabIntent;
+    if (intent == null || intent.serial == _consumedSerial) return;
+    _consumedSerial = intent.serial;
+    _tabController.animateTo(intent.value.clamp(0, _tabCount - 1));
+  }
+
+  int _initialTabIndex() {
+    final intent = widget.initialTabIntent;
+    if (intent == null) return 0;
+    return intent.value.clamp(0, _tabCount - 1);
+  }
+
+  @override
+  void dispose() {
+    _tabController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('资料库'),
+        bottom: TabBar(
+          controller: _tabController,
+          tabs: const [Tab(text: '喜欢'), Tab(text: '最近播放'), Tab(text: '歌单')],
         ),
-        body: const TabBarView(
-          children: [_FavoritesTab(), _HistoryTab(), _PlaylistsTab()],
-        ),
+      ),
+      body: TabBarView(
+        controller: _tabController,
+        children: const [_FavoritesTab(), _HistoryTab(), _PlaylistsTab()],
       ),
     );
   }

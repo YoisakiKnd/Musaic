@@ -1,7 +1,5 @@
 import 'dart:async' show unawaited;
-import 'dart:io' show File;
 
-import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -9,10 +7,10 @@ import 'package:go_router/go_router.dart';
 import '../../../core/di/app_providers.dart';
 import '../../../core/model/track.dart';
 import '../../../core/theme/app_tokens.dart';
-import '../../../core/utils/cover_network.dart';
 import '../../library/data/library_providers.dart';
 import '../../library/widgets/add_to_playlist_sheet.dart';
 import '../../player/player_notifier.dart';
+import 'track_cover.dart';
 
 /// 统一曲目行：封面 + 标题/歌手 + 渠道徽章 + 收藏心。
 /// 点击即以 [queue] 为队列从本曲播放。
@@ -84,10 +82,10 @@ class TrackTile extends ConsumerWidget {
                     onChanged: (_) => onTapOverride?.call(),
                     visualDensity: VisualDensity.compact,
                   ),
-                  _TileCover(coverUrl: track.coverUrl),
+                  TrackCover(coverUrl: track.coverUrl),
                 ],
               )
-              : _TileCover(coverUrl: track.coverUrl),
+              : TrackCover(coverUrl: track.coverUrl),
       title: Text(
         track.title,
         maxLines: 1,
@@ -245,59 +243,5 @@ class TrackTile extends ConsumerWidget {
     ScaffoldMessenger.of(
       context,
     ).showSnackBar(SnackBar(content: Text('下一首播放「${track.title}」')));
-  }
-}
-
-class _TileCover extends StatelessWidget {
-  const _TileCover({required this.coverUrl});
-
-  final String? coverUrl;
-
-  @override
-  Widget build(BuildContext context) {
-    const Widget fallback = SizedBox(
-      width: 48,
-      height: 48,
-      child: DecoratedBox(
-        decoration: BoxDecoration(
-          gradient: AppTokens.brandGradient,
-          borderRadius: BorderRadius.all(Radius.circular(12)),
-        ),
-        child: Icon(Icons.music_note_rounded, size: 20, color: Colors.white70),
-      ),
-    );
-    final url = coverUrl;
-    if (url == null || url.isEmpty) return fallback;
-    if (url.startsWith('file://')) {
-      return ClipRRect(
-        borderRadius: BorderRadius.circular(12),
-        child: Image.file(
-          File(Uri.parse(url).toFilePath()),
-          width: 48,
-          height: 48,
-          fit: BoxFit.cover,
-          cacheWidth: 96, // 解码尺寸上限（迭代计划 §9.1）
-          errorBuilder: (_, _, _) => fallback,
-        ),
-      );
-    }
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(12),
-      child: CachedNetworkImage(
-        imageUrl: normalizeCoverUrl(url),
-        httpHeaders: coverHttpHeaders(url),
-        width: 48,
-        height: 48,
-        fit: BoxFit.cover,
-        memCacheWidth: 96,
-        fadeInDuration: AppTokens.durationFast,
-        placeholder:
-            (_, _) => ColoredBox(
-              color: Theme.of(context).colorScheme.surfaceContainerHighest,
-              child: const SizedBox(width: 48, height: 48),
-            ),
-        errorWidget: (_, _, _) => fallback,
-      ),
-    );
   }
 }

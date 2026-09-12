@@ -8,6 +8,7 @@ import '../features/library/library_page.dart';
 import '../features/library/playlist_detail_page.dart';
 import '../features/player/player_page.dart';
 import '../features/search/search_page.dart';
+import '../core/utils/nav_intent.dart';
 import 'app_shell.dart';
 
 final GlobalKey<NavigatorState> rootNavigatorKey = GlobalKey<NavigatorState>(
@@ -32,12 +33,28 @@ final routerProvider = Provider<GoRouter>((ref) {
           ),
           StatefulShellBranch(
             routes: [
-              GoRoute(path: '/search', builder: (_, _) => const SearchPage()),
+              GoRoute(
+                path: '/search',
+                // 外部请求（TrackTile 点艺人 / 首页快捷入口）经 extra 传入；
+                // 用户点底部 Tab 进来时 extra 为 null → 只显示历史，不自动搜索
+                builder:
+                    (_, state) => SearchPage(
+                      queryIntent: navIntentOf<String>(state.extra),
+                    ),
+              ),
             ],
           ),
           StatefulShellBranch(
             routes: [
-              GoRoute(path: '/library', builder: (_, _) => const LibraryPage()),
+              GoRoute(
+                path: '/library',
+                // 首页快捷入口可指定初始 Tab（0 喜欢 / 1 最近播放 / 2 歌单）；
+                // 底部 Tab 直接进入时为 null → 落在默认的「喜欢」
+                builder:
+                    (_, state) => LibraryPage(
+                      initialTabIntent: navIntentOf<int>(state.extra),
+                    ),
+              ),
               GoRoute(
                 path: '/playlist/:name',
                 builder:

@@ -8,6 +8,7 @@ import '../../core/di/app_providers.dart';
 import '../../core/model/track.dart';
 import '../../core/source/music_source.dart';
 import '../../core/theme/app_tokens.dart';
+import '../../core/utils/nav_intent.dart';
 import '../../core/utils/track_link_parser.dart';
 import '../player/player_notifier.dart';
 import 'search_results_page.dart';
@@ -20,8 +21,14 @@ enum _SortMode { relevance, durationAsc, durationDesc }
 
 /// 搜索表单页：默认单一渠道搜索；切到「聚合搜索」才展开多选（默认全选）
 /// 与展示/排序选项，避免用户挨个取消勾选。
+///
+/// [queryIntent] 是外部发起的一次搜索请求
+/// （日常可用性计划 D5）。为 null 即用户手动进入，行为与从前完全一致：
+/// 只显示历史记录，不自动搜索。
 class SearchPage extends ConsumerStatefulWidget {
-  const SearchPage({super.key});
+  const SearchPage({super.key, this.queryIntent});
+
+  final NavIntent<String>? queryIntent;
 
   @override
   ConsumerState<SearchPage> createState() => _SearchPageState();
@@ -38,9 +45,14 @@ class _SearchPageState extends ConsumerState<SearchPage> {
   bool _uiReady = false;
   int _searchGeneration = 0;
 
+  /// 尚未消费的外部请求；[NavIntent.serial] 保证同一次请求只消费一次。
+  NavIntent<String>? _pendingIntent;
+  int? _consumedSerial;
+
   @override
   void initState() {
     super.initState();
+    _pendingIntent = widget.queryIntent;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       final sources = ref.read(sourceRegistryProvider).all;
@@ -57,7 +69,45 @@ class _SearchPageState extends ConsumerState<SearchPage> {
         _history = ref.read(searchHistoryRepositoryProvider).load();
         _uiReady = true;
       });
+      // 渠道与历史就绪后再消费外部请求，否则「聚合搜索」会因 _targets 为空
+      // 而弹出「请至少选择一个目标渠道」
+      _consumePendingIntent();
     });
+  }
+
+  @override
+  void didUpdateWidget(SearchPage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    final intent = widget.queryIntent;
+    if (intent == null || intent.serial == _consumedSerial) return;
+    _pendingIntent = intent;
+    if (!_uiReady) return; // 首帧回调会兜底消费
+    // 不在 build 期间直接 setState，排到帧末，与首次消费走同一条路径
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _consumePendingIntent();
+    });
+  }
+
+  /// 消费一次外部搜索请求：切到「聚合搜索」并立即发起。
+  ///
+  /// 艺人搜索的意义就在于「看到该艺人在**各渠道**的曲目」，
+  /// 因此这里强制走聚合、目标全选，而不是沿用页面当前的单渠道选择。
+  void _consumePendingIntent() {
+    final intent = _pendingIntent;
+    if (intent == null) return;
+    _pendingIntent = null;
+    _consumedSerial = intent.serial;
+
+    final keyword = intent.value.trim();
+    if (keyword.isEmpty) return;
+
+    setState(() {
+      _scope = _ScopeMode.aggregate;
+      _targets =
+          ref.read(sourceRegistryProvider).all.map((s) => s.sourceId).toSet();
+      _controller.text = keyword;
+    });
+    unawaited(_submit(keyword));
   }
 
   @override
