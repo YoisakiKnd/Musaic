@@ -10,6 +10,7 @@ import '../../core/network/network_config.dart';
 import '../../core/model/track.dart';
 import '../../core/theme/app_tokens.dart';
 import '../player/player_notifier.dart';
+import '../shared/widgets/text_input_dialog.dart';
 import '../shared/widgets/track_tile.dart';
 
 /// 结果排序模式（聚合搜索可用；相关度保持渠道返回顺序）。
@@ -26,6 +27,7 @@ class SearchResultsPage extends ConsumerStatefulWidget {
     required this.merged,
     this.pendingSources = const <String>[],
     this.sortMode = SearchSortMode.relevance,
+    this.initialGrouped = false,
   });
 
   /// 搜索关键词。
@@ -43,6 +45,14 @@ class SearchResultsPage extends ConsumerStatefulWidget {
   /// 合并视图排序模式。
   final SearchSortMode sortMode;
 
+  /// 初始展示形态（计划 4.1）：由搜索页的「分开展示 / 合并展示」决定。
+  ///
+  /// 此前搜索页的这组选项从未传下来，结果页恒定以合并视图开场，
+  /// 用户在搜索页选「分开展示」后仍需在结果页再点一次 AppBar 的切换——
+  /// 等于该选项完全无效。现在把选择作为初始值传入；
+  /// 结果页 AppBar 的切换按钮仍然可用（会话内可随时改看）。
+  final bool initialGrouped;
+
   @override
   ConsumerState<SearchResultsPage> createState() => _SearchResultsPageState();
 }
@@ -50,7 +60,7 @@ class SearchResultsPage extends ConsumerStatefulWidget {
 class _SearchResultsPageState extends ConsumerState<SearchResultsPage> {
   final Set<String> _selected = <String>{};
   bool _selecting = false;
-  bool _grouped = false;
+  late bool _grouped;
 
   static const int _pageSize = 20;
 
@@ -67,6 +77,7 @@ class _SearchResultsPageState extends ConsumerState<SearchResultsPage> {
   @override
   void initState() {
     super.initState();
+    _grouped = widget.initialGrouped;
     _tracks = widget.merged;
     _results = Map<String, Object>.of(widget.results);
     _pending.addAll(widget.pendingSources);
@@ -248,6 +259,9 @@ class _SearchResultsPageState extends ConsumerState<SearchResultsPage> {
     final tracks = _tracks.where((t) => _selected.contains(t.key)).toList();
     if (tracks.isEmpty) return;
     final repository = ref.read(libraryRepositoryProvider);
+    // 在**任何 await 之前**取出依赖 BuildContext 的对象（messenger），
+    // 跨 async gap 再取 context 会触发 use_build_context_synchronously。
+    final messenger = ScaffoldMessenger.of(context);
     final names = repository.playlistNames;
     final target = await showModalBottomSheet<String>(
       context: context,
@@ -287,50 +301,36 @@ class _SearchResultsPageState extends ConsumerState<SearchResultsPage> {
     String? name = target;
     if (target == '__new__') {
       if (!mounted) return;
-      final controller = TextEditingController();
-      name = await showDialog<String>(
-        context: context,
-        builder:
-            (dialogContext) => AlertDialog(
-              title: const Text('新建歌单'),
-              content: TextField(
-                controller: controller,
-                autofocus: true,
-                textInputAction: TextInputAction.done,
-                onSubmitted:
-                    (value) => Navigator.of(dialogContext).pop(value.trim()),
-                decoration: const InputDecoration(hintText: '歌单名称'),
-              ),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.of(dialogContext).pop(),
-                  child: const Text('取消'),
-                ),
-                FilledButton(
-                  style: FilledButton.styleFrom(
-                    backgroundColor: AppTokens.accent,
-                  ),
-                  onPressed:
-                      () => Navigator.of(
-                        dialogContext,
-                      ).pop(controller.text.trim()),
-                  child: const Text('创建'),
-                ),
-              ],
-            ),
+      name = await showTextInputDialog(
+        context,
+        title: '新建歌单',
+        confirmLabel: '创建',
       );
       if (name == null || name.isEmpty) return;
-      await repository.createPlaylist(name);
     }
-    await repository.addManyToPlaylist(name, tracks);
-    if (!mounted) return;
-    setState(() {
-      _selected.clear();
-      _selecting = false;
-    });
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(SnackBar(content: Text('已将 ${tracks.length} 首加入「$name」')));
+    // 计划 3.3：批量写歌单失败必须给出反馈。
+    // 此前 await 无 catch，失败时既无 SnackBar 也无日志，
+    // 用户看到的是「点了没反应」，会以为操作没生效而反复点击。
+    try {
+      if (target == '__new__') await repository.createPlaylist(name);
+      await repository.addManyToPlaylist(name, tracks);
+      if (!mounted) return;
+      setState(() {
+        _selected.clear();
+        _selecting = false;
+      });
+      messenger
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+          SnackBar(content: Text('已将 ${tracks.length} 首加入「$name」')),
+        );
+    } catch (e) {
+      AppLog.error('批量加入歌单失败：$name | $e', tag: 'MusaicSearch');
+      if (!mounted) return;
+      messenger
+        ..hideCurrentSnackBar()
+        ..showSnackBar(const SnackBar(content: Text('加入歌单失败，请重试')));
+    }
   }
 
   void _batchAddToQueue() {
@@ -351,60 +351,72 @@ class _SearchResultsPageState extends ConsumerState<SearchResultsPage> {
   Future<void> _batchFavorite() async {
     final repository = ref.read(libraryRepositoryProvider);
     final tracks = _tracks.where((t) => _selected.contains(t.key)).toList();
-    for (final track in tracks) {
-      final isFav = repository.isFavorite(track.key);
-      if (!isFav) await repository.toggleFavorite(track);
+    // 计划 3.3：批量收藏失败必须给出反馈（此前 await 无 catch）。
+    final messenger = ScaffoldMessenger.of(context);
+    var added = 0;
+    try {
+      for (final track in tracks) {
+        final isFav = repository.isFavorite(track.key);
+        if (!isFav) {
+          await repository.toggleFavorite(track);
+          added++;
+        }
+      }
+      if (!mounted) return;
+      setState(() {
+        _selected.clear();
+        _selecting = false;
+      });
+      messenger
+        ..hideCurrentSnackBar()
+        ..showSnackBar(SnackBar(content: Text('已收藏 ${tracks.length} 首')));
+    } catch (e) {
+      AppLog.error(
+        '批量收藏失败：已成功 $added/${tracks.length} | $e',
+        tag: 'MusaicSearch',
+      );
+      if (!mounted) return;
+      messenger
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+          SnackBar(
+            content: Text(
+              added == 0 ? '收藏失败，请重试' : '部分收藏成功（$added/${tracks.length}），请重试',
+            ),
+          ),
+        );
     }
-    if (!mounted) return;
-    setState(() {
-      _selected.clear();
-      _selecting = false;
-    });
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(SnackBar(content: Text('已收藏 ${tracks.length} 首')));
   }
 
   Future<void> _saveAllAsPlaylist() async {
     if (_tracks.isEmpty) return;
     final repository = ref.read(libraryRepositoryProvider);
-    final controller = TextEditingController();
-    final name = await showDialog<String>(
-      context: context,
-      builder:
-          (dialogContext) => AlertDialog(
-            title: const Text('保存全部结果为歌单'),
-            content: TextField(
-              controller: controller,
-              autofocus: true,
-              decoration: InputDecoration(
-                hintText: '歌单名称（${_tracks.length} 首）',
-              ),
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.of(dialogContext).pop(),
-                child: const Text('取消'),
-              ),
-              FilledButton(
-                style: FilledButton.styleFrom(
-                  backgroundColor: AppTokens.accent,
-                ),
-                onPressed:
-                    () =>
-                        Navigator.of(dialogContext).pop(controller.text.trim()),
-                child: const Text('保存'),
-              ),
-            ],
-          ),
+    // 在任何 await 之前取出 messenger（同上）。
+    final messenger = ScaffoldMessenger.of(context);
+    final name = await showTextInputDialog(
+      context,
+      title: '保存全部结果为歌单',
+      confirmLabel: '保存',
+      hintText: '歌单名称（${_tracks.length} 首）',
     );
     if (name == null || name.isEmpty) return;
-    await repository.createPlaylist(name);
-    await repository.addManyToPlaylist(name, _tracks);
-    if (!mounted) return;
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(SnackBar(content: Text('已保存「$name」（${_tracks.length} 首）')));
+    // 计划 3.3：保存失败必须给出反馈（此前 await 无 catch）。
+    try {
+      await repository.createPlaylist(name);
+      await repository.addManyToPlaylist(name, _tracks);
+      if (!mounted) return;
+      messenger
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+          SnackBar(content: Text('已保存「$name」（${_tracks.length} 首）')),
+        );
+    } catch (e) {
+      AppLog.error('保存歌单失败：$name | $e', tag: 'MusaicSearch');
+      if (!mounted) return;
+      messenger
+        ..hideCurrentSnackBar()
+        ..showSnackBar(const SnackBar(content: Text('保存歌单失败，请重试')));
+    }
   }
 
   @override

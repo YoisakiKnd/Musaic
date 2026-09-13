@@ -302,8 +302,17 @@ Future<void> _scanIsolateEntry((_ScanConfig, SendPort) input) async {
     for (final dirPath in config.dirPaths) {
       _collectAudioFiles(Directory(dirPath), files);
     }
-    var pending = <Track>[];
+    // 去重：用户可能同时添加了父目录与子目录（如 /Music 与 /Music/Album），
+    // 或两条配置指向同一目录，此时同一个文件会被遍历到多次。
+    // 不去重会让同一首歌在列表里重复出现（且 id 相同，收藏/歌单里互相覆盖）。
+    // 按规范化后的绝对路径去重，保持首次出现顺序。
+    final seen = <String>{};
+    final unique = <String>[];
     for (final path in files) {
+      if (seen.add(p.canonicalize(path))) unique.add(path);
+    }
+    var pending = <Track>[];
+    for (final path in unique) {
       final parsed = await parseTrackFile(path, config.coverDirPath);
       pending.add(_trackFromParsed(path, parsed));
       if (pending.length >= _scanBatchSize) {

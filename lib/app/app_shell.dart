@@ -9,6 +9,7 @@ import '../features/auth/application/account_notifier.dart';
 import '../features/auth/presentation/login_launcher.dart';
 import '../features/player/mini_player.dart';
 import '../features/player/player_notifier.dart';
+import 'route_location.dart';
 
 /// 自适应骨架（Master Plan §8）：
 /// - < 840dp：全宽底部导航（MiniPlayer 贴于导航上方，方角）
@@ -52,6 +53,27 @@ class AppShell extends ConsumerWidget {
         );
         break; // 一次只提醒一条
       }
+    });
+
+    // 播放失败的全局提示（U4）：错误此前**只在全屏播放页可见**，后台自动
+    // 切歌失败时用户毫无感知（迷你条也不显示）。这里在非播放页补一条全局
+    // 提示；播放页自身已有错误横幅（可重试/关闭），必须避让，否则同一次
+    // 失败会弹两条。
+    ref.listen(playerNotifierProvider.select((s) => s.error), (_, next) {
+      if (next == null) return;
+      final router = GoRouter.maybeOf(context);
+      if (router != null && isOnPlayerRoute(router)) return;
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(next),
+          duration: const Duration(seconds: 6),
+          action: SnackBarAction(
+            label: '重试',
+            onPressed: () => ref.read(playerNotifierProvider.notifier).retry(),
+          ),
+        ),
+      );
     });
 
     return LayoutBuilder(

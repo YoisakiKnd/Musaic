@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 
 import '../../core/di/app_providers.dart'
     show libraryRepositoryProvider, sourceRegistryProvider;
+import '../../core/logging/app_logger.dart';
 import '../../core/model/remote_playlist.dart';
 import '../../core/model/track.dart';
 import '../../core/source/capabilities.dart';
@@ -14,6 +15,8 @@ import 'data/library_repository.dart';
 import 'data/remote_playlists_provider.dart';
 import 'remote_playlist_page.dart';
 import '../player/player_notifier.dart';
+import '../shared/error_text.dart';
+import '../shared/widgets/text_input_dialog.dart';
 import '../shared/widgets/track_tile.dart';
 import 'data/library_providers.dart';
 
@@ -99,7 +102,9 @@ class _FavoritesTab extends ConsumerWidget {
     final favoritesAsync = ref.watch(favoritesProvider);
     return favoritesAsync.when(
       loading: () => const Center(child: CircularProgressIndicator()),
-      error: (e, _) => Center(child: Text('加载失败：$e')),
+      error:
+          (e, _) =>
+              Center(child: Text(loadFailureText(e, tag: 'MusaicLibrary'))),
       data: (favorites) {
         if (favorites.isEmpty) {
           return const _EmptyHint(
@@ -111,7 +116,16 @@ class _FavoritesTab extends ConsumerWidget {
         // 此前收藏只有单曲 tile，没有「播放全部」，也无法批量整理。
         return _TrackListWithActions(
           tracks: favorites,
-          storageKey: 'favorites',
+          // 收藏页：移除 = 取消收藏。
+          onRemoveSelected: (keys) async {
+            final repository = ref.read(libraryRepositoryProvider);
+            for (final track in favorites) {
+              if (keys.contains(track.key)) {
+                await repository.toggleFavorite(track);
+              }
+            }
+          },
+          removedLabel: '已取消喜欢',
           onClear: () async {
             await ref.read(libraryRepositoryProvider).clearFavorites();
           },
@@ -130,7 +144,9 @@ class _HistoryTab extends ConsumerWidget {
     final historyAsync = ref.watch(recentHistoryProvider);
     return historyAsync.when(
       loading: () => const Center(child: CircularProgressIndicator()),
-      error: (e, _) => Center(child: Text('加载失败：$e')),
+      error:
+          (e, _) =>
+              Center(child: Text(loadFailureText(e, tag: 'MusaicLibrary'))),
       data: (history) {
         if (history.isEmpty) {
           return const _EmptyHint(
@@ -140,7 +156,14 @@ class _HistoryTab extends ConsumerWidget {
         }
         // 最近播放同样支持播放全部与批量删除（D3）。
         // 历史无「清空」语义上的歧义，故不提供一键清空入口。
-        return _TrackListWithActions(tracks: history, storageKey: 'history');
+        return _TrackListWithActions(
+          tracks: history,
+          // 历史页：移除 = 删除历史记录（**不是**取消收藏，U1）。
+          onRemoveSelected: (keys) async {
+            await ref.read(libraryRepositoryProvider).removeHistory(keys);
+          },
+          removedLabel: '已从最近播放移除',
+        );
       },
     );
   }
@@ -158,7 +181,9 @@ class _PlaylistsTab extends ConsumerWidget {
       children: [
         playlistsAsync.when(
           loading: () => const Center(child: CircularProgressIndicator()),
-          error: (e, _) => Center(child: Text('加载失败：$e')),
+          error:
+              (e, _) =>
+                  Center(child: Text(loadFailureText(e, tag: 'MusaicLibrary'))),
           data: (names) {
             // 所有实现 RemotePlaylistCapable 的渠道各渲染一个账号歌单区
             final remoteSources = <MusicSource>[
@@ -196,36 +221,11 @@ class _PlaylistsTab extends ConsumerWidget {
             backgroundColor: AppTokens.accent,
             foregroundColor: Colors.white,
             onPressed: () async {
-              final controller = TextEditingController();
-              final name = await showDialog<String>(
-                context: context,
-                builder:
-                    (dialogContext) => AlertDialog(
-                      title: const Text('新建歌单'),
-                      content: TextField(
-                        controller: controller,
-                        autofocus: true,
-                        decoration: const InputDecoration(hintText: '歌单名称'),
-                      ),
-                      actions: [
-                        TextButton(
-                          onPressed: () => Navigator.of(dialogContext).pop(),
-                          child: const Text('取消'),
-                        ),
-                        FilledButton(
-                          style: FilledButton.styleFrom(
-                            backgroundColor: AppTokens.accent,
-                          ),
-                          onPressed:
-                              () => Navigator.of(
-                                dialogContext,
-                              ).pop(controller.text.trim()),
-                          child: const Text('创建'),
-                        ),
-                      ],
-                    ),
+              final name = await showTextInputDialog(
+                context,
+                title: '新建歌单',
+                confirmLabel: '创建',
               );
-              controller.dispose();
               if (name != null && name.isNotEmpty) {
                 await repository.createPlaylist(name);
               }
@@ -246,15 +246,24 @@ class _PlaylistsTab extends ConsumerWidget {
 class _TrackListWithActions extends ConsumerStatefulWidget {
   const _TrackListWithActions({
     required this.tracks,
-    required this.storageKey,
+    required this.onRemoveSelected,
+    required this.removedLabel,
     this.onClear,
     this.clearLabel,
   });
 
   final List<Track> tracks;
 
-  /// 仅用于区分选中态（切换 tab 时重置）。
-  final String storageKey;
+  /// 批量移除所选曲目的回调，由**调用方声明语义**。
+  ///
+  /// 此前该组件用 `toggleFavorite` 硬编码「移除」，对收藏页恰好等价，
+  /// 对历史页则是错的（删不掉历史、反而改写收藏，U1）。
+  /// 收藏与历史是两份独立数据，语义必须由 tab 自己给出，
+  /// 不能由共用组件猜测。
+  final Future<void> Function(Set<String> keys) onRemoveSelected;
+
+  /// 移除成功后的提示词（如「已从最近播放移除」）。
+  final String removedLabel;
 
   /// 一键清空回调；为 null 时不显示该入口。
   final Future<void> Function()? onClear;
@@ -284,22 +293,37 @@ class _TrackListWithActionsState extends ConsumerState<_TrackListWithActions> {
   }
 
   Future<void> _removeSelected() async {
-    final repository = ref.read(libraryRepositoryProvider);
     final keys = Set<String>.of(_selected);
     if (keys.isEmpty) return;
 
-    // 逐条删除是唯一可行路径（Hive 无按谓词批量删），
-    // 但先收集再删，避免在遍历中修改集合。
-    for (final track in widget.tracks) {
-      if (keys.contains(track.key)) {
-        await repository.toggleFavorite(track); // 收藏态取反 = 移除
-      }
+    // 计划 3.3：批量移除失败必须给出反馈（此前 await 无 catch）。
+    // 失败时选中态与列表都保持原样，用户可重试，不会误以为已移除。
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      // 语义由调用方提供：收藏页删收藏、历史页删历史（U1）。
+      await widget.onRemoveSelected(keys);
+      if (!mounted) return;
+      _exitSelection();
+      messenger
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+          SnackBar(content: Text('${widget.removedLabel} ${keys.length} 首')),
+        );
+    } catch (e) {
+      AppLog.error(
+        '批量移除失败：${widget.removedLabel} ${keys.length} 首 | $e',
+        tag: 'MusaicLibrary',
+      );
+      if (!mounted) return;
+      messenger
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+          // 不用 removedLabel 拼失败文案：它是「已取消喜欢」这类完成态措辞，
+          // 拼成「已取消喜欢失败」语义别扭。两个调用方的语义都是移除，
+          // 统一用中性措辞。
+          const SnackBar(content: Text('移除失败，请重试')),
+        );
     }
-    if (!mounted) return;
-    _exitSelection();
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(SnackBar(content: Text('已移除 ${keys.length} 首')));
   }
 
   Future<void> _confirmClear() async {
@@ -400,6 +424,8 @@ class _TrackListWithActionsState extends ConsumerState<_TrackListWithActions> {
                 queue: tracks,
                 dense: true,
                 onTapOverride: _selecting ? () => _toggle(track.key) : null,
+                // 计划 4.3：勾选框用独立回调，不再借道 onTapOverride。
+                onCheckboxChanged: _selecting ? () => _toggle(track.key) : null,
                 leadingCheckbox: _selecting ? checked : null,
               );
             },

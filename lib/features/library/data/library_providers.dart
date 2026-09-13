@@ -54,4 +54,23 @@ final playlistsProvider = StreamProvider<List<String>>((ref) async* {
   }
 });
 
+/// 单个歌单的曲目内容（**响应式**，U2）。
+///
+/// 为什么需要它：歌单详情页原先直接调用 `repository.playlistTracks(name)`，
+/// 而它 watch 的 `libraryRepositoryProvider` 是普通 `Provider`——永远不变，
+/// 因此本页在别处（搜索页加入、批量加入、备份导入、移除单曲）发生变更后
+/// **不会刷新**，用户看到的是过期内容，只能退出重进。
+///
+/// `autoDispose`：离开详情页即释放，不为每个歌单常驻一个订阅。
+final playlistTracksProvider = StreamProvider.autoDispose
+    .family<List<Track>, String>((ref, name) async* {
+      final repository = ref.watch(libraryRepositoryProvider);
+      yield repository.playlistTracks(name);
+      // 歌单 Box 的任一变更都会推送；内容可能来自其它页面的写入，
+      // 故此处按名重读，而不是依赖事件里的 value。
+      await for (final _ in repository.watchPlaylists()) {
+        yield repository.playlistTracks(name);
+      }
+    });
+
 /// 网易云账号歌单（登录后可用；账号状态变化自动重取）。

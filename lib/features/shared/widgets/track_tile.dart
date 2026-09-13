@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../../core/di/app_providers.dart';
+import '../../../core/logging/app_logger.dart';
 import '../../../core/model/track.dart';
 import '../../../core/theme/app_tokens.dart';
 import '../../library/data/library_providers.dart';
@@ -22,6 +23,7 @@ class TrackTile extends ConsumerWidget {
     this.onRemove,
     this.onLongPress,
     this.onTapOverride,
+    this.onCheckboxChanged,
     this.dense = false,
     this.leadingCheckbox,
   });
@@ -35,6 +37,14 @@ class TrackTile extends ConsumerWidget {
 
   /// 点击覆盖（多选模式下用于切换选中）；缺省为播放行为。
   final VoidCallback? onTapOverride;
+
+  /// 多选框的独立回调（计划 4.3）。
+  ///
+  /// 此前勾选框直接借用 [onTapOverride]，于是「传了 leadingCheckbox 但没传
+  /// onTapOverride」会得到一个**看起来可点、实际没反应**的勾选框 ——
+  /// 界面在骗用户。现在两者解耦：勾选框优先用自己的回调，回落到
+  /// [onTapOverride]；两者都为空时显式禁用（置灰），让「不可用」可见。
+  final VoidCallback? onCheckboxChanged;
 
   /// 多选模式下的勾选态：null 表示不在多选模式。
   ///
@@ -77,9 +87,16 @@ class TrackTile extends ConsumerWidget {
               ? Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
+                  // 计划 4.3：勾选框优先用自己的回调，回落到 onTapOverride。
+                  // 两者都为空时传 null 给 onChanged → Checkbox 进入禁用态
+                  // （置灰），「点了没反应」变成看得见的「不可用」。
                   Checkbox(
                     value: leadingCheckbox,
-                    onChanged: (_) => onTapOverride?.call(),
+                    onChanged:
+                        (onCheckboxChanged ?? onTapOverride) == null
+                            ? null
+                            : (_) =>
+                                (onCheckboxChanged ?? onTapOverride)!.call(),
                     visualDensity: VisualDensity.compact,
                   ),
                   TrackCover(coverUrl: track.coverUrl),
@@ -152,8 +169,7 @@ class TrackTile extends ConsumerWidget {
           IconButton(
             visualDensity: VisualDensity.compact,
             tooltip: isFavorite ? '取消喜欢' : '喜欢',
-            onPressed:
-                () => ref.read(libraryRepositoryProvider).toggleFavorite(track),
+            onPressed: () => _toggleFavorite(context, ref),
             icon: Icon(
               isFavorite
                   ? Icons.favorite_rounded
@@ -168,6 +184,36 @@ class TrackTile extends ConsumerWidget {
         ],
       ),
     );
+  }
+
+  /// 收藏开关（计划 3.3：补上失败反馈）。
+  ///
+  /// 此前是 `onPressed: () => repo.toggleFavorite(track)` 的裸调用：
+  /// 写入失败（存储异常等）时异常直接冒泡到 Flutter 错误处理，
+  /// 界面上**没有任何反馈**，用户会以为「点了但没生效」而反复点击。
+  /// 现在失败必须落到可见提示上。
+  Future<void> _toggleFavorite(BuildContext context, WidgetRef ref) async {
+    final messenger = ScaffoldMessenger.of(context);
+    final wasFavorite = ref
+        .read(libraryRepositoryProvider)
+        .isFavorite(track.key);
+    try {
+      final added = await ref
+          .read(libraryRepositoryProvider)
+          .toggleFavorite(track);
+      if (!context.mounted) return;
+      messenger
+        ..hideCurrentSnackBar()
+        ..showSnackBar(SnackBar(content: Text(added ? '已加入喜欢' : '已取消喜欢')));
+    } catch (e) {
+      AppLog.error('收藏写入失败：${track.key} | $e', tag: 'MusaicLibrary');
+      if (!context.mounted) return;
+      messenger
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+          SnackBar(content: Text(wasFavorite ? '取消喜欢失败，请重试' : '收藏失败，请重试')),
+        );
+    }
   }
 
   /// 曲目操作菜单（日常可用性计划 D2）。

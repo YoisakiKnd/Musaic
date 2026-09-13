@@ -10,6 +10,7 @@ import '../../core/di/app_providers.dart'
         audioHandlerProvider,
         libraryRepositoryProvider,
         sourceRegistryProvider;
+import '../../core/logging/app_logger.dart';
 import '../../core/model/track.dart';
 import '../../core/theme/app_tokens.dart';
 import '../../core/utils/cover_network.dart';
@@ -17,6 +18,7 @@ import '../library/data/library_providers.dart';
 import '../library/widgets/add_to_playlist_sheet.dart';
 import '../lyrics/presentation/lyrics_view.dart';
 import '../settings/settings_providers.dart';
+import '../shared/widgets/confirm_dialog.dart';
 import '../theme/dynamic_color_provider.dart'
     show
         CoverPalette,
@@ -47,6 +49,12 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
     with SingleTickerProviderStateMixin {
   bool _showLyrics = false;
   double _volume = 1.0;
+
+  /// 横屏右侧区域点击切换后的临时结果（null = 尚未点击，用持久化设置作初值）。
+  ///
+  /// 只影响右侧区域显示歌词还是控件，不回写设置：点击是临时查看，
+  /// 不是偏好变更。退出沉浸模式时清回 null，恢复为控件态。
+  bool? _landscapeSideLyrics;
 
   /// 沉浸模式：隐藏系统栏 + 头部/功能行，只留封面与核心控制；
   /// 标题行的全屏按钮随时切换（进入播放页默认开启）。
@@ -80,17 +88,37 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
     super.dispose();
   }
 
+  /// 收藏开关（计划 3.3：补上失败反馈）。
+  ///
+  /// 此前无 try/catch：写入失败时用户看不到任何提示，
+  /// 只有成功路径才有「已加入喜欢」的 SnackBar，失败时静默。
   Future<void> _toggleFavorite(Track track) async {
     final repository = ref.read(libraryRepositoryProvider);
-    final added = await repository.toggleFavorite(track);
-    if (!mounted) return;
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(SnackBar(content: Text(added ? '已加入喜欢' : '已取消喜欢')));
+    final messenger = ScaffoldMessenger.of(context);
+    final wasFavorite = repository.isFavorite(track.key);
+    try {
+      final added = await repository.toggleFavorite(track);
+      if (!mounted) return;
+      messenger
+        ..hideCurrentSnackBar()
+        ..showSnackBar(SnackBar(content: Text(added ? '已加入喜欢' : '已取消喜欢')));
+    } catch (e) {
+      AppLog.error('收藏写入失败：${track.key} | $e', tag: 'MusaicLibrary');
+      if (!mounted) return;
+      messenger
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+          SnackBar(content: Text(wasFavorite ? '取消喜欢失败，请重试' : '收藏失败，请重试')),
+        );
+    }
   }
 
   void _toggleImmersive() {
-    setState(() => _immersive = !_immersive);
+    setState(() {
+      _immersive = !_immersive;
+      // 退出沉浸模式 → 右侧恢复为控件态（清掉本次点击的临时结果）。
+      if (!_immersive) _landscapeSideLyrics = null;
+    });
     SystemChrome.setEnabledSystemUIMode(
       _immersive ? SystemUiMode.immersiveSticky : SystemUiMode.edgeToEdge,
     );
@@ -251,8 +279,10 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
   // ---------- 横屏布局（封面居左 / 控制列居右） ----------
 
   Widget _buildLandscape(Track track) {
-    // 「横屏显示歌词」开：左 = 封面/标题/控制，右 = 歌词；关：左封面右控制
-    final lyricsSide = ref.watch(landscapeLyricsProvider);
+    // 初值取持久化设置「横屏右侧显示歌词」；用户点击过右侧区域后，
+    // 以本次点击结果为准（[_landscapeSideLyrics]，不回写设置）。
+    final bool lyricsSide =
+        _landscapeSideLyrics ?? ref.watch(landscapeLyricsProvider);
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 8),
       child:
@@ -260,6 +290,17 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
               ? _buildLandscapeLyrics(track)
               : _buildLandscapeControls(track),
     );
+  }
+
+  /// 横屏右侧区域在「歌词 / 控件」两态之间切换（点击驱动）。
+  ///
+  /// 点击是临时查看，不写回设置；退出沉浸模式时由 [_toggleImmersive] 复位。
+  void _toggleLandscapeSide() {
+    setState(() {
+      final bool current =
+          _landscapeSideLyrics ?? ref.read(landscapeLyricsProvider);
+      _landscapeSideLyrics = !current;
+    });
   }
 
   /// 横屏控制布局：左 = 头部/封面，右 = 标题/进度/控制/音量/功能行。
@@ -284,14 +325,18 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
         ),
         SizedBox(
           width: 380,
-          child: Column(
-            children: [
-              _buildTitleRow(track),
-              _buildProgress(track),
-              const PlayerControls(accentColor: AppTokens.accent),
-              _buildVolume(),
-              _buildActionRowAnimated(),
-            ],
+          child: _LandscapeSideTapTarget(
+            onTap: _toggleLandscapeSide,
+            hint: '点击切换到歌词',
+            child: Column(
+              children: [
+                _buildTitleRow(track),
+                _buildProgress(track),
+                const PlayerControls(accentColor: AppTokens.accent),
+                _buildVolume(),
+                _buildActionRowAnimated(),
+              ],
+            ),
           ),
         ),
       ],
@@ -331,16 +376,20 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
         ),
         const VerticalDivider(width: 1),
         Expanded(
-          child: Column(
-            children: [
-              Expanded(
-                child: LyricsView(
-                  key: ValueKey('lyr-landscape-${track.key}'),
-                  track: track,
+          child: _LandscapeSideTapTarget(
+            onTap: _toggleLandscapeSide,
+            hint: '点击切换到控件',
+            child: Column(
+              children: [
+                Expanded(
+                  child: LyricsView(
+                    key: ValueKey('lyr-landscape-${track.key}'),
+                    track: track,
+                  ),
                 ),
-              ),
-              _buildActionRowAnimated(),
-            ],
+                _buildActionRowAnimated(),
+              ],
+            ),
           ),
         ),
       ],
@@ -784,7 +833,20 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
                             TextButton.icon(
                               onPressed:
                                   state.queue.length > 1
-                                      ? notifier.clearQueue
+                                      ? () async {
+                                        // 清空队列会丢弃用户手工排好的顺序
+                                        // （尤其「下一首播放」的插入），
+                                        // 因此先确认（用户层交互计划 2.1）。
+                                        final confirmed =
+                                            await confirmDestructiveAction(
+                                              context,
+                                              title: '清空播放队列？',
+                                              message:
+                                                  '将移除队列中除当前曲目外的全部曲目，该操作不可恢复。',
+                                            );
+                                        if (!confirmed) return;
+                                        notifier.clearQueue();
+                                      }
                                       : null,
                               icon: const Icon(
                                 Icons.delete_sweep_rounded,
@@ -864,6 +926,39 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
               );
             },
           ),
+    );
+  }
+}
+
+/// 横屏右侧区域的点击切换外壳（歌词 ↔ 控件）。
+///
+/// 只在右侧整块区域加一层点击识别：内部按钮 / 滑条自带的手势识别器
+/// 在竞技场中优先胜出，因此原有控件功能不受影响；空白处点击才触发切换。
+/// 用 [Semantics] 暴露提示，不额外占用视觉空间。
+class _LandscapeSideTapTarget extends StatelessWidget {
+  const _LandscapeSideTapTarget({
+    required this.onTap,
+    required this.hint,
+    required this.child,
+  });
+
+  final VoidCallback onTap;
+  final String hint;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    return Semantics(
+      button: true,
+      hint: hint,
+      child: GestureDetector(
+        // translucent：透明区域也参与命中，保证「整块区域」都可点，
+        // 同时不遮挡子控件的事件（opaque 会抢走子控件之外的命中，
+        // 但此处子控件已铺满，用 translucent 更保守）。
+        behavior: HitTestBehavior.translucent,
+        onTap: onTap,
+        child: child,
+      ),
     );
   }
 }

@@ -7,6 +7,7 @@ import '../../../core/model/remote_playlist.dart';
 import '../../../core/model/track.dart';
 import '../../../core/source/capabilities.dart';
 import '../../auth/application/account_notifier.dart';
+import '../../shared/error_text.dart';
 
 /// 指定渠道的账号歌单（渠道需实现 [RemotePlaylistCapable]）。
 ///
@@ -61,7 +62,10 @@ final remotePlaylistTracksProvider =
 /// 失败态展示文案。
 ///
 /// 渠道异常已把「网络异常 / 需要登录」等领域信息放在 [SourceException.message]
-/// 里，直接取用；其余未知异常退化为带原文的通用文案——它可能包含 URL，
-/// 所以只在非渠道异常时使用（渠道异常禁止把底层细节透给界面）。
+/// 里，直接取用；其余未知异常**不再把原文透给界面**（计划 3.4）——原文可能是
+/// `PathNotFoundException: ... path = '/data/...'`，既不可读又泄露本机路径，
+/// 因此统一退化为「加载失败，请重试」，细节由 [loadFailureText] 记入诊断日志。
 String remotePlaylistsErrorMessage(Object error) =>
-    error is SourceException ? error.message : '加载失败：$error';
+    error is SourceException
+        ? error.message
+        : loadFailureText(error, tag: 'MusaicLibrary');

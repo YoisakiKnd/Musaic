@@ -30,6 +30,12 @@ class _MiniPlayerState extends ConsumerState<MiniPlayer> {
     if (track == null) return const SizedBox.shrink();
 
     final playing = ref.watch(playerNotifierProvider.select((s) => s.playing));
+    // 播放失败标记（U4）：后台自动切歌失败时，此前迷你条毫无变化，
+    // 用户会以为「就是没声音」。这里给出可见标记（进度线转错误色 + 图标），
+    // 点按进播放页即可看到可重试的错误横幅。
+    final hasError = ref.watch(
+      playerNotifierProvider.select((s) => s.error != null),
+    );
     final position = ref.watch(
       playerNotifierProvider.select((s) => s.position),
     );
@@ -66,9 +72,11 @@ class _MiniPlayerState extends ConsumerState<MiniPlayer> {
           children: [
             LinearProgressIndicator(
               value: progress,
-              minHeight: 2,
+              minHeight: hasError ? 3 : 2,
               backgroundColor: scheme.onSurface.withValues(alpha: 0.08),
-              valueColor: const AlwaysStoppedAnimation<Color>(AppTokens.accent),
+              valueColor: AlwaysStoppedAnimation<Color>(
+                hasError ? scheme.error : AppTokens.accent,
+              ),
             ),
             // 固定高度 + Row 精确居中（ListTile 的 leading/trailing 基线
             // 在 64dp 行高里难以对齐，这里全部手工约束）
@@ -94,14 +102,35 @@ class _MiniPlayerState extends ConsumerState<MiniPlayer> {
                           ),
                         ),
                         const SizedBox(height: 2),
-                        Text(
-                          '${track.artist}${track.album == null ? '' : ' · ${track.album}'}',
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                            fontSize: 12,
-                            color: scheme.onSurface.withValues(alpha: 0.6),
-                          ),
+                        Row(
+                          children: [
+                            if (hasError) ...[
+                              Icon(
+                                Icons.error_outline_rounded,
+                                size: 13,
+                                color: scheme.error,
+                              ),
+                              const SizedBox(width: 4),
+                            ],
+                            Flexible(
+                              child: Text(
+                                hasError
+                                    ? '播放失败，点击查看'
+                                    : '${track.artist}${track.album == null ? '' : ' · ${track.album}'}',
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  color:
+                                      hasError
+                                          ? scheme.error
+                                          : scheme.onSurface.withValues(
+                                            alpha: 0.6,
+                                          ),
+                                ),
+                              ),
+                            ),
+                          ],
                         ),
                       ],
                     ),

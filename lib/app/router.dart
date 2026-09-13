@@ -10,6 +10,7 @@ import '../features/player/player_page.dart';
 import '../features/search/search_page.dart';
 import '../core/utils/nav_intent.dart';
 import 'app_shell.dart';
+import 'route_location.dart';
 
 final GlobalKey<NavigatorState> rootNavigatorKey = GlobalKey<NavigatorState>(
   debugLabel: 'root',
@@ -76,7 +77,7 @@ final routerProvider = Provider<GoRouter>((ref) {
       // 播放页：Apple Music 式模态——自底整幅上滑打开，pop 时下滑关闭；
       // opaque=false 让底层页面在转场中保持可见并压暗
       GoRoute(
-        path: '/player',
+        path: playerRoutePath,
         parentNavigatorKey: rootNavigatorKey,
         pageBuilder:
             (context, state) => CustomTransitionPage<void>(

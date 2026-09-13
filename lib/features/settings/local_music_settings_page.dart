@@ -8,6 +8,7 @@ import 'package:permission_handler/permission_handler.dart';
 import '../../core/di/app_providers.dart';
 import '../../core/source/capabilities.dart';
 import '../../core/theme/app_tokens.dart';
+import '../shared/widgets/confirm_dialog.dart';
 import 'data/local_music_settings_repository.dart';
 
 /// 本地音乐设置页：扫描文件夹管理 + 扫描偏好 + 立即扫描。
@@ -201,7 +202,19 @@ class _LocalMusicSettingsPageState
                       color: scheme.onSurface.withValues(alpha: 0.5),
                     ),
                     onPressed: () async {
+                      // 移除后该目录的曲目会从本地曲库消失（需重新添加并
+                      // 扫描才能恢复），因此先确认再执行（计划 2.1）。
+                      final confirmed = await confirmDestructiveAction(
+                        context,
+                        title: '移除该文件夹？',
+                        message:
+                            '将从本地曲库中移除此文件夹及其中的曲目；'
+                            '重新添加并扫描可恢复。',
+                        confirmLabel: '移除',
+                      );
+                      if (!confirmed || !mounted) return;
                       await _repo.removeFolder(folder);
+                      if (!mounted) return;
                       setState(() {});
                     },
                   ),

@@ -165,7 +165,7 @@ flutter test   # 单元 + Widget + 架构守护测试
 - [x] P4 沉浸式播放器
 - [x] P5 逐字歌词（网易云逐字 + 其余渠道逐行，见上方精度表）
 - [x] P6 内容页面
-- [x] P7 打磨（平台配置/测试/文档；集成测试与覆盖率门槛仍待补）
+- [x] P7 打磨（平台配置/测试/文档；集成测试见 `test/e2e/`，覆盖率门槛由 CI 强制）
 - [x] V1.1 四渠道真实登录（网易云 weapi 手机+扫码 / QQ 音乐 App 扫码 / 酷狗 h5 扫码 / YTM WebView）
 - [ ] **V1.2 作品同一性层**（`Work` / `WorkId`）—— 见 `docs/architecture-evolution.md`
 - [ ] V1.3 WebDAV 同步（依赖作品同一性层）

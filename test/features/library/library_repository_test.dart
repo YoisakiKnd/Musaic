@@ -75,6 +75,109 @@ void main() {
     });
   });
 
+  group('歌单排序（基准项「播放列表 · 排序」）', () {
+    /// 带可控元数据的曲目：排序要覆盖标题/艺术家/时长三个维度，
+    /// 其中时长可为 null（元数据缺失时的兜底路径）。
+    Track rich(String id, {String? title, String? artist, Duration? dur}) =>
+        Track(
+          id: id,
+          sourceId: 'netease',
+          title: title ?? 't$id',
+          artist: artist ?? 'a',
+          duration: dur,
+        );
+
+    test('按标题排序：结果写回存储，顺序即播放顺序', () async {
+      await repository.createPlaylist('排序');
+      await repository.addManyToPlaylist('排序', [
+        rich('1', title: 'Cherry'),
+        rich('2', title: 'apple'),
+        rich('3', title: 'Banana'),
+      ]);
+
+      final ok = await repository.sortPlaylist(
+        '排序',
+        PlaylistSortOrder.titleAsc,
+      );
+
+      expect(ok, isTrue);
+      // 大小写不敏感：apple < Banana < Cherry
+      expect(repository.playlistTracks('排序').map((t) => t.id), ['2', '3', '1']);
+    });
+
+    test('按艺术家排序：同艺术家内按标题', () async {
+      await repository.createPlaylist('排序');
+      await repository.addManyToPlaylist('排序', [
+        rich('1', artist: 'Zoe', title: 'a'),
+        rich('2', artist: 'Amy', title: 'z'),
+        rich('3', artist: 'Amy', title: 'b'),
+      ]);
+
+      await repository.sortPlaylist('排序', PlaylistSortOrder.artistAsc);
+
+      expect(repository.playlistTracks('排序').map((t) => t.id), ['3', '2', '1']);
+    });
+
+    test('按时长排序：缺失时长按 0 处理并排在最前（不抛异常）', () async {
+      await repository.createPlaylist('排序');
+      await repository.addManyToPlaylist('排序', [
+        rich('1', dur: const Duration(minutes: 3)),
+        rich('2'), // 时长缺失
+        rich('3', dur: const Duration(minutes: 1)),
+      ]);
+
+      await repository.sortPlaylist('排序', PlaylistSortOrder.durationAsc);
+
+      expect(repository.playlistTracks('排序').map((t) => t.id), ['2', '3', '1']);
+    });
+
+    test('同值项按 key 收尾排序：重复排序结果稳定', () async {
+      await repository.createPlaylist('排序');
+      await repository.addManyToPlaylist('排序', [
+        rich('c', title: 'same'),
+        rich('a', title: 'same'),
+        rich('b', title: 'same'),
+      ]);
+
+      await repository.sortPlaylist('排序', PlaylistSortOrder.titleAsc);
+      final first = repository.playlistTracks('排序').map((t) => t.id).toList();
+      await repository.sortPlaylist('排序', PlaylistSortOrder.titleAsc);
+      final second = repository.playlistTracks('排序').map((t) => t.id).toList();
+
+      // 全同值时顺序由 key 决定，且两次一致（否则用户会以为排序没生效）
+      expect(first, ['a', 'b', 'c']);
+      expect(second, first);
+    });
+
+    test('默认顺序不可执行：返回 false 且不改动内容', () async {
+      await repository.createPlaylist('排序');
+      await repository.addManyToPlaylist('排序', [
+        rich('1', title: 'B'),
+        rich('2', title: 'A'),
+      ]);
+
+      final ok = await repository.sortPlaylist('排序', PlaylistSortOrder.manual);
+
+      expect(ok, isFalse);
+      // 排序不可逆（原始顺序不另存），因此不提供「恢复默认」而误改数据
+      expect(repository.playlistTracks('排序').map((t) => t.id), ['1', '2']);
+    });
+
+    test('歌单不存在或曲目不足 2 首：返回 false 且不报错', () async {
+      expect(
+        await repository.sortPlaylist('不存在', PlaylistSortOrder.titleAsc),
+        isFalse,
+      );
+
+      await repository.createPlaylist('单曲');
+      await repository.addManyToPlaylist('单曲', [rich('1')]);
+      expect(
+        await repository.sortPlaylist('单曲', PlaylistSortOrder.titleAsc),
+        isFalse,
+      );
+    });
+  });
+
   group('历史裁剪', () {
     test('addHistory 超上限裁剪最旧记录', () async {
       // 注：同一毫秒内时间戳相同，不假设并列时的顺序，只验证容量与保留键。
@@ -98,6 +201,38 @@ void main() {
 
       expect(historyBox.length, LibraryRepository.historyCap);
       expect(historyBox.containsKey(makeTrack('import-0').key), isTrue);
+    });
+  });
+
+  group('历史批量移除（U1 回归）', () {
+    test('removeHistory 删除历史且不触碰收藏', () async {
+      final a = makeTrack('a');
+      final b = makeTrack('b');
+      await repository.addHistory(a);
+      await repository.addHistory(b);
+      // a 同时被收藏：删除历史**不得**取消收藏
+      await repository.toggleFavorite(a);
+
+      await repository.removeHistory([a.key]);
+
+      expect(historyBox.containsKey(a.key), isFalse);
+      expect(historyBox.containsKey(b.key), isTrue);
+      // 关键回归断言：收藏是另一份数据，必须原样保留
+      expect(repository.isFavorite(a.key), isTrue);
+      expect(favoritesBox.containsKey(a.key), isTrue);
+    });
+
+    test('removeHistory 空集合是安全空操作', () async {
+      await repository.addHistory(makeTrack('a'));
+      await repository.removeHistory(const <String>[]);
+      expect(historyBox.length, 1);
+    });
+
+    test('removeHistory 忽略不存在的 key', () async {
+      await repository.addHistory(makeTrack('a'));
+      await repository.removeHistory(['netease:不存在']);
+      expect(historyBox.length, 1);
+      expect(repository.recentHistory().length, 1);
     });
   });
 

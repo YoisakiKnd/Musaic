@@ -42,6 +42,18 @@ class LyricsView extends ConsumerWidget {
       AsyncLoading() => const Center(
         child: CircularProgressIndicator(strokeWidth: 2),
       ),
+      // 计划 3.5：失败必须与「确实没有歌词」区分开。
+      //
+      // 渠道适配器的 fetchLyrics 约定「失败返回 null 而不抛异常」
+      // （歌词缺失不阻塞播放），因此正常路径下这里不该出现错误态；
+      // 一旦出现，说明是解析器/注册表层面的意外异常——此时显示
+      // 「暂无歌词」会把故障说成事实，用户不会再重试。故单独给出
+      // 可重试的失败提示。
+      //
+      // 注意：只改 UI 层，不动适配器契约。
+      AsyncError() => _LyricsError(
+        onRetry: () => ref.invalidate(lyricsProvider(track)),
+      ),
       AsyncValue<LyricBundle?>(:final value?) when value.isEmpty => const _Hint(
         '暂无歌词',
       ),
@@ -52,6 +64,7 @@ class LyricsView extends ConsumerWidget {
         activeColor: activeColor,
         inactiveColor: inactiveColor,
       ),
+      // AsyncData(null)：渠道明确表示该曲目没有歌词。
       _ => const _Hint('暂无歌词'),
     };
   }
@@ -275,6 +288,47 @@ class _Hint extends StatelessWidget {
         style: Theme.of(
           context,
         ).textTheme.bodyMedium?.copyWith(color: AppTokens.darkTextSecondary),
+      ),
+    );
+  }
+}
+
+/// 歌词加载失败（计划 3.5）：明确告知失败并提供重试。
+///
+/// 与 [_Hint] 的区别是「这不是事实陈述，而是可恢复的故障」：
+/// 文案用「歌词加载失败」而非「暂无歌词」，并给出重试入口——
+/// 后者会让用户以为这首歌本来就没有歌词，从而不再尝试。
+class _LyricsError extends StatelessWidget {
+  const _LyricsError({required this.onRetry});
+
+  final VoidCallback onRetry;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Center(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(
+            Icons.error_outline_rounded,
+            size: 32,
+            color: scheme.onSurface.withValues(alpha: 0.45),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            '歌词加载失败',
+            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+              color: AppTokens.darkTextSecondary,
+            ),
+          ),
+          const SizedBox(height: 8),
+          TextButton(
+            onPressed: onRetry,
+            style: TextButton.styleFrom(foregroundColor: AppTokens.accent),
+            child: const Text('重试'),
+          ),
+        ],
       ),
     );
   }

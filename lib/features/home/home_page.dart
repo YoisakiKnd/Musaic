@@ -10,6 +10,7 @@ import '../../core/theme/app_tokens.dart';
 import '../../core/utils/nav_intent.dart';
 import '../library/data/library_providers.dart';
 import '../player/player_notifier.dart';
+import '../shared/error_text.dart';
 import '../shared/widgets/track_cover.dart';
 import '../shared/widgets/track_tile.dart';
 
@@ -75,7 +76,9 @@ class _HomePageState extends ConsumerState<HomePage> {
       ),
       body: historyAsync.when(
         loading: () => const Center(child: CircularProgressIndicator()),
-        error: (e, _) => Center(child: Text('加载失败：$e')),
+        error:
+            (e, _) =>
+                Center(child: Text(loadFailureText(e, tag: 'MusaicHome'))),
         data: (tracks) {
           // 头部两项常驻（继续收听卡无快照时自身收成零尺寸 + 快捷入口），
           // 下方交给 Expanded：空态仍能像以前一样垂直居中，

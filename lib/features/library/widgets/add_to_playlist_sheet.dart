@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/di/app_providers.dart';
 import '../../../core/model/track.dart';
 import '../../../core/theme/app_tokens.dart';
+import '../../shared/error_text.dart';
 
 /// 「加入歌单」通用入口（日常可用性计划 D2）。
 ///
@@ -145,7 +146,13 @@ class _AddToPlaylistSheetState extends ConsumerState<AddToPlaylistSheet> {
     } catch (e) {
       if (!mounted) return;
       setState(() => _busy = false);
-      messenger.showSnackBar(SnackBar(content: Text('加入失败：$e')));
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text(
+            loadFailureText(e, tag: 'MusaicLibrary', prefix: '加入失败'),
+          ),
+        ),
+      );
     }
   }
 }

@@ -16,6 +16,8 @@ import '../../core/theme/app_tokens.dart';
 import '../auth/presentation/channel/account_manage_page.dart';
 import '../library/data/backup_service.dart';
 import '../player/domain/crossfade.dart';
+import '../shared/error_text.dart';
+import '../shared/widgets/confirm_dialog.dart';
 import 'local_music_settings_page.dart';
 import 'settings_providers.dart';
 
@@ -480,6 +482,13 @@ class DataPage extends ConsumerWidget {
                   leading: const Icon(Icons.history_rounded),
                   title: const Text('清除搜索历史'),
                   onTap: () async {
+                    // 不可恢复：先确认再执行（用户层交互计划 2.1）
+                    final confirmed = await confirmDestructiveAction(
+                      context,
+                      title: '清除搜索历史？',
+                      message: '将删除全部历史搜索记录，该操作不可恢复。',
+                    );
+                    if (!confirmed || !context.mounted) return;
                     final repo = ref.read(searchHistoryRepositoryProvider);
                     await repo.clear();
                     if (!context.mounted) return;
@@ -491,6 +500,13 @@ class DataPage extends ConsumerWidget {
                   leading: const Icon(Icons.playlist_remove_rounded),
                   title: const Text('清除播放历史'),
                   onTap: () async {
+                    // 不可恢复：先确认再执行（用户层交互计划 2.1）
+                    final confirmed = await confirmDestructiveAction(
+                      context,
+                      title: '清除播放历史？',
+                      message: '将删除「最近播放」的全部记录，该操作不可恢复。',
+                    );
+                    if (!confirmed || !context.mounted) return;
                     final repo = ref.read(libraryRepositoryProvider);
                     await repo.clearHistory();
                     if (!context.mounted) return;
@@ -516,6 +532,16 @@ class DataPage extends ConsumerWidget {
                         style: const TextStyle(fontSize: 12),
                       ),
                       onTap: () async {
+                        // 缓存可重建，但重扫代价高：同样先确认（计划 2.1）
+                        final confirmed = await confirmDestructiveAction(
+                          context,
+                          title: '清除封面缓存？',
+                          message:
+                              '将删除本地扫描生成的封面缓存；'
+                              '下次浏览时需重新生成，不影响曲库与歌单。',
+                          confirmLabel: '清除',
+                        );
+                        if (!confirmed || !context.mounted) return;
                         final cleared = await clearCoverCache();
                         if (!context.mounted) return;
                         _toast(context, cleared ? '封面缓存已清除' : '暂无需要清理的缓存');
@@ -538,6 +564,13 @@ class DataPage extends ConsumerWidget {
                   leading: const Icon(Icons.favorite_border_rounded),
                   title: const Text('清空喜欢的音乐'),
                   onTap: () async {
+                    // 收藏是用户手工积累的数据，误清空无法恢复（计划 2.1）
+                    final confirmed = await confirmDestructiveAction(
+                      context,
+                      title: '清空喜欢的音乐？',
+                      message: '将移除全部已收藏曲目，该操作不可恢复。',
+                    );
+                    if (!confirmed || !context.mounted) return;
                     final repo = ref.read(libraryRepositoryProvider);
                     // 仓库级批量清空：一次 Hive clear()，替代逐条 toggleFavorite
                     // 的 N 次往返（P2）。
@@ -604,7 +637,10 @@ class DataPage extends ConsumerWidget {
       _toast(context, '已导出：$savedPath');
     } catch (e) {
       if (!context.mounted) return;
-      _toast(context, '导出失败：$e');
+      _toast(
+        context,
+        loadFailureText(e, tag: 'MusaicSettings', prefix: '导出失败'),
+      );
     }
   }
 
@@ -643,7 +679,10 @@ class DataPage extends ConsumerWidget {
       _toast(context, '诊断日志已导出：${file.path}');
     } catch (e) {
       if (!context.mounted) return;
-      _toast(context, '导出失败：$e');
+      _toast(
+        context,
+        loadFailureText(e, tag: 'MusaicSettings', prefix: '导出失败'),
+      );
     }
   }
 
@@ -675,7 +714,10 @@ class DataPage extends ConsumerWidget {
       _toast(context, '文件格式不正确：${e.message}');
     } catch (e) {
       if (!context.mounted) return;
-      _toast(context, '导入失败：$e');
+      _toast(
+        context,
+        loadFailureText(e, tag: 'MusaicSettings', prefix: '导入失败'),
+      );
     }
   }
 }

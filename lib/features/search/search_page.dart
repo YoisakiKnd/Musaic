@@ -11,6 +11,8 @@ import '../../core/theme/app_tokens.dart';
 import '../../core/utils/nav_intent.dart';
 import '../../core/utils/track_link_parser.dart';
 import '../player/player_notifier.dart';
+import '../shared/error_text.dart';
+import '../shared/widgets/confirm_dialog.dart';
 import 'search_results_page.dart';
 
 enum _AggregateMode { grouped, merged }
@@ -44,6 +46,14 @@ class _SearchPageState extends ConsumerState<SearchPage> {
   List<String> _history = const <String>[];
   bool _uiReady = false;
   int _searchGeneration = 0;
+
+  /// 重复提交防抖窗口（计划 3.2）。
+  ///
+  /// 取 600ms：足够覆盖「连按回车 / 连点按钮」的手指节奏，
+  /// 又短到用户改完关键词重新搜索时感知不到延迟。
+  static const Duration _duplicateSubmitWindow = Duration(milliseconds: 600);
+  DateTime? _lastSubmitAt;
+  String? _lastSubmitQuery;
 
   /// 尚未消费的外部请求；[NavIntent.serial] 保证同一次请求只消费一次。
   NavIntent<String>? _pendingIntent;
@@ -151,9 +161,13 @@ class _SearchPageState extends ConsumerState<SearchPage> {
       unawaited(context.push('/player'));
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('无法载入该链接：$e')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            loadFailureText(e, tag: 'MusaicSearch', prefix: '无法载入该链接'),
+          ),
+        ),
+      );
     }
   }
 
@@ -174,7 +188,31 @@ class _SearchPageState extends ConsumerState<SearchPage> {
 
   Future<void> _submit(String rawQuery) async {
     final query = rawQuery.trim();
-    if (query.isEmpty) return;
+    if (query.isEmpty) {
+      // 计划 3.1：空/纯空白提交必须给出反馈。
+      // 此前是静默 return——用户按了回车或点了搜索按钮却「什么都没发生」，
+      // 会反复重试并怀疑输入法或按钮坏了。
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(const SnackBar(content: Text('请输入搜索关键词')));
+      return;
+    }
+
+    // 计划 3.2：同一关键词的重复提交防抖。
+    //
+    // 结果页是独立的 `Navigator.push` 页面，而搜索结果由结果页自己流式接收。
+    // 用户连点搜索按钮或连按回车会叠加出多个结果页，返回时要退好几层，
+    // 且每次都重复请求所有渠道。窗口内的同一关键词直接忽略；
+    // 换关键词、或稍后重新搜同一关键词都不受影响。
+    final now = DateTime.now();
+    final lastAt = _lastSubmitAt;
+    if (_lastSubmitQuery == query &&
+        lastAt != null &&
+        now.difference(lastAt) < _duplicateSubmitWindow) {
+      return;
+    }
+    _lastSubmitQuery = query;
+    _lastSubmitAt = now;
 
     // 分享链接 / 裸 ID 直达（日常可用性计划 D1）。
     //
@@ -240,6 +278,16 @@ class _SearchPageState extends ConsumerState<SearchPage> {
                   _SortMode.durationAsc => SearchSortMode.durationAsc,
                   _SortMode.durationDesc => SearchSortMode.durationDesc,
                 },
+                // 计划 4.1：把「结果展示」的选择真正传给结果页。
+                // 此前该选项只改了本页 _mode，从未向下传递，结果页
+                // 恒以合并视图开场 —— 选项等于装饰。
+                //
+                // 仅在聚合搜索下生效：这组选项只在聚合模式显示，
+                // 单渠道搜索时 _mode 仍是未被用户触碰的默认值，
+                // 传下去会把单渠道搜索也从合并改成分组（行为回退）。
+                initialGrouped:
+                    _scope == _ScopeMode.aggregate &&
+                    _mode == _AggregateMode.grouped,
               ),
         ),
       ),
@@ -370,8 +418,16 @@ class _SearchPageState extends ConsumerState<SearchPage> {
                   tooltip: '清空历史',
                   icon: const Icon(Icons.delete_outline_rounded, size: 20),
                   onPressed: () async {
+                    // 历史是用户积累的数据：先确认再清空（用户层交互计划 2.1）
+                    final confirmed = await confirmDestructiveAction(
+                      context,
+                      title: '清空历史搜索？',
+                      message: '将删除全部历史搜索记录，该操作不可恢复。',
+                    );
+                    if (!confirmed || !mounted) return;
                     final repo = ref.read(searchHistoryRepositoryProvider);
                     final cleared = await repo.clear();
+                    if (!mounted) return;
                     setState(() => _history = cleared);
                   },
                 ),

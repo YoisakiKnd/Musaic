@@ -4,9 +4,11 @@ import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart' as crypto;
 import 'package:dio/dio.dart';
+import 'package:meta/meta.dart';
 
 import '../../core/logging/app_logger.dart';
 import '../../core/error/source_exception.dart';
+import '../../core/model/remote_playlist.dart';
 import '../../core/model/track.dart';
 import '../../core/network/response_decoder.dart';
 import '../../core/network/source_dio.dart';
@@ -25,7 +27,9 @@ import '../../core/lyrics/lyric_bundle.dart';
 /// 匿名能力：搜索 / 播放直链 / LRC 歌词；
 /// 登录能力：h5 二维码扫码（[QrLoginCapable]，web 签名 MD5 双盐），
 /// 成功后凭据为 token/userid，注入 Cookie 解锁完整试听。
-class KugouSource extends MusicSource implements QrLoginCapable {
+/// 歌单能力：[RemotePlaylistCapable]（Android 签名，公开发现链）。
+class KugouSource extends MusicSource
+    implements QrLoginCapable, RemotePlaylistCapable {
   KugouSource({required super.credentialReader, this.onSessionExpired});
 
   static const String id = 'kugou';
@@ -49,6 +53,59 @@ class KugouSource extends MusicSource implements QrLoginCapable {
       List.generate(32, (_) => '0123456789abcdef'[_random.nextInt(16)]).join();
 
   static const String _salt = 'NVPh5oo715z5DIWAeQlhMDsWXXQV4hwt';
+
+  // ---------- 账号歌单（RemotePlaylistCapable）常量 ----------
+  //
+  // 以下端点与签名规则来自 MIT 许可的参考实现
+  // MakcRe/KuGouMusicApi（Copyright 2023 MakcRe，MIT License）：
+  //   module/top_playlist.js            → POST /v2/special_recommend
+  //   module/playlist_track_all.js      → GET  /pubsongs/v2/get_other_list_file_nofilt
+  //   module/playlist_detail.js         → POST /v3/get_list_info
+  //   util/helper.js                    → signatureAndroidParams / signParamsKey
+  // 仅参照其接口形态与签名算法，未复制其代码。
+
+  /// Android 版签名盐（与 web 盐不同）。
+  ///
+  /// 注意：歌单接口用 Android 签名，**不能**复用本类已有的 [_salt]（web 盐）。
+  static const String _androidSalt = 'OIlwieks28dk2k092lksi2UIkp';
+
+  /// Android 版固定参数（参考实现 util/config.json）。
+  static const String _androidAppId = '1005';
+  static const String _androidClientVer = '20489';
+
+  static const String _androidUserAgent =
+      'Android15-1070-11083-46-0-DiscoveryDRADProtocol-wifi';
+
+  static const String _gatewayBase = 'https://gateway.kugou.com';
+
+  /// 公开歌单发现（歌单推荐）。
+  static const String _discoveryRouter = 'specialrec.service.kugou.com';
+
+  /// 歌单曲目列表。
+  static const String _trackListPath =
+      '/pubsongs/v2/get_other_list_file_nofilt';
+
+  /// 歌单详情（批量取曲目数）。
+  static const String _listInfoPath = '/v3/get_list_info';
+  static const String _listInfoRouter = 'pubsongs.kugou.com';
+
+  /// [fetchRemotePlaylistTracks] 单次请求的曲目数上限。
+  ///
+  /// 实测该端点接受 pagesize 300/1000 且无截断（2026-09-13），
+  /// 但歌单可以有几万首，因此仍按页拉取，避免一次响应过大。
+  static const int _trackPageSize = 300;
+
+  /// 曲目分页的硬上限（安全阀，防止上游 count 异常导致无限循环）。
+  static const int _trackPageLimit = 100;
+
+  /// [fetchRemotePlaylists] 返回的歌单条数上限。
+  static const int _discoveryPageSize = 30;
+
+  /// [_fetchTrackCounts] 单次批量请求的 id 数上限。
+  ///
+  /// **实测上限为 10**：1/2/3/5/10 个 id 均正常返回，
+  /// 15 个 id 直接返回 status 0 / error_code 20010（2026-09-13）。
+  static const int _countBatchSize = 10;
 
   late final Dio _dio = buildSourceDio(
     sourceId: KugouSource.id,
@@ -388,6 +445,404 @@ class KugouSource extends MusicSource implements QrLoginCapable {
     final nickname = await _fetchNickname(token: token, userid: userid);
     if (nickname == null) return null;
     return account.copyWith(nickname: nickname);
+  }
+
+  // ---------- 账号歌单能力（RemotePlaylistCapable） ----------
+  //
+  // 与网易云 / QQ 不同，酷狗的**公开歌单链无需登录**（实测 2026-09-13）：
+  //   发现  POST /v2/special_recommend                  → 歌单推荐列表
+  //   计数  POST /v3/get_list_info                      → 批量取曲目数（≤10 id/次）
+  //   曲目  GET  /pubsongs/v2/get_other_list_file_nofilt → 曲目分页
+  // 三个端点都走 **Android 签名**（与类内已有的 web 签名不是同一套盐）。
+
+  @override
+  Future<List<RemotePlaylist>> fetchRemotePlaylists(String userId) async {
+    try {
+      final clientTime = _nowSec();
+      final body = jsonEncode(<String, dynamic>{
+        'appid': int.parse(_androidAppId),
+        'mid': _mid,
+        'clientver': int.parse(_androidClientVer),
+        'platform': 'android',
+        'clienttime': int.parse(clientTime),
+        'userid': 0,
+        'module_id': 1,
+        'page': 1,
+        'pagesize': _discoveryPageSize,
+        'key': androidParamsKey(clientTime),
+        'special_recommend': <String, dynamic>{
+          'withtag': 1,
+          'withsong': 1,
+          'sort': 1,
+          'ugc': 1,
+          'is_selected': 0,
+          'withrecommend': 1,
+          'area_code': 1,
+          'categoryid': 0,
+        },
+        'req_multi': 1,
+        'retrun_min': 5,
+        'return_special_falg': 1,
+      });
+      final response = await _androidPost(
+        path: '/v2/special_recommend',
+        router: _discoveryRouter,
+        body: body,
+        clientTime: clientTime,
+      );
+      final decoded = _decoded(response);
+      throwIfFailed(decoded, '获取账号歌单失败');
+      final data = _asMap(_asMap(decoded)?['data']);
+      final playlists = parseRemotePlaylists(data?['special_list']);
+      if (playlists.isEmpty) return const <RemotePlaylist>[];
+
+      // 发现接口**不返回曲目数**（percount 恒为 0，collectcount 是收藏人数），
+      // 而 RemotePlaylist.trackCount 是必填并会渲染成「N 首」，
+      // 因此必须再批量取一次真实曲目数。
+      final counts = await _fetchTrackCounts(
+        playlists.map((p) => p.id).toList(growable: false),
+      );
+      return <RemotePlaylist>[
+        for (final playlist in playlists)
+          if (counts[playlist.id] case final count?)
+            RemotePlaylist(
+              sourceId: playlist.sourceId,
+              id: playlist.id,
+              name: playlist.name,
+              trackCount: count,
+              playCount: playlist.playCount,
+              coverUrl: playlist.coverUrl,
+            )
+          else
+            playlist,
+      ];
+    } on DioException catch (e) {
+      throw normalizeDioException(e, '获取账号歌单失败');
+    }
+  }
+
+  @override
+  Future<List<Track>> fetchRemotePlaylistTracks(String playlistId) async {
+    final id = playlistId.trim();
+    if (id.isEmpty) return const <Track>[];
+    final tracks = <Track>[];
+    try {
+      var seen = 0;
+      for (var page = 0; page < _trackPageLimit; page++) {
+        final clientTime = _nowSec();
+        final response = await _androidGet(
+          path: _trackListPath,
+          clientTime: clientTime,
+          extraParams: <String, dynamic>{
+            'area_code': 1,
+            'begin_idx': page * _trackPageSize,
+            'plat': 1,
+            'type': 1,
+            'mode': 1,
+            'personal_switch': 1,
+            'extend_fields': 'abtags,hot_cmt,popularization',
+            'pagesize': _trackPageSize,
+            'global_collection_id': id,
+          },
+        );
+        final decoded = _decoded(response);
+        throwIfFailed(decoded, '获取歌单曲目失败');
+        final data = _asMap(_asMap(decoded)?['data']);
+        final songs = asList(data?['songs']);
+        // 空页 = 歌单已取完 / begin_idx 越界（实测越界返回空列表而非报错）
+        if (songs == null || songs.isEmpty) break;
+        tracks.addAll(songs.map(parseKugouSong).whereType<Track>());
+        seen += songs.length;
+        // count 是歌单总曲目数：已取满即停，少打一次空请求
+        final total = asIntOrNull(data?['count']);
+        if (total != null && seen >= total) break;
+        // 不满一页说明已是最后一页
+        if (songs.length < _trackPageSize) break;
+      }
+      return List<Track>.unmodifiable(tracks);
+    } on DioException catch (e) {
+      throw normalizeDioException(e, '获取歌单曲目失败');
+    }
+  }
+
+  /// 批量取歌单曲目数（发现接口不提供）。
+  ///
+  /// 上游单次最多接受 [_countBatchSize] 个 id（实测 15 个即报 error_code 20010），
+  /// 因此分片请求。**单片失败只影响该片的曲目数**：曲目数仅用于列表卡片展示，
+  /// 让整份歌单列表跟着失败得不偿失；失败会记入诊断日志，不是静默吞掉。
+  Future<Map<String, int>> _fetchTrackCounts(List<String> ids) async {
+    final counts = <String, int>{};
+    for (var start = 0; start < ids.length; start += _countBatchSize) {
+      final end =
+          (start + _countBatchSize) > ids.length
+              ? ids.length
+              : start + _countBatchSize;
+      final chunk = ids.sublist(start, end);
+      try {
+        final clientTime = _nowSec();
+        final body = jsonEncode(<String, dynamic>{
+          'data': <Map<String, String>>[
+            for (final id in chunk)
+              <String, String>{'global_collection_id': id},
+          ],
+          'userid': 0,
+          'token': '',
+        });
+        final response = await _androidPost(
+          path: _listInfoPath,
+          router: _listInfoRouter,
+          body: body,
+          clientTime: clientTime,
+        );
+        final decoded = _decoded(response);
+        throwIfFailed(decoded, '获取歌单曲目数失败');
+        for (final item
+            in asList(_asMap(decoded)?['data']) ?? const <dynamic>[]) {
+          final map = _asMap(item);
+          final id = asStringOrNull(map?['global_collection_id']);
+          final count = asIntOrNull(map?['count']);
+          if (id != null && id.isNotEmpty && count != null) {
+            counts[id] = count;
+          }
+        }
+      } catch (e) {
+        AppLog.warning('获取歌单曲目数失败（$start-$end）：$e', tag: 'MusaicKugou');
+      }
+    }
+    return counts;
+  }
+
+  /// Android 签名 POST（歌单链）。
+  Future<Response<dynamic>> _androidPost({
+    required String path,
+    required String body,
+    required String clientTime,
+    String? router,
+  }) {
+    final params = _androidParams(clientTime);
+    return _dio.post<dynamic>(
+      '$_gatewayBase$path',
+      data: body,
+      queryParameters: <String, dynamic>{
+        ...params,
+        'signature': androidSignature(params, body),
+      },
+      options: Options(
+        contentType: Headers.jsonContentType,
+        headers: <String, String>{
+          ..._androidHeaders(clientTime),
+          if (router != null) 'x-router': router,
+        },
+      ),
+    );
+  }
+
+  /// Android 签名 GET（歌单曲目链）。
+  Future<Response<dynamic>> _androidGet({
+    required String path,
+    required Map<String, dynamic> extraParams,
+    required String clientTime,
+  }) {
+    final params = <String, dynamic>{
+      ..._androidParams(clientTime),
+      ...extraParams,
+    };
+    return _dio.get<dynamic>(
+      '$_gatewayBase$path',
+      queryParameters: <String, dynamic>{
+        ...params,
+        'signature': androidSignature(params, ''),
+      },
+      options: Options(headers: _androidHeaders(clientTime)),
+    );
+  }
+
+  /// Android 请求的公共参数（参考实现 util/request.js 自动注入的那几个）。
+  Map<String, dynamic> _androidParams(String clientTime) => <String, dynamic>{
+    'dfid': '-',
+    'mid': _mid,
+    'uuid': '-',
+    'appid': _androidAppId,
+    'clientver': _androidClientVer,
+    'clienttime': clientTime,
+  };
+
+  Map<String, String> _androidHeaders(String clientTime) => <String, String>{
+    'User-Agent': _androidUserAgent,
+    'dfid': '-',
+    'clienttime': clientTime,
+    'mid': _mid,
+  };
+
+  /// Android 签名：`MD5(salt + 排序后 k=v 拼接 + body + salt)`。
+  ///
+  /// 参数值里的对象 / 数组用**紧凑** JSON（无空格）参与拼接，对齐参考实现的
+  /// `JSON.stringify` 语义。`body` 必须是**与实际发送字节完全一致**的字符串
+  /// ——实测只要签名用的是同一份字符串，带不带空格都能通过；签名不符时
+  /// 网关返回 error_code 200101。
+  @visibleForTesting
+  static String androidSignature(Map<String, dynamic> params, String body) {
+    final keys = params.keys.toList()..sort();
+    final buffer = StringBuffer();
+    for (final key in keys) {
+      final value = params[key];
+      buffer.write('$key=');
+      buffer.write(
+        (value is Map || value is List) ? jsonEncode(value) : '$value',
+      );
+    }
+    final raw = '$_androidSalt$buffer$body$_androidSalt';
+    return crypto.md5.convert(utf8.encode(raw)).toString();
+  }
+
+  /// 发现接口的 `key` 参数：`MD5(appid + salt + clientver + data)`。
+  ///
+  /// 缺少它时该端点返回 HTTP 500（实测），是它而非签名导致早期探测失败。
+  @visibleForTesting
+  static String androidParamsKey(String data) {
+    final raw = '$_androidAppId$_androidSalt$_androidClientVer$data';
+    return crypto.md5.convert(utf8.encode(raw)).toString();
+  }
+
+  /// 业务层失败判定（对齐参考实现 util/request.js 的判据）。
+  ///
+  /// `status == 0` 或 `error_code != 0` 即失败。注意 error_code **20010 是
+  /// 通用错误**（缺参、批量过大、未登录都会用它），不能据此判定为「未登录」。
+  /// 无效歌单 id 则返回 `status 1 / error_code 0 / data {}`——属于**空结果**，
+  /// 不是失败（与「空 ≠ 失败」的既有约定一致）。
+  @visibleForTesting
+  static void throwIfFailed(Object? decoded, String action) {
+    final map = asMap(decoded);
+    if (map == null) return;
+    final status = asIntOrNull(map['status']);
+    final errorCode = asIntOrNull(map['error_code']);
+    final failed = status == 0 || (errorCode != null && errorCode != 0);
+    if (!failed) return;
+    AppLog.debug(
+      '$action: status=$status error_code=$errorCode',
+      tag: 'MusaicKugou',
+    );
+    throw NetworkSourceException(
+      errorCode == null ? '$action：请求被拒绝' : '$action（错误码 $errorCode）',
+      sourceId: KugouSource.id,
+    );
+  }
+
+  /// [DioException] → 领域异常（与网易云 `normalizeDioException` 同形）。
+  ///
+  /// 独立成静态方法的原因：该分支依赖真实 Dio，是解析函数覆盖不到的一支，
+  /// 静态化后测试可直接构造 [DioException] 断言映射结果。
+  @visibleForTesting
+  static SourceException normalizeDioException(DioException e, String action) {
+    AppLog.debug(
+      '$action: type=${e.type} status=${e.response?.statusCode} msg=${e.message}',
+      tag: 'MusaicKugou',
+    );
+    if (e.response?.statusCode == 401) {
+      return AuthRequiredException('登录已过期，请重新登录酷狗', sourceId: KugouSource.id);
+    }
+    return NetworkSourceException('$action：网络异常', sourceId: KugouSource.id);
+  }
+
+  /// 解析歌单列表（`data.special_list`）。
+  ///
+  /// 结构漂移 / 空数据一律退化为空列表（与网易云、QQ 一致，不抛异常）；
+  /// 缺 id 或名称的条目直接丢弃——渲染出来是一张点不动的空白卡片。
+  @visibleForTesting
+  static List<RemotePlaylist> parseRemotePlaylists(Object? raw) {
+    final list = asList(raw);
+    if (list == null) return const <RemotePlaylist>[];
+    final result = <RemotePlaylist>[];
+    for (final item in list) {
+      final playlist = parseRemotePlaylist(item);
+      if (playlist != null) result.add(playlist);
+    }
+    return result;
+  }
+
+  @visibleForTesting
+  static RemotePlaylist? parseRemotePlaylist(Object? raw) {
+    final map = asMap(raw);
+    if (map == null) return null;
+    final id = asStringOrNull(map['global_collection_id']);
+    final name = (asStringOrNull(map['specialname']) ?? '').trim();
+    if (id == null || id.isEmpty || name.isEmpty) return null;
+    final cover =
+        asStringOrNull(map['imgurl']) ?? asStringOrNull(map['flexible_cover']);
+    return RemotePlaylist(
+      sourceId: KugouSource.id,
+      id: id,
+      name: name,
+      // 发现接口不提供曲目数（percount 恒 0，collectcount 是收藏人数），
+      // 真实曲目数由 [_fetchTrackCounts] 补齐，取不到时为 0。
+      trackCount: 0,
+      playCount: asIntOrNull(map['play_count']),
+      coverUrl:
+          (cover == null || cover.isEmpty)
+              ? null
+              : cover.replaceAll('{size}', '240').toHttps(),
+    );
+  }
+
+  /// 解析歌单曲目条目（`data.songs[]`）。
+  ///
+  /// 实测 `songs[]` 会出现**只有 `fileid`/`shield` 的占位项**（无 name/hash），
+  /// 这类条目点开无法播放，直接丢弃（与网易云丢弃空标题同处理）。
+  ///
+  /// `name` 形如「歌手 - 标题」，但标题本身可能含「-」，因此仅在
+  /// 前缀与 `singerinfo` 一致时才剥离，避免误切标题。
+  @visibleForTesting
+  static Track? parseKugouSong(Object? raw) {
+    final song = asMap(raw);
+    if (song == null) return null;
+    final hash = asStringOrNull(song['hash']);
+    if (hash == null || hash.isEmpty) return null;
+    final full = (asStringOrNull(song['name']) ?? '').trim();
+    if (full.isEmpty) return null;
+
+    final singers = <String>[];
+    for (final item in asList(song['singerinfo']) ?? const <dynamic>[]) {
+      final name = asStringOrNull(asMap(item)?['name']);
+      if (name != null && name.isNotEmpty) singers.add(name);
+    }
+    var artist = singers.join('/');
+    var title = full;
+    final separator = full.indexOf(' - ');
+    if (separator > 0) {
+      final head = full.substring(0, separator).trim();
+      if (artist.isEmpty || head == artist) {
+        title = full.substring(separator + 3).trim();
+        if (artist.isEmpty) artist = head;
+      }
+    }
+    if (title.isEmpty) return null;
+    if (artist.isEmpty) artist = '未知歌手';
+
+    final album =
+        (asStringOrNull(asMap(song['albuminfo'])?['name']) ?? '').trim();
+    final cover = asStringOrNull(song['cover']);
+    final millis = asIntOrNull(song['timelen']);
+    return Track(
+      id: hash,
+      sourceId: KugouSource.id,
+      title: title,
+      artist: artist,
+      album: album.isEmpty ? null : album,
+      // 酷狗曲目时长是**毫秒**（勿照抄 QQ 的秒）
+      duration:
+          (millis == null || millis <= 0)
+              ? null
+              : Duration(milliseconds: millis),
+      coverUrl:
+          (cover == null || cover.isEmpty)
+              ? null
+              : cover.replaceAll('{size}', '240').toHttps(),
+      sourceData: <String, dynamic>{
+        'hash': hash,
+        if (asStringOrNull(song['album_id']) case final albumId?)
+          'albumId': albumId,
+      },
+    );
   }
 
   // ---------- 工具 ----------

@@ -126,6 +126,19 @@ class LibraryRepository {
 
   Future<void> clearHistory() => _history.clear();
 
+  /// 按曲目 key 批量删除历史记录（资料库「最近播放」的批量移除）。
+  ///
+  /// 之所以必须存在这个 API：历史与收藏是**两份独立数据**，
+  /// 而此前「最近播放」的批量移除复用了 [toggleFavorite]，
+  /// 结果删不掉历史、却悄悄改写了收藏（U1 数据正确性缺陷）。
+  ///
+  /// 一次 [Box.deleteAll] 批量删除，避免 N 次 Hive 往返。
+  Future<void> removeHistory(Iterable<String> trackKeys) async {
+    final keys = trackKeys.toList(growable: false);
+    if (keys.isEmpty) return;
+    await _history.deleteAll(keys);
+  }
+
   Future<void> _trimHistory() async {
     if (_history.length <= historyCap) return;
     final dated = <(int, String)>[];
@@ -291,6 +304,47 @@ class LibraryRepository {
     });
   }
 
+  /// 按 [Track.key] 移除（计划 4.2）。
+  ///
+  /// 下标移除依赖「渲染时的顺序 == 执行时的顺序」。列表在两次操作之间
+  /// 只要发生一次重排（另一处写入、响应式刷新、批量移除），下标就会指向
+  /// 另一首歌——用户点的是 A，删掉的可能是 B。key 是内容标识，与顺序无关。
+  ///
+  /// 返回是否真的移除了：key 不存在时返回 false（幂等，不报错）。
+  Future<bool> removeFromPlaylistByKey(String rawName, String trackKey) {
+    final name = _normalizePlaylistName(rawName);
+    return _withPlaylistLock(name, () async {
+      final tracks = playlistTracks(name);
+      final before = tracks.length;
+      tracks.removeWhere((t) => t.key == trackKey);
+      if (tracks.length == before) return false;
+      await _writePlaylist(name, tracks);
+      return true;
+    });
+  }
+
+  /// 歌单排序（基准项「播放列表 · 排序」）。
+  ///
+  /// 排序结果**写回存储**而不是只在界面上排：歌单的顺序就是播放顺序
+  /// （[playlistTracks] 的顺序即 `播放全部` 与队列顺序），只改视图会让
+  /// 「看到的顺序」和「实际播放顺序」不一致。
+  ///
+  /// 返回 false 表示歌单不存在（幂等，不报错）。
+  Future<bool> sortPlaylist(String rawName, PlaylistSortOrder order) {
+    final comparator = order.comparator;
+    // [PlaylistSortOrder.manual] 就是「存储顺序」本身，没有可执行的排序动作：
+    // 排序不可逆（原始顺序不另存），因此不提供「恢复默认」入口，直接返回。
+    if (comparator == null) return Future<bool>.value(false);
+    final name = _normalizePlaylistName(rawName);
+    return _withPlaylistLock(name, () async {
+      final tracks = playlistTracks(name);
+      if (tracks.length < 2) return false;
+      tracks.sort(comparator);
+      await _writePlaylist(name, tracks);
+      return true;
+    });
+  }
+
   Future<void> _writePlaylist(String name, List<Track> tracks) {
     return _playlists.put(
       name,
@@ -366,4 +420,51 @@ class LibrarySnapshot {
   final Map<String, String> favorites;
   final Map<String, String> history;
   final Map<String, String> playlists;
+}
+
+/// 歌单排序方式（基准项「播放列表 · 排序」）。
+///
+/// 缺失元数据的兜底值参与排序，避免 `null` 让整次排序抛异常：
+/// 时长缺失按 0 处理（排在最前），标题/艺术家缺失按空串处理。
+/// 比较器都以 [Track.key] 收尾，保证**同值项的顺序稳定可复现**——
+/// 否则两次排序可能得到不同结果，用户会以为排序没生效。
+enum PlaylistSortOrder {
+  /// 手动添加顺序（默认，即当前存储顺序）。
+  manual('默认顺序', null),
+
+  /// 按标题升序（中文按 Unicode 码点，与项目其余列表排序一致）。
+  titleAsc('按标题', _compareTitle),
+
+  /// 按艺术家升序，同艺术家内按标题。
+  artistAsc('按艺术家', _compareArtist),
+
+  /// 按时长升序，缺失时长视为 0。
+  durationAsc('按时长', _compareDuration);
+
+  const PlaylistSortOrder(this.label, this._compare);
+
+  final String label;
+  final int Function(Track a, Track b)? _compare;
+
+  /// 排序比较器；[manual] 无比较器（调用方应保持原顺序）。
+  Comparator<Track>? get comparator {
+    final compare = _compare;
+    if (compare == null) return null;
+    return (a, b) {
+      final result = compare(a, b);
+      // 收尾比较 key：保证排序稳定，同值项不会在两次排序间跳动
+      return result != 0 ? result : a.key.compareTo(b.key);
+    };
+  }
+
+  static int _compareTitle(Track a, Track b) =>
+      a.title.toLowerCase().compareTo(b.title.toLowerCase());
+
+  static int _compareArtist(Track a, Track b) {
+    final byArtist = a.artist.toLowerCase().compareTo(b.artist.toLowerCase());
+    return byArtist != 0 ? byArtist : _compareTitle(a, b);
+  }
+
+  static int _compareDuration(Track a, Track b) =>
+      (a.duration ?? Duration.zero).compareTo(b.duration ?? Duration.zero);
 }

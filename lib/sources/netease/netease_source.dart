@@ -1,6 +1,7 @@
 import 'dart:math';
 
 import 'package:dio/dio.dart';
+import 'package:meta/meta.dart';
 
 import 'netease_crypto.dart';
 
@@ -559,30 +560,57 @@ class NeteaseSource extends MusicSource
 
   // ---------- 账号歌单能力（RemotePlaylistCapable） ----------
 
+  /// 账号歌单列表。
+  ///
+  /// 失败处理与搜索 / 播放地址对齐（此前这里是唯一没有 try/catch 的取数路径，
+  /// 网络异常会以裸 [DioException] 逃到 UI 层）：
+  /// - 网络不可达 / 超时 / 4xx-5xx → [NetworkSourceException]；
+  /// - 未登录、凭据失效（HTTP 401 或业务码 301）→ [AuthRequiredException]；
+  /// - **空歌单不是失败**：返回空列表，由调用方按「无歌单」渲染。
   @override
   Future<List<RemotePlaylist>> fetchRemotePlaylists(String userId) async {
-    // uid 传空串 = 网易云按当前 Cookie 返回本人歌单，保持原行为
-    final response = await _dio.get<dynamic>(
-      '/api/user/playlist',
-      queryParameters: <String, dynamic>{'uid': userId, 'limit': 100},
-      options: Options(responseType: ResponseType.plain),
-    );
-    final list = asList(_asMap(_decoded(response))?['playlist']);
+    try {
+      // uid 传空串 = 网易云按当前 Cookie 返回本人歌单，保持原行为
+      final response = await _dio.get<dynamic>(
+        '/api/user/playlist',
+        queryParameters: <String, dynamic>{'uid': userId, 'limit': 100},
+        options: Options(responseType: ResponseType.plain),
+      );
+      final body = _asMap(_decoded(response));
+      _throwIfAuthRequired(body);
+      return parseRemotePlaylists(body?['playlist']);
+    } on DioException catch (e) {
+      throw normalizeDioException(e, '获取账号歌单失败');
+    }
+  }
+
+  /// 解析 `/api/user/playlist` 的 `playlist` 数组。
+  ///
+  /// 结构漂移（非数组 / 元素类型不符）降级为空列表而非抛异常——与 QQ 的
+  /// [QqMusicSource.parseRemotePlaylists] 契约一致，消费方据此隐藏该分区。
+  @visibleForTesting
+  static List<RemotePlaylist> parseRemotePlaylists(Object? raw) {
+    final list = asList(raw);
     if (list == null) return const <RemotePlaylist>[];
     return list
-        .map(_parseUserPlaylist)
+        .map(parseRemotePlaylist)
         .whereType<RemotePlaylist>()
         .toList(growable: false);
   }
 
-  RemotePlaylist? _parseUserPlaylist(dynamic raw) {
-    final p = _asMap(raw);
+  /// 单条歌单摘要 → 统一模型；缺 id 或名称为空的条目丢弃。
+  ///
+  /// 名称判空同 QQ：接口会夹带已删除歌单的占位项，渲染出来是一行点不动的
+  /// 空白卡片，宁可少一项。
+  @visibleForTesting
+  static RemotePlaylist? parseRemotePlaylist(Object? raw) {
+    final p = asMap(raw);
     if (p == null) return null;
     final id = asIntOrNull(p['id']);
     final name = asStringOrNull(p['name']);
-    if (id == null || name == null) return null;
+    if (id == null || name == null || name.isEmpty) return null;
     return RemotePlaylist(
-      sourceId: sourceId,
+      sourceId: NeteaseSource.id,
       id: '$id',
       name: name,
       trackCount: asIntOrNull(p['trackCount']) ?? 0,
@@ -592,33 +620,53 @@ class NeteaseSource extends MusicSource
   }
 
   /// 歌单详情 → 统一曲目列表（登录 Cookie 越权可见 VIP 曲目信息）。
+  ///
+  /// 失败处理同上；非数字 id 不可能命中网易云歌单，直接空态而不发错请求。
   @override
   Future<List<Track>> fetchRemotePlaylistTracks(String playlistId) async {
     final id = int.tryParse(playlistId);
     if (id == null) return const <Track>[];
-    final response = await _dio.get<dynamic>(
-      '/api/playlist/detail',
-      queryParameters: <String, dynamic>{'id': id},
-      options: Options(responseType: ResponseType.plain),
-    );
-    final tracks = asList(
-      _asMap(_asMap(_decoded(response))?['result'])?['tracks'],
-    );
-    if (tracks == null) return const <Track>[];
-    return tracks.map(_trackFromDetailSong).whereType<Track>().toList();
+    try {
+      final response = await _dio.get<dynamic>(
+        '/api/playlist/detail',
+        queryParameters: <String, dynamic>{'id': id},
+        options: Options(responseType: ResponseType.plain),
+      );
+      final body = _asMap(_decoded(response));
+      _throwIfAuthRequired(body);
+      return parseRemotePlaylistTracks(_asMap(body?['result'])?['tracks']);
+    } on DioException catch (e) {
+      throw normalizeDioException(e, '获取歌单曲目失败');
+    }
   }
 
-  Track? _trackFromDetailSong(dynamic raw) {
-    final song = _asMap(raw);
+  /// 解析 `/api/playlist/detail` 的 `result.tracks` 数组；非数组降级为空列表。
+  @visibleForTesting
+  static List<Track> parseRemotePlaylistTracks(Object? raw) {
+    final tracks = asList(raw);
+    if (tracks == null) return const <Track>[];
+    return tracks
+        .map(parseDetailSong)
+        .whereType<Track>()
+        .toList(growable: false);
+  }
+
+  /// 歌单详情曲目 → [Track]；缺 id 或标题的条目丢弃。
+  ///
+  /// 标题判空同 QQ 的 [QqMusicSource.parseDissSong]：名称为空的条目渲染出来是
+  /// 一行认不出、也搜不到的空条目，宁可少一行。
+  @visibleForTesting
+  static Track? parseDetailSong(Object? raw) {
+    final song = asMap(raw);
     if (song == null) return null;
     final songId = asIntOrNull(song['id']);
     final name = asStringOrNull(song['name']);
-    if (songId == null || name == null) return null;
+    if (songId == null || name == null || name.isEmpty) return null;
     final artists = (asList(song['artists']) ?? const <dynamic>[])
-        .map((a) => asStringOrNull(_asMap(a)?['name']))
+        .map((a) => asStringOrNull(asMap(a)?['name']))
         .whereType<String>()
         .join('/');
-    final album = _asMap(song['album']);
+    final album = asMap(song['album']);
     final durationMs = asIntOrNull(song['duration']);
     return Track(
       id: '$songId',
@@ -630,6 +678,32 @@ class NeteaseSource extends MusicSource
       coverUrl: asStringOrNull(album?['picUrl'])?.toHttps(),
       sourceData: <String, dynamic>{'neteaseId': songId},
     );
+  }
+
+  /// 未登录 / 凭据失效：网易云以业务码 301 表达。
+  ///
+  /// 必须显式抛出：否则「需要登录」会被调用方误读成「这个账号没有歌单」，
+  /// 用户看到的是空态而不是「去登录」（与 B6 同一类静默吞错问题）。
+  void _throwIfAuthRequired(Map<String, dynamic>? body) {
+    if (asIntOrNull(body?['code']) == 301) {
+      throw AuthRequiredException('登录已过期，请重新登录网易云', sourceId: sourceId);
+    }
+  }
+
+  /// [DioException] → 渠道统一异常（与搜索 / 播放地址同一处理方式）。
+  ///
+  /// `@visibleForTesting` + static：失败映射是本能力唯一无法靠解析器覆盖的
+  /// 分支（需要真实 Dio），暴露出来才能用构造出的 [DioException] 直接断言。
+  @visibleForTesting
+  static SourceException normalizeDioException(DioException e, String action) {
+    AppLog.debug(
+      '$action: type=${e.type} status=${e.response?.statusCode} msg=${e.message}',
+      tag: 'MusaicNetease',
+    );
+    if (e.response?.statusCode == 401) {
+      return AuthRequiredException('登录已过期，请重新登录网易云', sourceId: id);
+    }
+    return NetworkSourceException('$action：网络异常', sourceId: id);
   }
 
   String? _extractMusicU(Response<dynamic> response) {
