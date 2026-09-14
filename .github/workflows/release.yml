@@ -1,0 +1,144 @@
+name: Release
+
+# 正式版本（release）构建：产出**已签名**的 ABI 分割 APK。
+#
+# 与 ci.yml 的分工（刻意分开，互不影响）：
+#   - ci.yml        = 质量门禁（格式/分析/测试/覆盖率）+ debug APK 冒烟，跑在 push/PR 上
+#   - release.yml   = 正式产物构建（需签名密钥），只在打 tag 时跑
+# 因此日常 push 不会因为缺少签名密钥而失败。
+#
+# 触发：推送 v*.*.* 形式的 tag（如 v1.0.0），或手动触发。
+#
+# 所需 GitHub Secrets（仓库 Settings → Secrets and variables → Actions）：
+#   ANDROID_KEYSTORE_BASE64   keystore 文件的 base64（见 docs/release-build.md）
+#   ANDROID_STORE_PASSWORD    keystore 口令
+#   ANDROID_KEY_ALIAS         密钥别名（本项目为 musaic）
+#   ANDROID_KEY_PASSWORD      密钥口令
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+
+# 附加产物到 Release 需要写权限
+permissions:
+  contents: write
+
+env:
+  # 与 ci.yml 保持一致：门禁与产物必须跑在同一 Flutter 版本上
+  FLUTTER_VERSION: '3.44.8'
+
+jobs:
+  build-release-apk:
+    name: 构建正式签名 APK
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - name: 拉取依赖
+        run: flutter pub get
+
+      # 缺密钥时明确失败，而不是悄悄产出未签名包
+      - name: 校验签名密钥已配置
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          missing=""
+          [ -z "$KEYSTORE_BASE64" ] && missing="$missing ANDROID_KEYSTORE_BASE64"
+          [ -z "$STORE_PASSWORD" ]  && missing="$missing ANDROID_STORE_PASSWORD"
+          [ -z "$KEY_ALIAS" ]       && missing="$missing ANDROID_KEY_ALIAS"
+          [ -z "$KEY_PASSWORD" ]    && missing="$missing ANDROID_KEY_PASSWORD"
+          if [ -n "$missing" ]; then
+            echo "::error::缺少签名密钥 secrets:$missing（配置方法见 docs/release-build.md）"
+            exit 1
+          fi
+          echo "签名密钥已配置 ✅"
+
+      # keystore 还原到 runner 临时目录，不落进工作区（避免误提交）
+      - name: 还原 keystore 与 key.properties
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          SIGNING_DIR="$RUNNER_TEMP/signing"
+          mkdir -p "$SIGNING_DIR"
+          echo "$KEYSTORE_BASE64" | base64 --decode > "$SIGNING_DIR/release.p12"
+          # build.gradle.kts 读取 rootProject.file("key.properties") → android/key.properties
+          # 用 printf 而非缩进 heredoc：heredoc 会把 YAML 的缩进带进文件内容
+          {
+            printf 'storePassword=%s\n' "$STORE_PASSWORD"
+            printf 'keyPassword=%s\n' "$KEY_PASSWORD"
+            printf 'keyAlias=%s\n' "$KEY_ALIAS"
+            printf 'storeFile=%s\n' "$SIGNING_DIR/release.p12"
+          } > android/key.properties
+          chmod 600 android/key.properties
+          echo "key.properties 已生成（storeFile=$SIGNING_DIR/release.p12）"
+
+      # ABI 分割 + R8 混淆由 android/app/build.gradle.kts 配置，无需额外参数
+      - name: 构建正式 APK（release）
+        run: flutter build apk --release --no-pub
+
+      # 构建成功不等于签名成功：显式校验每个产物
+      - name: 校验产物已签名
+        run: |
+          set -euo pipefail
+          # runner 上 SDK 路径变量可能是 ANDROID_HOME 或 ANDROID_SDK_ROOT，两者都兜住
+          SDK="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
+          if [ -z "$SDK" ]; then
+            SDK=$(dirname "$(dirname "$(command -v sdkmanager || echo /nonexistent)")")
+          fi
+          APKSIGNER=$(ls "$SDK"/build-tools/*/apksigner 2>/dev/null | tail -1)
+          if [ -z "$APKSIGNER" ]; then
+            echo "::error::未找到 apksigner（SDK=$SDK）"
+            exit 1
+          fi
+          echo "apksigner: $APKSIGNER"
+          shopt -s nullglob
+          files=(build/app/outputs/flutter-apk/app-*-release.apk build/app/outputs/flutter-apk/app-release.apk)
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "::error::未找到任何 release APK"
+            exit 1
+          fi
+          for f in "${files[@]}"; do
+            echo "--- $f"
+            "$APKSIGNER" verify --print-certs "$f" | head -3
+          done
+          echo "全部产物签名校验通过 ✅"
+
+      - name: 上传产物（artifact）
+        uses: actions/upload-artifact@v4
+        with:
+          name: musaic-release-apk
+          path: |
+            build/app/outputs/flutter-apk/app-*-release.apk
+            build/app/outputs/flutter-apk/app-release.apk
+          if-no-files-found: error
+
+      # tag 触发时，把 APK 附到对应 Release（已存在的 Release 用 --clobber 覆盖同名附件）
+      - name: 附加到 GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh release upload "${GITHUB_REF_NAME}" \
+            build/app/outputs/flutter-apk/*-release.apk \
+            --clobber
