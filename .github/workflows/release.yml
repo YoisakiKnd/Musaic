@@ -132,13 +132,31 @@ jobs:
             build/app/outputs/flutter-apk/app-release.apk
           if-no-files-found: error
 
-      # tag 触发时，把 APK 附到对应 Release（已存在的 Release 用 --clobber 覆盖同名附件）
-      - name: 附加到 GitHub Release
+      # tag 触发时，把 APK 附到对应 Release。
+      # 注意：推送 tag 不会自动创建 Release，因此这里必须
+      # 「不存在则创建，存在则覆盖同名附件」——只写 upload 会在新 tag 上失败，
+      # 表现为「构建成功但用户拿不到任何产物」。
+      - name: 发布到 GitHub Release
         if: startsWith(github.ref, 'refs/tags/')
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          gh release upload "${GITHUB_REF_NAME}" \
-            build/app/outputs/flutter-apk/*-release.apk \
-            --clobber
+          shopt -s nullglob
+          files=(build/app/outputs/flutter-apk/app-*-release.apk build/app/outputs/flutter-apk/app-release.apk)
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "::error::未找到任何 release APK"
+            exit 1
+          fi
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            echo "Release $GITHUB_REF_NAME 已存在 → 覆盖同名附件"
+            gh release upload "$GITHUB_REF_NAME" "${files[@]}" --clobber
+          else
+            echo "Release $GITHUB_REF_NAME 不存在 → 创建并上传"
+            gh release create "$GITHUB_REF_NAME" "${files[@]}" \
+              --title "Musaic $GITHUB_REF_NAME" \
+              --generate-notes \
+              --verify-tag
+          fi
+          echo "已发布产物："
+          gh release view "$GITHUB_REF_NAME" --json assets -q '.assets[] | "  \(.name)  \(.size) bytes"'
