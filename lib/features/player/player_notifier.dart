@@ -12,6 +12,7 @@ import '../../core/model/track.dart';
 import '../../core/model/work_grouping.dart';
 import '../../core/source/music_source.dart' show ResolvedStream;
 import '../../core/network/network_config.dart';
+import '../../core/network/network_status.dart';
 import '../../core/theme/app_tokens.dart';
 import '../settings/settings_providers.dart';
 import '../../app/lifecycle/app_lifecycle.dart';
@@ -37,7 +38,7 @@ class PlayerState {
     this.sleepTimerEndsAt,
     this.sleepSongsRemaining,
     this.error,
-    this.sourceSwitchNotice,
+    this.notice,
   });
 
   final List<Track> queue;
@@ -69,11 +70,12 @@ class PlayerState {
 
   final String? error;
 
-  /// 一次性换源提示（如「网易云不可用，已切换到 QQ 音乐」）。
+  /// 一次性播放提示（换源「网易云不可用，已切换到 QQ 音乐」、
+  /// 「仅能试听片段」等）。
   ///
   /// 放在 state 而非 notifier 私有字段：UI 需要 `ref.listen` 到它才能弹提示，
-  /// 私有字段无法被响应式观察到。消费后由 UI 调用 [clearSourceSwitchNotice]。
-  final String? sourceSwitchNotice;
+  /// 私有字段无法被响应式观察到。消费后由 UI 调用 [clearNotice]。
+  final String? notice;
 
   bool get hasQueue => queue.isNotEmpty;
 
@@ -91,7 +93,7 @@ class PlayerState {
     Object? sleepTimerEndsAt = _unset,
     Object? sleepSongsRemaining = _unset,
     Object? error = _unset,
-    Object? sourceSwitchNotice = _unset,
+    Object? notice = _unset,
   }) {
     return PlayerState(
       queue: identical(queue, _unset) ? this.queue : queue! as List<Track>,
@@ -114,10 +116,7 @@ class PlayerState {
               ? this.sleepSongsRemaining
               : sleepSongsRemaining as int?,
       error: identical(error, _unset) ? this.error : error as String?,
-      sourceSwitchNotice:
-          identical(sourceSwitchNotice, _unset)
-              ? this.sourceSwitchNotice
-              : sourceSwitchNotice as String?,
+      notice: identical(notice, _unset) ? this.notice : notice as String?,
     );
   }
 
@@ -132,6 +131,7 @@ class PlayerState {
 class PlayerNotifier extends Notifier<PlayerState> {
   late MusaicAudioHandler _handler;
   StreamSubscription<ja.PlayerState>? _stateSub;
+  StreamSubscription<ja.PlaybackEvent>? _eventSub;
   Timer? _positionTimer;
   Duration _positionTimerPeriod = AppTokens.positionThrottle;
   Timer? _sleepTimer;
@@ -152,11 +152,34 @@ class PlayerNotifier extends Notifier<PlayerState> {
   /// 随机模式洗牌序列（shuffleOn=false 时忽略）。
   List<int>? _shuffleOrder;
 
-  /// 交叉淡入是否正在进行。
+  /// 淡入淡出（单播放器，设置项「淡入淡出」）：本曲开头是否需要渐强。
   ///
-  /// 进度无需缓存：[_tickCrossfade] 每次都从「剩余时长」重算，
-  /// 缓存反而会引入与真实位置不一致的风险。
-  bool _crossfading = false;
+  /// 只有「自然播完 → 自动推进」来的下一首才渐强；用户手动点歌要立即出声。
+  bool _fadeInActive = false;
+
+  /// 是否处于渐弱/渐强窗口。窗口内即使在后台也保持 100ms 采样——
+  /// 1Hz 的后台采样会让音量阶梯式跳变。
+  bool _inFadeWindow = false;
+
+  /// 最近一次写给播放器的音量（避免每次采样都调用平台通道）。
+  double? _appliedVolume;
+
+  /// 播放器是否已成功装载当前曲目。
+  ///
+  /// 加载失败、播放中途出错、队列清空后为 false：此时单纯 `play()`
+  /// 不会出声，[toggle] 必须改为从断点重新加载。
+  bool _sourceLoaded = false;
+
+  /// 播放中途出错（签名地址过期、网络抖动）的自动恢复计数，按曲目统计。
+  String? _recoveryTrackKey;
+  int _recoveryAttempts = 0;
+  static const int _maxRecoveryAttempts = 2;
+
+  /// 因网络问题停下的时间点；网络恢复时据此决定是否自动续播。
+  DateTime? _networkFailureAt;
+
+  /// 网络恢复后自动续播的时效：断网太久，用户多半已经不在听了。
+  static const Duration _networkResumeWindow = Duration(minutes: 5);
 
   /// 播放地址预取器（P2：降低「点歌到出声」延迟）。
   ///
@@ -183,6 +206,7 @@ class PlayerNotifier extends Notifier<PlayerState> {
   PlayerState build() {
     _handler = ref.watch(audioHandlerProvider);
     _resume = ref.read(resumeRepositoryProvider);
+    _handler.onPlay = resume;
     _handler.onNext = _onSystemSkipToNext;
     _handler.onPrevious = _onSystemSkipToPrevious;
     _handler.onSkipToQueueIndex = playAt;
@@ -195,7 +219,7 @@ class PlayerNotifier extends Notifier<PlayerState> {
     _prefetcher = StreamPrefetcher(
       resolve: (track) async {
         try {
-          return await _resolveWithFallbackQuiet(track);
+          return await _prefetchResolve(track);
         } catch (_) {
           return null; // 预取失败静默
         }
@@ -203,22 +227,35 @@ class PlayerNotifier extends Notifier<PlayerState> {
     );
 
     _stateSub = _handler.player.playerStateStream.listen(_onPlayerStateChanged);
+    // 播放中途的错误（断流、签名地址过期）只出现在事件流的 error 通道，
+    // playerStateStream 只会把它表现为 idle——而 idle 被刻意忽略，
+    // 不监听这里会让界面卡在「播放中」却没有声音。
+    _eventSub = _handler.player.playbackEventStream.listen(
+      (_) {},
+      onError: _onPlaybackError,
+    );
 
     // 功耗计划 PW-03：应用不可见时进度采样降为 1Hz（仅供断点快照），
     // 回前台恢复 100ms UI 预算并立即校正一次进度。
     // 直连 [AppUiVisibility]：经 Provider.listen 会把生命周期变化
     // 升级为 Notifier 重建，播放状态会被无谓重置。
+    // 断网导致的播放失败：网络恢复时自动从断点续播（地铁/电梯场景）
+    ref.listen<AsyncValue<bool>>(networkOnlineProvider, (previous, next) {
+      if (previous?.valueOrNull == false && next.valueOrNull == true) {
+        _onNetworkRestored();
+      }
+    });
+
     _onVisibilityChanged = _handleVisibilityChanged;
     AppUiVisibility.addListener(_onVisibilityChanged!);
 
     ref.onDispose(() {
       _disposed = true;
       _stateSub?.cancel();
+      _eventSub?.cancel();
       _positionTimer?.cancel();
       _positionTimer = null;
       _sleepTimer?.cancel();
-      // dispose 期间禁止读 provider，故不恢复音量
-      _cancelCrossfade(restoreVolume: false);
       if (_onVisibilityChanged != null) {
         AppUiVisibility.removeListener(_onVisibilityChanged!);
         _onVisibilityChanged = null;
@@ -270,7 +307,9 @@ class PlayerNotifier extends Notifier<PlayerState> {
       return;
     }
     final period =
-        _uiDegraded ? _backgroundPositionThrottle : AppTokens.positionThrottle;
+        _uiDegraded && !_inFadeWindow
+            ? _backgroundPositionThrottle
+            : AppTokens.positionThrottle;
     if (_positionTimer != null && _positionTimerPeriod == period) return;
     _positionTimer?.cancel();
     _positionTimerPeriod = period;
@@ -279,9 +318,22 @@ class PlayerNotifier extends Notifier<PlayerState> {
 
   // ---------- 仅供测试观察（PW-04 空闲纪律断言） ----------
 
-  /// 交叉淡入是否正在进行（供测试断言）。
+  /// 当前是否处于渐弱/渐强窗口（供测试断言）。
   @visibleForTesting
-  bool get debugCrossfading => _crossfading;
+  bool get debugInFadeWindow => _inFadeWindow;
+
+  /// 最近一次写给播放器的音量（供测试断言）。
+  @visibleForTesting
+  double? get debugAppliedVolume => _appliedVolume;
+
+  /// 驱动一次淡入淡出计算（供测试断言，绕过定时器）。
+  @visibleForTesting
+  void debugApplyFade(Duration position, Duration? duration) =>
+      _applyFade(position, duration);
+
+  /// 模拟播放中途出错（供测试驱动恢复路径）。
+  @visibleForTesting
+  void debugPlaybackError(Object error) => _onPlaybackError(error);
 
   /// 位置轮询定时器是否存活。
   @visibleForTesting
@@ -342,15 +394,30 @@ class PlayerNotifier extends Notifier<PlayerState> {
   // ---------- 对外操作 ----------
 
   /// 用一份队列开始播放（Master Plan §3.3：UI 点歌 → playQueue）。
-  Future<void> playQueue(List<Track> tracks, {int startIndex = 0}) async {
+  ///
+  /// [initialPosition] 用于断点续播：直接从该位置装载，而不是先从头播
+  /// 再 seek（那样开头会漏出一小段声音）。
+  ///
+  /// [alternativesPool]：不进队列、但可作为跨渠道换源候选的曲目
+  /// （如搜索结果页里同一首歌的其它渠道版本）。
+  Future<void> playQueue(
+    List<Track> tracks, {
+    int startIndex = 0,
+    Duration? initialPosition,
+    List<Track> alternativesPool = const <Track>[],
+  }) async {
     if (tracks.isEmpty) return;
     final index = startIndex.clamp(0, tracks.length - 1);
-    if (tracks.length != state.queue.length || !_sameQueue(tracks)) {
+    if (_shuffleOrder == null ||
+        tracks.length != state.queue.length ||
+        !_sameQueue(tracks)) {
       _shuffleOrder = QueueLogic.shuffledOrder(tracks.length, random: _random);
       _moveCurrentToShuffleHead(currentIndex: index);
     }
     // 换源候选只在整队列变更时重算：同一队列内切歌无需重复分组
-    _alternatives = buildAlternatives(tracks);
+    _alternatives = buildAlternatives(
+      _dedupeByKey([...tracks, ...alternativesPool]),
+    );
     // 队列换了，旧的预取结果（针对旧队列的下一首）已无意义
     _prefetcher.invalidate();
     state = state.copyWith(
@@ -359,7 +426,57 @@ class PlayerNotifier extends Notifier<PlayerState> {
       error: null,
     );
     _syncSystemQueue();
+    await _loadAndPlay(index, initialPosition: initialPosition);
+  }
+
+  /// 随机播放整个列表：开启随机模式，从随机一首开始。
+  Future<void> shufflePlay(List<Track> tracks) async {
+    if (tracks.isEmpty) return;
+    if (!state.shuffleOn) {
+      state = state.copyWith(shuffleOn: true);
+      unawaited(ref.read(appSettingsRepositoryProvider).setShuffleOn(true));
+    }
+    _shuffleOrder = null; // 同一列表再次随机播放也要重新洗牌
+    await playQueue(tracks, startIndex: _random.nextInt(tracks.length));
+  }
+
+  /// 立即播放单曲，并**保留当前队列**（搜索结果点歌的语义）。
+  ///
+  /// 搜索结果此前走 [playQueue]：整页结果（往往是同一首歌的几十个版本）
+  /// 替换掉用户的队列，播完一首会接着播同名的其它版本。现在只把这首插到
+  /// 当前曲之后并立即播放。
+  ///
+  /// [alternativesPool] 是这首歌所在的结果列表，用于计算跨渠道换源候选
+  /// （D7）——不进队列，但无版权时仍能切到其它渠道的同一首。
+  Future<void> playNow(
+    Track track, {
+    List<Track> alternativesPool = const <Track>[],
+  }) async {
+    if (!state.hasQueue) {
+      await playQueue([track], alternativesPool: alternativesPool);
+      return;
+    }
+    _mergeAlternatives(track, alternativesPool);
+    final result = QueueLogic.insertAsNext(
+      queue: state.queue,
+      track: track,
+      currentIndex: state.currentIndex,
+    );
+    state = state.copyWith(
+      queue: List<Track>.unmodifiable(result.queue),
+      currentIndex: result.currentIndex,
+    );
+    if (state.shuffleOn) _reshuffleKeepingCurrent();
+    final index = state.queue.indexWhere((t) => t.key == track.key);
+    _syncSystemQueue();
     await _loadAndPlay(index);
+  }
+
+  void _mergeAlternatives(Track track, List<Track> pool) {
+    if (pool.isEmpty) return;
+    final found = buildAlternatives(_dedupeByKey([track, ...pool]))[track.key];
+    if (found == null) return;
+    _alternatives = {..._alternatives, track.key: found};
   }
 
   /// 追加到队尾。
@@ -433,7 +550,7 @@ class PlayerNotifier extends Notifier<PlayerState> {
     if (result.queue.isEmpty) {
       _shuffleOrder = null;
       _sleepTimer?.cancel();
-      _cancelCrossfade();
+      _sourceLoaded = false;
       await _resume?.clear();
       await _handler.stop();
       state = state.copyWith(
@@ -463,21 +580,35 @@ class PlayerNotifier extends Notifier<PlayerState> {
   }
 
   Future<void> toggle() async {
-    final player = _handler.activePlayer;
+    final player = _handler.player;
     if (player.playing) {
       await player.pause();
       state = state.copyWith(playing: false);
     } else {
-      if (!state.hasQueue || state.current == null) return;
-      await player.play();
-      state = state.copyWith(playing: true, error: null);
+      await resume();
     }
+  }
+
+  /// 继续播放（播放键 / 通知栏 / 耳机）。
+  ///
+  /// 当前曲没有装载成功（加载失败 / 播放中途断流后）时，`play()` 不会出声，
+  /// 用户看到的是「点了播放没反应」——此时改为从断点重新加载。
+  Future<void> resume() async {
+    if (!state.hasQueue || state.current == null) return;
+    if (!_sourceLoaded) {
+      await _loadAndPlay(
+        state.currentIndex,
+        initialPosition: state.position > Duration.zero ? state.position : null,
+      );
+      return;
+    }
+    await _handler.player.play();
+    state = state.copyWith(playing: true, error: null);
   }
 
   /// 上一首：超 3 秒先回开头（Mei 行为对齐，见 QueueLogic）。
   Future<void> previous() async {
     if (!state.hasQueue) return;
-    _cancelCrossfade();
     if (QueueLogic.shouldRestartOnPrevious(position: state.position)) {
       await seekTo(Duration.zero);
       return;
@@ -493,10 +624,11 @@ class PlayerNotifier extends Notifier<PlayerState> {
     await _loadAndPlay(advance.index);
   }
 
-  Future<void> next() async {
+  Future<void> next() => _next(fadeIn: false);
+
+  /// [fadeIn]：仅「自然播完 → 自动推进」为 true，新曲开头渐强。
+  Future<void> _next({required bool fadeIn}) async {
     if (!state.hasQueue) return;
-    // 用户手动切歌：取消进行中的交叉淡入，避免音量停在半途
-    _cancelCrossfade();
     final advance = QueueLogic.nextIndex(
       currentIndex: state.currentIndex,
       length: state.queue.length,
@@ -525,7 +657,7 @@ class PlayerNotifier extends Notifier<PlayerState> {
       );
       _moveCurrentToShuffleHead(currentIndex: state.currentIndex);
     }
-    await _loadAndPlay(advance.index);
+    await _loadAndPlay(advance.index, fadeIn: fadeIn);
   }
 
   Future<void> playAt(int index) async {
@@ -536,6 +668,8 @@ class PlayerNotifier extends Notifier<PlayerState> {
   Future<void> seekTo(Duration position) async {
     await _handler.seek(position);
     state = state.copyWith(position: position);
+    // 拖进/拖出曲末渐弱窗口时立即修正音量，不等下一次采样
+    if (state.playing) _applyFade(position, _handler.player.duration);
   }
 
   void setMode(PlayMode mode) {
@@ -613,6 +747,8 @@ class PlayerNotifier extends Notifier<PlayerState> {
   Future<void> setVolume(double value) async {
     final clamped = value.clamp(0.0, 1.0);
     await _handler.player.setVolume(clamped);
+    // 淡入淡出窗口内由下一次采样按新基准重新计算
+    _appliedVolume = null;
     unawaited(ref.read(appSettingsRepositoryProvider).setVolume(clamped));
   }
 
@@ -641,6 +777,14 @@ class PlayerNotifier extends Notifier<PlayerState> {
 
   // ---------- 内部实现 ----------
 
+  static List<Track> _dedupeByKey(List<Track> tracks) {
+    final seen = <String>{};
+    return [
+      for (final t in tracks)
+        if (seen.add(t.key)) t,
+    ];
+  }
+
   bool _sameQueue(List<Track> tracks) {
     if (tracks.length != state.queue.length) return false;
     for (var i = 0; i < tracks.length; i++) {
@@ -658,16 +802,29 @@ class PlayerNotifier extends Notifier<PlayerState> {
     order.insert(0, currentIndex);
   }
 
-  Future<void> _loadAndPlay(int index) async {
+  /// 加载并播放队列中的第 [index] 首。
+  ///
+  /// - [fadeIn]：开头渐强（仅自然推进时）；
+  /// - [initialPosition]：从该位置开始（断点续播 / 中途出错恢复）；
+  /// - [recovering]：播放中途出错后的恢复加载。恢复失败**不自动跳歌**——
+  ///   用户正在听这首，静默跳走比停下报错更让人困惑。
+  Future<void> _loadAndPlay(
+    int index, {
+    bool fadeIn = false,
+    Duration? initialPosition,
+    bool recovering = false,
+  }) async {
     // 越界守卫：洗牌序列/队列在并发变更下可能短暂失配，
     // 此处是最后一道防线（release 下 assert 被剥离，必须显式判断）。
     if (index < 0 || index >= state.queue.length) return;
     final seq = ++_loadSeq;
     final track = state.queue[index];
+    _sourceLoaded = false;
+    _fadeInActive = false;
     state = state.copyWith(
       currentIndex: index,
       loading: true,
-      position: Duration.zero,
+      position: initialPosition ?? Duration.zero,
       buffered: Duration.zero,
       duration: track.duration,
       error: null,
@@ -697,19 +854,31 @@ class PlayerNotifier extends Notifier<PlayerState> {
       }
 
       final player = _handler.player;
+      final Duration? loadedDuration;
       if (resolved.isLocalFile) {
-        await player
-            .setFilePath(resolved.url)
+        loadedDuration = await player
+            .setFilePath(resolved.url, initialPosition: initialPosition)
             .timeout(const Duration(seconds: 25));
       } else {
-        await player
+        loadedDuration = await player
             .setUrl(
               resolved.url,
               headers: resolved.headers ?? const <String, String>{},
+              initialPosition: initialPosition,
             )
             .timeout(const Duration(seconds: 25));
       }
       if (seq != _loadSeq) return;
+      _sourceLoaded = true;
+      _networkFailureAt = null;
+      // 并非所有渠道都会标注试听片段：实际音频远短于曲目时长时同样提示
+      if (!resolved.isPreview &&
+          looksLikePreviewClip(
+            expected: effectiveTrack.duration,
+            actual: loadedDuration,
+          )) {
+        _notifyPreviewOnly(effectiveTrack);
+      }
       _handler.updateNowPlaying(
         trackToMediaItem(effectiveTrack),
         queueIndex: index,
@@ -720,6 +889,11 @@ class PlayerNotifier extends Notifier<PlayerState> {
           await player.setSpeed(state.speed);
         } catch (_) {}
       }
+      // 起始音量：自然推进且开启淡入淡出时从 0 渐强，否则直接用设定音量
+      // （上一首可能停在渐弱后的低音量，手动切歌必须立即恢复）。
+      _fadeInActive = fadeIn && _fadeDuration > Duration.zero;
+      _appliedVolume = null;
+      _setPlayerVolume(_fadeInActive ? 0.0 : _baseVolume);
       await player.play();
       if (seq != _loadSeq) return;
       state = state.copyWith(loading: false, playing: true);
@@ -734,7 +908,22 @@ class PlayerNotifier extends Notifier<PlayerState> {
       if (seq != _loadSeq) return;
       AppLog.debug('MusaicPlayer SourceException: ${e.message}');
       state = state.copyWith(loading: false, playing: false, error: e.message);
-      unawaited(_skipAfterFailure(index));
+      // 网络问题换下一首同样会失败：保留错误等用户重试，
+      // 而不是在断网时把整个队列逐首刷过去。
+      if (e is NetworkSourceException) {
+        _networkFailureAt = DateTime.now();
+      } else if (!recovering) {
+        unawaited(_skipAfterFailure(index));
+      }
+    } on TimeoutException {
+      if (seq != _loadSeq) return;
+      AppLog.debug('MusaicPlayer 加载音频超时');
+      _networkFailureAt = DateTime.now();
+      state = state.copyWith(
+        loading: false,
+        playing: false,
+        error: '加载超时，请检查网络后重试',
+      );
     } catch (e, st) {
       if (seq != _loadSeq) return;
       AppLog.debug('MusaicPlayer 播放异常: $e');
@@ -747,8 +936,49 @@ class PlayerNotifier extends Notifier<PlayerState> {
         playing: false,
         error: '播放失败，请稍后重试',
       );
-      unawaited(_skipAfterFailure(index));
+      if (!recovering) unawaited(_skipAfterFailure(index));
     }
+  }
+
+  void _onNetworkRestored() {
+    final failedAt = _networkFailureAt;
+    if (failedAt == null || _disposed) return;
+    _networkFailureAt = null;
+    if (DateTime.now().difference(failedAt) > _networkResumeWindow) return;
+    if (state.playing || state.loading || state.current == null) return;
+    AppLog.debug('MusaicPlayer 网络已恢复，自动续播');
+    _recoveryAttempts = 0;
+    unawaited(resume());
+  }
+
+  /// 播放中途出错：重新解析地址并从断点续播，每首最多 [_maxRecoveryAttempts] 次。
+  ///
+  /// 典型场景：暂停很久后继续（签名地址已过期）、地铁里短暂断网。
+  void _onPlaybackError(Object error, [StackTrace? _]) {
+    // 加载阶段的错误由 _loadAndPlay 的 catch 处理，这里只管「已开始播放后」
+    if (_disposed || state.loading || !_sourceLoaded) return;
+    final track = state.current;
+    if (track == null) return;
+    _sourceLoaded = false;
+    AppLog.debug('MusaicPlayer 播放中断: $error');
+    if (_recoveryTrackKey != track.key) {
+      _recoveryTrackKey = track.key;
+      _recoveryAttempts = 0;
+    }
+    if (_recoveryAttempts >= _maxRecoveryAttempts) {
+      _networkFailureAt = DateTime.now();
+      state = state.copyWith(playing: false, error: '播放中断，请检查网络后重试');
+      _persistResume(force: true);
+      return;
+    }
+    _recoveryAttempts++;
+    unawaited(
+      _loadAndPlay(
+        state.currentIndex,
+        initialPosition: state.position,
+        recovering: true,
+      ),
+    );
   }
 
   /// 最近一次成功解析所用的曲目（换源后与队列里的原始记录不同）。
@@ -758,6 +988,10 @@ class PlayerNotifier extends Notifier<PlayerState> {
   ///
   /// 返回 null 表示本次加载已被更新的请求取代（调用方应直接 return）。
   /// 全部候选都失败时抛出**最后一次**的异常——它最能反映真实原因。
+  ///
+  /// 试听片段（[ResolvedStream.isPreview]）不算成功：先记下来继续找其它
+  /// 渠道的完整版本，都找不到时才退回播放片段并提示用户——否则用户听到
+  /// 30 秒就「莫名其妙切歌了」。
   Future<ResolvedStream?> _resolveWithFallback(Track track, int seq) async {
     // 预取命中：跳过网络解析（这是「点歌到出声」里最慢的一段）。
     // take() 是一次性的——签名 URL 不复用，避免用到已失效地址。
@@ -765,6 +999,7 @@ class PlayerNotifier extends Notifier<PlayerState> {
     if (prefetched != null) {
       if (seq != _loadSeq) return null;
       _lastResolvedTrack = track;
+      if (prefetched.isPreview) _notifyPreviewOnly(track);
       if (kDebugMode) AppLog.debug('MusaicPlayer 命中预取: ${track.key}');
       return prefetched;
     }
@@ -779,6 +1014,8 @@ class PlayerNotifier extends Notifier<PlayerState> {
     ];
 
     Object? lastError;
+    (Track, ResolvedStream)? preview;
+    final triedSources = <String>[];
     for (var i = 0; i < candidates.length; i++) {
       final candidate = candidates[i];
       final source = registry.resolve(candidate.sourceId);
@@ -789,11 +1026,18 @@ class PlayerNotifier extends Notifier<PlayerState> {
         );
         continue;
       }
+      if (!triedSources.contains(candidate.sourceId)) {
+        triedSources.add(candidate.sourceId);
+      }
       try {
         final resolved = await source
             .resolveStream(candidate)
             .timeout(Duration(seconds: NetworkConfig.instance.seconds * 2));
         if (seq != _loadSeq) return null;
+        if (resolved.isPreview) {
+          preview ??= (candidate, resolved);
+          continue; // 先找完整版本
+        }
         _lastResolvedTrack = candidate;
         // 换源成功时告知用户，避免「怎么换了个版本」的困惑
         if (i > 0) {
@@ -804,6 +1048,7 @@ class PlayerNotifier extends Notifier<PlayerState> {
         // 超时归入网络问题，**不换源**：断网时每个候选都会各自超时，
         // 4 个候选 × 8s 超时 = 用户干等 30 秒以上，比直接报错更糟。
         // 只有「确定不可用」才值得换源（见上方注释的错误语义）。
+        if (preview != null) break;
         throw NetworkSourceException('解析播放地址超时', sourceId: candidate.sourceId);
       } on UnavailableStreamException catch (e) {
         lastError = e;
@@ -813,6 +1058,7 @@ class PlayerNotifier extends Notifier<PlayerState> {
         continue; // 未登录 → 换匿名可用渠道
       } on NetworkSourceException {
         // 断网/连接失败：换源没有意义，立即失败并保留真实原因
+        if (preview != null) break;
         rethrow;
       } catch (e) {
         lastError = e;
@@ -820,6 +1066,25 @@ class PlayerNotifier extends Notifier<PlayerState> {
       }
     }
 
+    if (preview != null) {
+      final (previewTrack, stream) = preview;
+      _lastResolvedTrack = previewTrack;
+      _notifyPreviewOnly(previewTrack);
+      return stream;
+    }
+    // 换过源仍失败：说明试过哪些渠道。否则界面显示的是原曲（如 QQ 音乐），
+    // 错误却是最后一个候选的（如「请登录酷狗」），用户无从理解。
+    if (lastError is UnavailableStreamException ||
+        lastError is AuthRequiredException) {
+      final reason = (lastError as SourceException).message;
+      if (triedSources.length > 1) {
+        throw UnavailableStreamException(
+          '已尝试${triedSources.map(_sourceName).join('、')}，均无法播放：$reason',
+          sourceId: track.sourceId,
+          cause: lastError,
+        );
+      }
+    }
     if (lastError != null) throw lastError;
     throw NetworkSourceException('无可用播放源', sourceId: track.sourceId);
   }
@@ -865,111 +1130,76 @@ class PlayerNotifier extends Notifier<PlayerState> {
     await _loadAndPlay(advance.index);
   }
 
-  /// 供预取使用的静默解析：不校验 seq、不发换源提示、不改状态。
+  /// 供预取使用的静默解析：只解析曲目**自身渠道**，不换源、不改状态。
   ///
-  /// 预取发生在「当前曲还在播」时，此时不应产生任何用户可见副作用
-  /// （尤其不能弹「已切换到 XX 渠道」——用户还没点下一首）。
-  Future<ResolvedStream?> _resolveWithFallbackQuiet(Track track) async {
-    final registry = ref.read(sourceRegistryProvider);
-    final candidates = <Track>[
-      track,
-      ...orderFallbackCandidates(
-        alternatives: _alternatives[track.key] ?? const <Track>[],
-        failedSourceId: track.sourceId,
-      ),
-    ];
-
-    for (final candidate in candidates) {
-      final source = registry.resolve(candidate.sourceId);
-      if (source == null) continue;
-      try {
-        return await source
-            .resolveStream(candidate)
-            .timeout(Duration(seconds: NetworkConfig.instance.seconds * 2));
-      } on NetworkSourceException {
-        return null; // 网络问题：预取放弃，不重试其它渠道
-      } catch (_) {
-        continue; // 该渠道不可用，试下一个
-      }
-    }
-    return null;
+  /// 预取发生在「当前曲还在播」时，此时不应产生任何用户可见副作用。
+  /// 也不在这里换源：换源得到的是另一条记录，若当作原曲的预取结果，
+  /// 播放时元数据、历史与「已切换渠道」提示都会对不上——交给真实播放
+  /// 路径处理。试听片段同理不预取。
+  Future<ResolvedStream?> _prefetchResolve(Track track) async {
+    final source = ref.read(sourceRegistryProvider).resolve(track.sourceId);
+    if (source == null) return null;
+    final resolved = await source
+        .resolveStream(track)
+        .timeout(Duration(seconds: NetworkConfig.instance.seconds * 2));
+    return resolved.isPreview ? null : resolved;
   }
 
-  /// 当前配置的交叉淡入时长（0 = 关闭）。
-  Duration get _crossfadeDuration =>
+  /// 淡入淡出时长（0 = 关闭）。
+  Duration get _fadeDuration =>
       Duration(seconds: ref.read(crossfadeSecondsProvider));
 
-  /// 交叉淡入是否可用。
+  /// 用户设定的音量；淡入淡出只作用于相对音量，不覆盖它。
+  double get _baseVolume => ref.read(appSettingsRepositoryProvider).volume;
+
+  /// 按当前进度计算并应用淡入淡出音量（每次进度采样调用）。
   ///
-  /// 需要：功能已开启 + 次播放器存在（handler 未注入时为 null）。
-  bool get _crossfadeAvailable =>
-      _crossfadeDuration > Duration.zero && _handler.secondaryPlayer != null;
-
-  /// 推进交叉淡入的音量斜坡。
-  ///
-  /// 由定时器按 50ms 驱动——足以让 4 秒斜坡平滑（80 步），
-  /// 又不会像逐帧那样频繁调用平台通道。
-  void _tickCrossfade() {
-    final secondary = _handler.secondaryPlayer;
-    if (secondary == null) return;
-    final duration = _crossfadeDuration;
-    if (duration <= Duration.zero) return;
-    // 只在正在播放时推进：暂停时不该继续降音量
-    if (!state.playing) return;
-
-    final remaining = (state.duration ?? Duration.zero) - state.position;
-    final progress = Crossfade.progress(
-      remaining: remaining,
-      duration: duration,
-    );
-    if (progress <= 0) return; // 尚未进入淡入窗口
-    _crossfading = true;
-
-    final levels = Crossfade.levelsFor(
-      remaining: remaining,
-      duration: duration,
-      baseVolume: ref.read(appSettingsRepositoryProvider).volume,
-    );
-
-    // 两路音量反向斜坡
-    unawaited(_handler.player.setVolume(levels.outgoingVolume));
-    unawaited(secondary.setVolume(levels.incomingVolume));
-
-    // 淡入完成：把主播放器切到新曲，释放旧路
-    if (progress >= 1.0) {
-      unawaited(_finishCrossfade());
+  /// 单播放器实现：曲末渐弱、自然推进到的下一首开头渐强。
+  /// 此前的「双播放器交叉淡入」只实现了一半——次播放器从未装载下一首，
+  /// 曲末只是淡到静音，随后还会 `stop()` 主播放器，可能误停刚开始加载的
+  /// 下一首，或在元数据时长偏短时把歌从中间掐断。
+  void _applyFade(Duration position, Duration? duration) {
+    final fade = _fadeDuration;
+    var factor = 1.0;
+    var inWindow = false;
+    if (fade > Duration.zero) {
+      if (_fadeInActive) {
+        if (position >= fade) {
+          _fadeInActive = false;
+        } else {
+          inWindow = true;
+          factor *=
+              Crossfade.levelsAt(
+                position.inMilliseconds / fade.inMilliseconds,
+              ).incomingVolume;
+        }
+      }
+      // 渐弱只信播放器报告的真实时长：渠道元数据时长可能与实际音频不符
+      // （试听片段、不同剪辑），按元数据算会在歌曲中途把音量降到 0。
+      // 短于两倍淡入时长的曲目不做渐弱（否则整首都在变音量）。
+      if (duration != null && duration > fade * 2) {
+        final progress = Crossfade.progress(
+          remaining: duration - position,
+          duration: fade,
+        );
+        if (progress > 0) {
+          inWindow = true;
+          factor *= Crossfade.levelsAt(progress).outgoingVolume;
+        }
+      }
+    }
+    _setPlayerVolume(_baseVolume * factor);
+    if (inWindow != _inFadeWindow) {
+      _inFadeWindow = inWindow;
+      _syncPositionTimer();
     }
   }
 
-  /// 交叉淡入结束：停旧路、把次播放器扶正。
-  Future<void> _finishCrossfade() async {
-    final secondary = _handler.secondaryPlayer;
-    if (secondary == null) return;
-    // 主播放器音量恢复为用户设定值（淡出把它降到 0 了）
-    await _handler.player.setVolume(
-      ref.read(appSettingsRepositoryProvider).volume,
-    );
-    await _handler.player.stop();
-    _handler.setActivePlayer(null); // 交回主播放器
-    _crossfading = false;
-  }
-
-  /// 取消进行中的交叉淡入（用户手动切歌/暂停时）。
-  /// [restoreVolume] 为 false 时不读设置恢复音量——**dispose 期间不可读
-  /// provider**（Riverpod 会抛「container already disposed」）。应用退出时
-  /// 也无需恢复音量，播放器即将销毁。
-  void _cancelCrossfade({bool restoreVolume = true}) {
-    _crossfading = false;
-    _handler.setActivePlayer(null);
-    final secondary = _handler.secondaryPlayer;
-    if (secondary != null) unawaited(secondary.stop());
-    if (restoreVolume) {
-      unawaited(
-        _handler.player.setVolume(
-          ref.read(appSettingsRepositoryProvider).volume,
-        ),
-      );
-    }
+  void _setPlayerVolume(double volume) {
+    final previous = _appliedVolume;
+    if (previous != null && (volume - previous).abs() < 0.01) return;
+    _appliedVolume = volume;
+    unawaited(_handler.player.setVolume(volume).catchError((Object _) {}));
   }
 
   /// 预取下一首（在切歌成功后调用）。
@@ -997,13 +1227,26 @@ class PlayerNotifier extends Notifier<PlayerState> {
   /// UI 就没有办法知道发生了换源。
   void _notifySourceSwitched({required Track from, required Track to}) {
     state = state.copyWith(
-      sourceSwitchNotice: '「${from.sourceId}」不可用，已切换到「${to.sourceId}」',
+      notice:
+          '${_sourceName(from.sourceId)}暂不可播放，'
+          '已切换到${_sourceName(to.sourceId)}',
     );
   }
 
-  /// 清空换源提示（UI 弹出提示后调用）。
-  void clearSourceSwitchNotice() =>
-      state = state.copyWith(sourceSwitchNotice: null);
+  /// 只拿到试听片段时提示：否则用户听到半分钟就切歌，会以为是故障。
+  void _notifyPreviewOnly(Track track) {
+    state = state.copyWith(
+      notice: '${_sourceName(track.sourceId)}仅提供试听片段，登录或开通会员后可播放完整版',
+    );
+  }
+
+  /// 渠道展示名（「网易云音乐」而不是内部 id「netease」）。
+  String _sourceName(String sourceId) =>
+      ref.read(sourceRegistryProvider).resolve(sourceId)?.displayName ??
+      sourceId;
+
+  /// 清空一次性提示（UI 弹出提示后调用）。
+  void clearNotice() => state = state.copyWith(notice: null);
 
   Future<void> _recordHistory(Track track) async {
     try {
@@ -1054,7 +1297,7 @@ class PlayerNotifier extends Notifier<PlayerState> {
         }
         state = state.copyWith(sleepSongsRemaining: remaining - 1);
       }
-      await next();
+      await _next(fadeIn: true);
     } finally {
       _autoAdvancing = false;
     }
@@ -1081,12 +1324,12 @@ class PlayerNotifier extends Notifier<PlayerState> {
   /// 进度节流刷新（可见 100ms / 不可见 1s，性能预算 §10.2 + 功耗 PW-03）。
   void _tickPosition() {
     debugPositionTicks++;
-    // 交叉淡入随位置采样推进（复用同一生命周期，不额外起定时器）
-    if (_crossfadeAvailable) _tickCrossfade();
     final player = _handler.player;
     final pos = player.position;
     final dur = player.duration;
     final buffered = player.bufferedPosition;
+    // 淡入淡出随位置采样推进（复用同一生命周期，不额外起定时器）
+    if (state.playing && !state.loading) _applyFade(pos, dur);
     final durationUnchanged =
         (dur?.inMilliseconds ?? -1) == (state.duration?.inMilliseconds ?? -1);
     if (pos.inMilliseconds == state.position.inMilliseconds &&
@@ -1134,12 +1377,26 @@ class PlayerNotifier extends Notifier<PlayerState> {
     final r = _resume?.load();
     if (r == null || r.queue.isEmpty) return false;
     state = state.copyWith(mode: r.mode, shuffleOn: r.shuffleOn);
-    await playQueue(r.queue, startIndex: r.index);
-    if (r.position > const Duration(seconds: 2)) {
-      await seekTo(r.position);
-    }
+    await playQueue(
+      r.queue,
+      startIndex: r.index,
+      initialPosition:
+          r.position > const Duration(seconds: 2) ? r.position : null,
+    );
     return true;
   }
+}
+
+/// 实际音频是否像试听片段：曲目时长 ≥ 90 秒，而加载到的音频不超过
+/// 65 秒且不到一半。阈值刻意保守——宁可漏报，不把正常的短版本误判为片段。
+@visibleForTesting
+bool looksLikePreviewClip({Duration? expected, Duration? actual}) {
+  if (expected == null || actual == null || actual <= Duration.zero) {
+    return false;
+  }
+  return expected >= const Duration(seconds: 90) &&
+      actual <= const Duration(seconds: 65) &&
+      actual * 2 < expected;
 }
 
 /// 全局播放状态 Provider。

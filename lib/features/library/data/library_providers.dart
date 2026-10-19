@@ -26,16 +26,19 @@ final favoritesRevisionProvider = StreamProvider<int>((ref) async* {
   }
 });
 
-/// O(1) 收藏判定（Hive containsKey），替代「watch 全列表 + 线性扫描」。
+/// 收藏判定（按作品：同一首歌的任一渠道版本已收藏即为 true）。
+///
+/// 以 [Track] 为 family 参数（其 `==` 按 [Track.key]），因为作品判定需要
+/// 标题与艺人；仓库内有作品索引，单次判定仍是 O(1) 查表。
 ///
 /// autoDispose 必需：列表页每行 TrackTile 都会 watch 一个 family 实例，
 /// 不释放会让 200 首历史留下 200 个常驻 Provider（P1 内存回归）。
-final isFavoriteProvider = Provider.autoDispose.family<bool, String>((
+final isFavoriteProvider = Provider.autoDispose.family<bool, Track>((
   ref,
-  trackKey,
+  track,
 ) {
   ref.watch(favoritesRevisionProvider);
-  return ref.watch(libraryRepositoryProvider).isFavorite(trackKey);
+  return ref.watch(libraryRepositoryProvider).isFavoriteTrack(track);
 });
 
 final recentHistoryProvider = StreamProvider<List<Track>>((ref) async* {

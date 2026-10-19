@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 import '../../core/model/remote_playlist.dart';
 import '../../core/theme/app_tokens.dart';
 import '../player/player_notifier.dart';
+import '../shared/widgets/track_tile.dart';
 import 'data/remote_playlists_provider.dart';
 
 /// 渠道账号歌单详情（只读 + 播放全部/单曲播放）。
@@ -55,6 +56,16 @@ class RemotePlaylistPage extends ConsumerWidget {
                           ),
                         ),
                         const Spacer(),
+                        IconButton(
+                          tooltip: '随机播放',
+                          onPressed: () {
+                            ref
+                                .read(playerNotifierProvider.notifier)
+                                .shufflePlay(tracks);
+                            context.push('/player');
+                          },
+                          icon: const Icon(Icons.shuffle_rounded),
+                        ),
                         FilledButton.icon(
                           style: FilledButton.styleFrom(
                             backgroundColor: AppTokens.accent,
@@ -101,13 +112,39 @@ class RemotePlaylistPage extends ConsumerWidget {
                               color: scheme.onSurface.withValues(alpha: 0.55),
                             ),
                           ),
-                          trailing:
-                              track.duration != null
-                                  ? Text(
-                                    '${track.duration!.inMinutes}:${(track.duration!.inSeconds % 60).toString().padLeft(2, '0')}',
-                                    style: const TextStyle(fontSize: 12),
-                                  )
-                                  : null,
+                          trailing: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              if (track.duration != null)
+                                Text(
+                                  '${track.duration!.inMinutes}:${(track.duration!.inSeconds % 60).toString().padLeft(2, '0')}',
+                                  style: const TextStyle(fontSize: 12),
+                                ),
+                              // 云端歌单里的歌同样要能收藏 / 加入本地歌单 / 排队
+                              IconButton(
+                                tooltip: '更多',
+                                visualDensity: VisualDensity.compact,
+                                onPressed:
+                                    () => showTrackActions(
+                                      context,
+                                      ref,
+                                      track,
+                                      includeFavorite: true,
+                                    ),
+                                icon: const Icon(
+                                  Icons.more_vert_rounded,
+                                  size: 20,
+                                ),
+                              ),
+                            ],
+                          ),
+                          onLongPress:
+                              () => showTrackActions(
+                                context,
+                                ref,
+                                track,
+                                includeFavorite: true,
+                              ),
                           onTap: () {
                             ref
                                 .read(playerNotifierProvider.notifier)

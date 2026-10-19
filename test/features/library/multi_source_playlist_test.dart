@@ -162,22 +162,29 @@ void main() {
   });
 
   group('与收藏/历史的语义差异（对照说明）', () {
-    test('歌单按渠道去重；收藏按渠道去重 —— 当前实现一致', () async {
-      // 记录当前行为：收藏同样是「渠道相关」的。
-      // 设计文档 §2.4 计划把**收藏与历史**改为按作品归一
-      // （语义是「我喜欢这首歌」），但**歌单明确不在改造范围**。
+    test('歌单按渠道共存；收藏按作品判定（S4）', () async {
+      await repository.createPlaylist('对照');
+      await repository.addManyToPlaylist('对照', [
+        sameSongOn('netease', '1'),
+        sameSongOn('qqmusic', '2'),
+      ]);
       await repository.toggleFavorite(sameSongOn('netease', '1'));
-      await repository.toggleFavorite(sameSongOn('qqmusic', '2'));
 
-      expect(
-        repository.favorites,
-        hasLength(2),
-        reason: '收藏当前按渠道存储；改为 workId 归一是 S4 的独立决策',
-      );
-      expect(repository.favorites.map((t) => t.sourceId).toSet(), {
-        'netease',
-        'qqmusic',
-      });
+      // 歌单：两个渠道版本都在
+      expect(repository.playlistTracks('对照'), hasLength(2));
+      // 收藏：只存了用户点的那条渠道记录……
+      expect(repository.favorites.map((t) => t.key), ['netease:1']);
+      // ……但同一首歌的其它渠道版本红心也亮
+      expect(repository.isFavoriteTrack(sameSongOn('qqmusic', '2')), isTrue);
+      expect(repository.isFavorite('qqmusic:2'), isFalse, reason: '精确判定不归一');
+    });
+
+    test('历史按作品去重：换渠道再听只保留最新一条', () async {
+      await repository.addHistory(sameSongOn('netease', '1'));
+      await repository.addHistory(sameSongOn('qqmusic', '2'));
+
+      final history = repository.recentHistory();
+      expect(history.map((t) => t.key), ['qqmusic:2']);
     });
   });
 

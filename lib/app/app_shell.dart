@@ -76,12 +76,40 @@ class AppShell extends ConsumerWidget {
       );
     });
 
+    // 播放提示（换源 / 仅试听片段）：后台自动切歌时用户多半不在播放页，
+    // 此前提示只在播放页弹出，会一直积压到下次打开播放页才冒出来。
+    ref.listen(playerNotifierProvider.select((s) => s.notice), (_, next) {
+      if (next == null) return;
+      final router = GoRouter.maybeOf(context);
+      if (router != null && isOnPlayerRoute(router)) return; // 播放页自己弹
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(next)));
+      ref.read(playerNotifierProvider.notifier).clearNotice();
+    });
+
     return LayoutBuilder(
       builder: (context, constraints) {
         final isWide = constraints.maxWidth >= AppTokens.compactBreakpoint;
         if (isWide) return _buildWide(context, hasQueue);
         return _buildCompact(context, hasQueue);
       },
+    );
+  }
+
+  /// 切换栏目；再点一次当前栏目则回到该栏目首页。
+  ///
+  /// `goBranch(initialLocation: true)` 只重置路由表里的页面，弹不掉在分支
+  /// 导航器里命令式 push 的页面（搜索结果、云端歌单）——此前在搜索结果页
+  /// 点「搜索」毫无反应，只能按返回键。
+  void _selectDestination(int index) {
+    if (index == navigationShell.currentIndex) {
+      navigationShell.route.branches[index].navigatorKey.currentState?.popUntil(
+        (route) => route.isFirst,
+      );
+    }
+    navigationShell.goBranch(
+      index,
+      initialLocation: index == navigationShell.currentIndex,
     );
   }
 
@@ -97,11 +125,7 @@ class AppShell extends ConsumerWidget {
           NavigationBar(
             height: 76,
             selectedIndex: navigationShell.currentIndex,
-            onDestinationSelected:
-                (index) => navigationShell.goBranch(
-                  index,
-                  initialLocation: index == navigationShell.currentIndex,
-                ),
+            onDestinationSelected: _selectDestination,
             destinations: [
               for (final (icon, label) in _destinations)
                 NavigationDestination(
@@ -122,11 +146,7 @@ class AppShell extends ConsumerWidget {
         children: [
           NavigationRail(
             selectedIndex: navigationShell.currentIndex,
-            onDestinationSelected:
-                (index) => navigationShell.goBranch(
-                  index,
-                  initialLocation: index == navigationShell.currentIndex,
-                ),
+            onDestinationSelected: _selectDestination,
             labelType: NavigationRailLabelType.all,
             leading: Padding(
               padding: const EdgeInsets.symmetric(vertical: 18),

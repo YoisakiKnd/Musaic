@@ -356,27 +356,45 @@ class _EmptyHome extends StatelessWidget {
             style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
           ),
           const SizedBox(height: 6),
-          Text(
-            '搜索网易云 / QQ 音乐 / 酷狗歌曲，或扫描本地音乐',
-            style: TextStyle(
-              fontSize: 13,
-              color: Theme.of(
-                context,
-              ).colorScheme.onSurface.withValues(alpha: 0.55),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 32),
+            child: Text(
+              '同时搜索网易云、QQ 音乐、酷狗与 YouTube Music，或扫描本地音乐',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                fontSize: 13,
+                color: Theme.of(
+                  context,
+                ).colorScheme.onSurface.withValues(alpha: 0.55),
+              ),
             ),
           ),
           const SizedBox(height: 20),
-          FilledButton.icon(
-            onPressed: scanning ? null : onScan,
-            icon:
-                scanning
-                    ? const SizedBox(
-                      width: 16,
-                      height: 16,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    )
-                    : const Icon(Icons.playlist_add_rounded),
-            label: const Text('扫描本地音乐'),
+          // 搜索是绝大多数新用户的第一步：作为主按钮；
+          // 此前只有「扫描本地音乐」一个按钮，文案却在说「搜索…」。
+          Wrap(
+            spacing: 12,
+            runSpacing: 8,
+            alignment: WrapAlignment.center,
+            children: [
+              FilledButton.icon(
+                onPressed: () => context.go('/search'),
+                icon: const Icon(Icons.search_rounded),
+                label: const Text('去搜索'),
+              ),
+              OutlinedButton.icon(
+                onPressed: scanning ? null : onScan,
+                icon:
+                    scanning
+                        ? const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                        : const Icon(Icons.folder_open_rounded),
+                label: const Text('扫描本地音乐'),
+              ),
+            ],
           ),
         ],
       ),

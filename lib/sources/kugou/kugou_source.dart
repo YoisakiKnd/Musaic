@@ -130,28 +130,39 @@ class KugouSource extends MusicSource
     if (keyword.isEmpty) return const <Track>[];
     final page = (offset ~/ (limit == 0 ? 30 : limit)) + 1;
     try {
-      final response = await _dio.get<dynamic>(
-        'https://songsearch.kugou.com/song_search_v2',
-        queryParameters: <String, dynamic>{
-          'keyword': keyword,
-          'page': page,
-          'pagesize': limit,
-          'filter': 0,
-          'platform': 'WebFilter',
-        },
-      );
-      final lists = asList(
-        _asMap(_asMap(_decoded(response))?['data'])?['lists'],
-      );
-      if (lists == null) return const <Track>[];
-      return lists
-          .map(_trackFromSearchSong)
-          .whereType<Track>()
-          .toList(growable: false);
+      // 2026-10 实测：同一请求时而返回完整结果、时而返回 total=0 的空列表
+      // （后端节点不一致，与请求头无关）。空结果时短暂间隔重试，
+      // 三次都空才认定确实没有结果——否则聚合搜索里酷狗会随机整段消失。
+      for (var attempt = 0; attempt < _emptySearchAttempts; attempt++) {
+        if (attempt > 0) await Future<void>.delayed(_emptySearchRetryDelay);
+        final response = await _dio.get<dynamic>(
+          'https://songsearch.kugou.com/song_search_v2',
+          queryParameters: <String, dynamic>{
+            'keyword': keyword,
+            'page': page,
+            'pagesize': limit,
+            'filter': 0,
+            'platform': 'WebFilter',
+          },
+        );
+        final lists = asList(
+          _asMap(_asMap(_decoded(response))?['data'])?['lists'],
+        );
+        if (lists != null && lists.isNotEmpty) {
+          return lists
+              .map(_trackFromSearchSong)
+              .whereType<Track>()
+              .toList(growable: false);
+        }
+      }
+      return const <Track>[];
     } on DioException {
       throw NetworkSourceException('搜索失败：网络异常', sourceId: sourceId);
     }
   }
+
+  static const int _emptySearchAttempts = 3;
+  static const Duration _emptySearchRetryDelay = Duration(milliseconds: 350);
 
   @override
   Future<Track> getTrackDetail(Track track) async => track;

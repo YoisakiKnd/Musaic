@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../features/auth/application/account_notifier.dart';
 import '../../features/auth/data/account_repository.dart';
 import '../../features/library/data/library_repository.dart';
+import '../../features/lyrics/data/lyrics_cache_repository.dart';
 import '../../features/player/audio_handler.dart';
 import '../../features/player/data/resume_repository.dart';
 import '../../features/search/data/search_history_repository.dart';
@@ -41,6 +42,14 @@ final searchHistoryRepositoryProvider = Provider<SearchHistoryRepository>((
 ) {
   throw StateError('searchHistoryRepositoryProvider 必须在启动时 override');
 });
+
+/// 歌词磁盘缓存（独立 Hive Box）。
+///
+/// 与其它仓库不同，未注入时返回 null 而非抛错：缓存只是优化，
+/// 缺失时歌词照常走网络（测试与降级场景无需为它额外 override）。
+final lyricsCacheRepositoryProvider = Provider<LyricsCacheRepository?>(
+  (ref) => null,
+);
 
 /// 断点续播仓库（独立 Hive Box）。
 final resumeRepositoryProvider = Provider<ResumeRepository>((ref) {

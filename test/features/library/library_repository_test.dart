@@ -392,4 +392,79 @@ void main() {
       );
     });
   });
+
+  group('收藏/历史按作品判定（S4）', () {
+    Track song(
+      String sourceId,
+      String id, {
+      String title = '海阔天空',
+      String artist = 'Beyond',
+    }) => Track(id: id, sourceId: sourceId, title: title, artist: artist);
+
+    test('网易云收藏后，QQ 同曲红心也亮', () async {
+      await repository.toggleFavorite(song('netease', '1'));
+      expect(repository.isFavoriteTrack(song('qqmusic', '2')), isTrue);
+      expect(
+        repository.isFavoriteTrack(song('qqmusic', '3', title: '光辉岁月')),
+        isFalse,
+      );
+    });
+
+    test('在其它渠道版本上取消喜欢：移除该作品全部渠道记录', () async {
+      await repository.addAllFavorites([
+        song('netease', '1'),
+        song('kugou', '9'),
+      ]);
+      final liked = await repository.toggleFavorite(song('qqmusic', '2'));
+      expect(liked, isFalse, reason: '红心亮着时点一下必须是取消');
+      expect(repository.favorites, isEmpty);
+      expect(repository.isFavoriteTrack(song('netease', '1')), isFalse);
+    });
+
+    test('取消喜欢不殃及其它歌曲', () async {
+      await repository.toggleFavorite(song('netease', '1'));
+      await repository.toggleFavorite(song('netease', '5', title: '光辉岁月'));
+      await repository.toggleFavorite(song('qqmusic', '2'));
+      expect(repository.favorites.map((t) => t.title), ['光辉岁月']);
+    });
+
+    test('占位艺人的同名曲不被当成同一首', () async {
+      await repository.toggleFavorite(
+        song('local', 'a', title: 'Intro', artist: '未知歌手'),
+      );
+      expect(
+        repository.isFavoriteTrack(
+          song('local', 'b', title: 'Intro', artist: '未知歌手'),
+        ),
+        isFalse,
+      );
+    });
+
+    test('removeFavorites 精确删除所选，不会把同作品的另一条加回来', () async {
+      await repository.addAllFavorites([
+        song('netease', '1'),
+        song('qqmusic', '2'),
+      ]);
+      await repository.removeFavorites(['netease:1', 'qqmusic:2']);
+      expect(repository.favorites, isEmpty);
+    });
+
+    test('备份回滚后作品索引随之更新', () async {
+      final empty = repository.captureSnapshot();
+      await repository.toggleFavorite(song('netease', '1'));
+      expect(repository.isFavoriteTrack(song('qqmusic', '2')), isTrue);
+      await repository.restoreSnapshot(empty);
+      expect(repository.isFavoriteTrack(song('qqmusic', '2')), isFalse);
+    });
+
+    test('历史：不同歌曲各自保留，同一首换渠道只留最新', () async {
+      await repository.addHistory(song('netease', '1'));
+      await repository.addHistory(song('netease', '5', title: '光辉岁月'));
+      await repository.addHistory(song('qqmusic', '2'));
+      expect(repository.recentHistory().map((t) => t.key), [
+        'qqmusic:2',
+        'netease:5',
+      ]);
+    });
+  });
 }

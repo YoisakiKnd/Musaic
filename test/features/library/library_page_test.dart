@@ -163,7 +163,11 @@ void main() {
       await tester.tap(find.byTooltip('移除所选'));
       await tester.pumpAndSettle();
 
-      expect(repository.favoriteToggles, ['netease:f1']);
+      expect(repository.removedFavorites, [
+        ['netease:f1'],
+      ]);
+      // 批量移除走精确删除，不走按作品判定的 toggle（见 removeFavorites 注释）
+      expect(repository.favoriteToggles, isEmpty);
       expect(repository.removedHistory, isEmpty);
     });
   });
@@ -219,6 +223,37 @@ void main() {
       );
     });
   });
+
+  group('歌单页签', () {
+    Future<void> createNamed(WidgetTester tester, String name) async {
+      await tester.tap(find.text('新建歌单'));
+      await tester.pumpAndSettle();
+      await tester.enterText(find.byType(TextField), name);
+      await tester.tap(find.text('创建'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+    }
+
+    testWidgets('没有歌单时给出引导，而不是一片空白', (tester) async {
+      await tester.pumpWidget(host());
+      await openTab(tester, '歌单');
+      expect(find.text('还没有歌单'), findsOneWidget);
+    });
+
+    testWidgets('新建成功有反馈；重名明确提示且不重复创建', (tester) async {
+      await tester.pumpWidget(host());
+      await openTab(tester, '歌单');
+
+      await createNamed(tester, '通勤');
+      expect(find.text('已创建「通勤」'), findsOneWidget);
+      expect(repository.playlists, ['通勤']);
+
+      await tester.pumpAndSettle(const Duration(seconds: 5));
+      await createNamed(tester, '通勤');
+      expect(find.text('已有名为「通勤」的歌单'), findsOneWidget);
+      expect(repository.playlists, ['通勤']);
+    });
+  });
 }
 
 /// 内存假仓库：只记录调用，不做任何 IO。
@@ -231,6 +266,7 @@ class _FakeLibraryRepository implements LibraryRepository {
 
   final List<String> favoriteToggles = <String>[];
   final List<List<String>> removedHistory = <List<String>>[];
+  final List<List<String>> removedFavorites = <List<String>>[];
 
   /// true 时 [removeHistory] 抛错（计划 3.3 失败反馈用例）。
   bool failRemoveHistory = false;
@@ -262,6 +298,16 @@ class _FakeLibraryRepository implements LibraryRepository {
   }
 
   @override
+  bool isFavoriteTrack(Track track) => isFavorite(track.key);
+
+  @override
+  Future<void> removeFavorites(Iterable<String> trackKeys) async {
+    final keys = trackKeys.toList();
+    removedFavorites.add(keys);
+    _favoriteTracks.removeWhere((t) => keys.contains(t.key));
+  }
+
+  @override
   Future<void> removeHistory(Iterable<String> trackKeys) async {
     final keys = trackKeys.toList();
     if (failRemoveHistory) {
@@ -284,8 +330,19 @@ class _FakeLibraryRepository implements LibraryRepository {
   @override
   Stream<BoxEvent> watchPlaylists() => const Stream<BoxEvent>.empty();
 
+  final List<String> playlists = <String>[];
+
   @override
-  List<String> get playlistNames => const <String>[];
+  List<String> get playlistNames => List<String>.of(playlists);
+
+  @override
+  Future<void> createPlaylist(String rawName) async {
+    final name = rawName.trim();
+    if (name.length > LibraryRepository.playlistNameMaxLength) {
+      throw ArgumentError.value(name, 'name', '歌单名过长');
+    }
+    if (!playlists.contains(name)) playlists.add(name);
+  }
 
   @override
   List<Track> playlistTracks(String name) => const <Track>[];

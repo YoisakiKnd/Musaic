@@ -167,12 +167,22 @@ class _SearchResultsPageState extends ConsumerState<SearchResultsPage> {
     }
   }
 
+  /// 合并视图：按各渠道内的排名**交错**排列（第 1 名们 → 第 2 名们 → …）。
+  ///
+  /// 此前是按渠道整段拼接：第一个渠道的 20 条全部排完，才轮到下一个渠道，
+  /// 其它渠道最相关的结果被压到第 21 条以后——「合并」名不副实。
   List<Track> _rebuildMerged() {
     final registry = ref.read(sourceRegistryProvider);
+    final lists = <List<Track>>[
+      for (final source in registry.all)
+        if (_results[source.sourceId] case final List<Track> tracks) tracks,
+    ];
     final merged = <Track>[];
-    for (final source in registry.all) {
-      final value = _results[source.sourceId];
-      if (value is List<Track>) merged.addAll(value);
+    final longest = lists.fold<int>(0, (m, l) => l.length > m ? l.length : m);
+    for (var rank = 0; rank < longest; rank++) {
+      for (final list in lists) {
+        if (rank < list.length) merged.add(list[rank]);
+      }
     }
     return _applySort(merged);
   }
@@ -195,6 +205,12 @@ class _SearchResultsPageState extends ConsumerState<SearchResultsPage> {
         );
     }
   }
+
+  /// 还能继续加载的渠道数（决定「加载更多」按钮的措辞）。
+  int get _moreableSourceCount =>
+      _results.entries
+          .where((e) => e.value is List<Track> && !_exhausted.contains(e.key))
+          .length;
 
   bool get _anySourceHasMore {
     for (final key in _results.keys) {
@@ -356,7 +372,7 @@ class _SearchResultsPageState extends ConsumerState<SearchResultsPage> {
     var added = 0;
     try {
       for (final track in tracks) {
-        final isFav = repository.isFavorite(track.key);
+        final isFav = repository.isFavoriteTrack(track);
         if (!isFav) {
           await repository.toggleFavorite(track);
           added++;
@@ -497,13 +513,8 @@ class _SearchResultsPageState extends ConsumerState<SearchResultsPage> {
           ],
         ),
         body: switch ((hasAnyContent, _tracks.isEmpty, _grouped)) {
-          // 无任何结果与渠道信息
-          (false, _, _) => Center(
-            child: Text(
-              '没有搜索结果',
-              style: TextStyle(color: scheme.onSurface.withValues(alpha: 0.5)),
-            ),
-          ),
+          // 无任何结果：说明搜了哪些渠道，并给出下一步
+          (false, _, _) => _buildNoResults(scheme),
           // 首屏仍在等待全部渠道
           (true, true, _) when _pending.isNotEmpty => const Center(
             child: CircularProgressIndicator(),
@@ -562,7 +573,9 @@ class _SearchResultsPageState extends ConsumerState<SearchResultsPage> {
                                 Icons.expand_more_rounded,
                                 size: 18,
                               ),
-                              label: const Text('加载更多（各渠道）'),
+                              label: Text(
+                                _moreableSourceCount > 1 ? '加载更多（各渠道）' : '加载更多',
+                              ),
                             )
                             : const SizedBox(
                               width: 20,
@@ -587,6 +600,7 @@ class _SearchResultsPageState extends ConsumerState<SearchResultsPage> {
                       key: ValueKey('result-${track.key}-$index'),
                       track: track,
                       queue: _tracks,
+                      keepQueue: true,
                       dense: true,
                       onTapOverride:
                           _selecting ? () => _toggleSelect(track) : null,
@@ -636,10 +650,92 @@ class _SearchResultsPageState extends ConsumerState<SearchResultsPage> {
     );
   }
 
+  /// 尚未参与本次搜索的渠道（单渠道搜索时为其余全部渠道）。
+  List<String> get _unsearchedSources => [
+    for (final source in ref.read(sourceRegistryProvider).all)
+      if (!_results.containsKey(source.sourceId) &&
+          !_pending.contains(source.sourceId))
+        source.sourceId,
+  ];
+
+  /// 把本次搜索扩展到其余渠道（零结果时的出路）。
+  void _searchRemainingSources() {
+    final remaining = _unsearchedSources;
+    if (remaining.isEmpty) return;
+    setState(() => _pending.addAll(remaining));
+    for (final sourceId in remaining) {
+      unawaited(_runInitialSearch(sourceId));
+    }
+  }
+
+  /// 零结果空态。
+  ///
+  /// 此前只有一句「没有搜索结果」：不说明搜了哪个渠道，也没有下一步。
+  /// 单渠道搜索时用户往往不知道「换个渠道就有」（如周杰伦不在网易云）。
+  Widget _buildNoResults(ColorScheme scheme) {
+    final registry = ref.read(sourceRegistryProvider);
+    final searched = [
+      for (final source in registry.all)
+        if (_results.containsKey(source.sourceId)) source.displayName,
+    ];
+    final canWiden = _unsearchedSources.isNotEmpty;
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              Icons.search_off_rounded,
+              size: 48,
+              color: scheme.onSurface.withValues(alpha: 0.35),
+            ),
+            const SizedBox(height: 12),
+            Text(
+              '没有找到「${widget.query}」',
+              style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+              textAlign: TextAlign.center,
+            ),
+            if (searched.isNotEmpty) ...[
+              const SizedBox(height: 6),
+              Text(
+                '已搜索：${searched.join('、')}',
+                style: TextStyle(
+                  fontSize: 13,
+                  color: scheme.onSurface.withValues(alpha: 0.55),
+                ),
+                textAlign: TextAlign.center,
+              ),
+            ],
+            const SizedBox(height: 20),
+            Wrap(
+              spacing: 12,
+              runSpacing: 8,
+              alignment: WrapAlignment.center,
+              children: [
+                if (canWiden)
+                  FilledButton.icon(
+                    onPressed: _searchRemainingSources,
+                    icon: const Icon(Icons.travel_explore_rounded),
+                    label: const Text('在全部渠道中搜索'),
+                  ),
+                OutlinedButton(
+                  onPressed: () => Navigator.of(context).maybePop(),
+                  child: const Text('修改关键词'),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   /// 分组模式：按渠道分节展示（搜索中 / 失败重试 / 各渠道分页页脚）。
   Widget _buildGroupedBody(ColorScheme scheme) {
     final registry = ref.read(sourceRegistryProvider);
     final children = <Widget>[];
+    final emptySources = <String>[];
     for (final source in registry.all) {
       final sourceId = source.sourceId;
       final value = _results[sourceId];
@@ -659,7 +755,12 @@ class _SearchResultsPageState extends ConsumerState<SearchResultsPage> {
         continue;
       }
       if (value is List<Track>) {
-        if (value.isEmpty) continue;
+        if (value.isEmpty) {
+          // 零结果不单独占一节（没配置本地目录时「本地文件」永远是 0，
+          // 顶在最上面很吵），但也不能静默消失——末尾汇总成一行。
+          emptySources.add(source.displayName);
+          continue;
+        }
         children.add(_groupHeader(source.displayName, value.length, scheme));
         for (final track in value) {
           final checked = _selected.contains(track.key);
@@ -676,7 +777,9 @@ class _SearchResultsPageState extends ConsumerState<SearchResultsPage> {
                   child: TrackTile(
                     key: ValueKey('grouped-${track.key}'),
                     track: track,
-                    queue: value,
+                    // 换源候选要跨渠道：传全部结果而非本渠道分组
+                    queue: _tracks,
+                    keepQueue: true,
                     dense: true,
                     onTapOverride:
                         _selecting ? () => _toggleSelect(track) : null,
@@ -726,6 +829,20 @@ class _SearchResultsPageState extends ConsumerState<SearchResultsPage> {
           ),
         );
       }
+    }
+    if (emptySources.isNotEmpty) {
+      children.add(
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
+          child: Text(
+            '无结果：${emptySources.join('、')}',
+            style: TextStyle(
+              fontSize: 12,
+              color: scheme.onSurface.withValues(alpha: 0.45),
+            ),
+          ),
+        ),
+      );
     }
     return ListView(
       padding: EdgeInsets.fromLTRB(0, 8, 0, _selecting ? 120 : 160),

@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:hive/hive.dart';
+import 'package:mocktail/mocktail.dart';
 import 'package:musaic/core/auth/auth_capability.dart';
 import 'package:musaic/core/di/app_providers.dart';
 import 'package:musaic/core/lyrics/lyric_bundle.dart';
@@ -11,6 +13,8 @@ import 'package:musaic/core/theme/app_tokens.dart';
 import 'package:musaic/features/library/data/library_providers.dart';
 import 'package:musaic/features/player/player_notifier.dart';
 import 'package:musaic/features/search/data/search_history_repository.dart';
+import 'package:musaic/features/search/data/search_prefs.dart';
+import 'package:musaic/features/settings/settings_providers.dart';
 import 'package:musaic/features/search/search_page.dart';
 
 /// 搜索页提交语义（计划 3.1 空提交反馈 / 3.2 重复提交防抖）。
@@ -37,6 +41,10 @@ import 'package:musaic/features/search/search_page.dart';
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
+  // 内存版 Box：testWidgets 的伪造时钟会让真实 Hive 写盘永不完成，
+  // 而 Hive 写操作串行排队——一次挂起会卡死之后所有读写。
+  final settingsBox = _MemoryBox();
+
   Future<_RouteCounter> pumpSearchPage(WidgetTester tester) async {
     final counter = _RouteCounter();
     await tester.pumpWidget(
@@ -51,6 +59,10 @@ void main() {
           // 历史仓库：initState 会同步 load()，用内存假实现避开 Hive。
           searchHistoryRepositoryProvider.overrideWithValue(
             _FakeSearchHistoryRepository(),
+          ),
+          // 搜索偏好（范围 / 渠道 / 展示 / 排序）存在设置 Box 里
+          appSettingsRepositoryProvider.overrideWithValue(
+            AppSettingsRepository(box: settingsBox),
           ),
           // 结果页会 watch 这两个 provider。
           playerNotifierProvider.overrideWith(_StubPlayerNotifier.new),
@@ -74,6 +86,41 @@ void main() {
   Future<void> submit(WidgetTester tester) async {
     await tester.tap(find.byTooltip('搜索'));
   }
+
+  group('搜索偏好', () {
+    testWidgets('新用户默认聚合搜索、渠道全选', (tester) async {
+      await settingsBox.clear();
+      await pumpSearchPage(tester);
+      expect(find.text('结果展示'), findsOneWidget, reason: '聚合模式才有这组选项');
+      expect(find.text('全选'), findsOneWidget);
+    });
+
+    testWidgets('切到单曲搜索并选渠道后，下次打开沿用', (tester) async {
+      await settingsBox.clear();
+      await pumpSearchPage(tester);
+      await tester.tap(find.text('单曲搜索'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('QQ 音乐'));
+      await tester.pumpAndSettle();
+
+      final saved = SearchPrefs.load(settingsBox);
+      expect(saved.aggregate, isFalse);
+      expect(saved.singleTarget, 'qqmusic');
+
+      // 重新打开页面
+      await tester.pumpWidget(const SizedBox());
+      await pumpSearchPage(tester);
+      expect(find.text('结果展示'), findsNothing, reason: '应沿用单曲搜索');
+    });
+
+    testWidgets('聚合时取消的渠道被记住', (tester) async {
+      await settingsBox.clear();
+      await pumpSearchPage(tester);
+      await tester.tap(find.widgetWithText(FilterChip, '网易云'));
+      await tester.pumpAndSettle();
+      expect(SearchPrefs.load(settingsBox).excludedTargets, {'netease'});
+    });
+  });
 
   group('搜索提交反馈与防抖（3.1 / 3.2 回归）', () {
     testWidgets('3.1 空输入提交给出「请输入搜索关键词」，且不跳转结果页', (tester) async {
@@ -244,4 +291,25 @@ class _FakeSearchHistoryRepository implements SearchHistoryRepository {
 class _StubPlayerNotifier extends PlayerNotifier {
   @override
   PlayerState build() => const PlayerState();
+}
+
+class _MemoryBox extends Mock implements Box<String> {
+  final Map<dynamic, String> _data = <dynamic, String>{};
+
+  @override
+  String? get(dynamic key, {String? defaultValue}) =>
+      _data[key] ?? defaultValue;
+
+  @override
+  Future<void> put(dynamic key, String value) async => _data[key] = value;
+
+  @override
+  Future<void> delete(dynamic key) async => _data.remove(key);
+
+  @override
+  Future<int> clear() async {
+    final n = _data.length;
+    _data.clear();
+    return n;
+  }
 }

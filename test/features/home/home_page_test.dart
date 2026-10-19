@@ -98,6 +98,8 @@ void main() {
 
     // 无历史时应落到「扫描本地音乐」引导，说明首页仍然可用
     expect(find.text('扫描本地音乐'), findsOneWidget);
+    // 搜索才是新用户的第一步：空态必须给出直达入口
+    expect(find.text('去搜索'), findsOneWidget);
   });
 
   testWidgets('有断点快照时显示继续收听卡与「继续播放」按钮', (tester) async {

@@ -6,6 +6,7 @@ import 'package:musaic/core/storage/app_schema.dart';
 import 'package:musaic/core/storage/schema_migrator.dart';
 import 'package:musaic/features/auth/data/account_repository.dart';
 import 'package:musaic/features/library/data/library_repository.dart';
+import 'package:musaic/features/lyrics/data/lyrics_cache_repository.dart';
 import 'package:musaic/features/player/data/resume_repository.dart';
 import 'package:musaic/features/search/data/search_history_repository.dart';
 import 'package:musaic/features/settings/data/local_music_settings_repository.dart';
@@ -39,6 +40,7 @@ void main() {
         LocalMusicSettingsRepository.boxName,
         AppSettingsRepository.boxName,
         ResumeRepository.boxName,
+        LyricsCacheRepository.boxName,
       };
 
       for (final name in declared) {

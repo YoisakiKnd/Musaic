@@ -1,22 +1,21 @@
-/// 交叉淡入淡出（改进计划 N4）。
+/// 淡入淡出的音量曲线（改进计划 N4）。
 ///
-/// ## 为什么需要双播放器
+/// ## 为什么是单播放器
 ///
-/// just_audio **没有原生 crossfade**（只有 `setVolume`）。真正的交叉淡入
-/// 需要两路音频同时出声、音量反向斜坡，因此必须持有两个 [AudioPlayer]。
+/// just_audio **没有原生 crossfade**（只有 `setVolume`）。真正的重叠式交叉
+/// 淡入需要两路播放器并在曲间交换「系统媒体状态的事实源」，早期实现只做了
+/// 一半（次播放器从未装载下一首）并引入了误停播放的问题，已改为单播放器：
+/// 曲末渐弱、自动推进到的下一首渐强（见 `PlayerNotifier._applyFade`）。
 ///
 /// ## 为什么把算法抽成纯逻辑
 ///
-/// 音量斜坡的听感必须真机验证，但**算法本身是可确定的**：
-/// 给定「当前曲剩余时长、淡入淡出时长、是否正在淡出」，每帧两个播放器的
-/// 音量是多少。把这段抽出来可完整单测，不依赖音频栈——
-/// 于是即使真机环境受限，核心逻辑仍被验证。
+/// 音量斜坡的听感必须真机验证，但**算法本身是可确定的**：给定剩余时长与
+/// 淡入淡出时长，音量是多少。抽出来可完整单测，不依赖音频栈。
 ///
 /// ## 等功率斜坡（而非线性）
 ///
-/// 线性斜坡在交叉点会有约 -3dB 的能量凹陷（两路各 0.5 相加，感知音量下降），
-/// 听感上像「中间突然轻了一下」。等功率（equal-power）用余弦/正弦曲线
-/// 让两路能量和恒定，是交叉淡入的标准做法。
+/// 线性斜坡在中点感知音量会明显下凹，听感上像「中间突然轻了一下」。
+/// 等功率（equal-power）用余弦/正弦曲线让变化在听感上更均匀。
 library;
 
 import 'dart:math' as math;
@@ -83,33 +82,5 @@ abstract final class Crossfade {
       outgoingVolume: math.cos(angle),
       incomingVolume: math.sin(angle),
     );
-  }
-
-  /// 便捷方法：由剩余时长直接算出两路音量。
-  ///
-  /// [baseVolume] 为用户设定的音量——淡入淡出作用于**相对**音量，
-  /// 不应覆盖用户的音量设置。
-  static CrossfadeLevels levelsFor({
-    required Duration remaining,
-    required Duration duration,
-    double baseVolume = 1.0,
-  }) {
-    final levels = levelsAt(progress(remaining: remaining, duration: duration));
-    final base = baseVolume.clamp(0.0, 1.0);
-    return CrossfadeLevels(
-      outgoingVolume: levels.outgoingVolume * base,
-      incomingVolume: levels.incomingVolume * base,
-    );
-  }
-
-  /// 是否应在此刻启动下一首（用于触发预加载/播放）。
-  ///
-  /// 提前量取淡入时长本身：需要在淡入开始时就让新曲出声。
-  static bool shouldStart({
-    required Duration remaining,
-    required Duration duration,
-  }) {
-    if (duration <= Duration.zero) return false;
-    return remaining <= duration && remaining > Duration.zero;
   }
 }

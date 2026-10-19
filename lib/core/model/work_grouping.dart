@@ -10,6 +10,33 @@ library;
 import 'track.dart';
 import 'work_id.dart';
 
+/// 渠道在缺少艺人信息时填入的占位名（归一化后比较）。
+///
+/// 它们不是真实艺人：两首都标着「未知歌手」的同名曲（如本地文件
+/// 「01」「Intro」）极可能是不同的歌，绝不能据此判定为同一作品。
+const Set<String> _placeholderArtists = <String>{
+  '未知歌手',
+  '未知艺人',
+  '未知艺术家',
+  '群星',
+  'unknownartist',
+  'unknown',
+  'variousartists',
+};
+
+/// 收藏 / 历史按作品归一时使用的作品键（架构演进设计 §2.4 / S4）。
+///
+/// 比 [buildAlternatives] 更保守：换源失败最多是「没换成」，
+/// 而这里误判会让一首**从没喜欢过的歌亮起红心**、或在取消喜欢时
+/// **连带删掉另一首歌**。因此标题或艺人缺失、艺人是占位名时返回 null，
+/// 调用方退回按 [Track.key] 精确匹配。
+String? matchableWorkKey(Track track) {
+  final id = buildWorkId(title: track.title, artist: track.artist);
+  if (id.normalizedTitle.isEmpty || id.normalizedArtist.isEmpty) return null;
+  if (_placeholderArtists.contains(id.normalizedArtist)) return null;
+  return id.value;
+}
+
 /// 为每个曲目 key 找出「同一作品在其它渠道的记录」。
 ///
 /// 返回 Map 只包含**确实存在替代版本**的曲目；单渠道曲目不出现在结果里

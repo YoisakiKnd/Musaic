@@ -237,6 +237,9 @@ class _FailingLibraryRepository implements LibraryRepository {
   List<String> get playlistNames => const <String>[];
 
   @override
+  bool isFavoriteTrack(Track track) => isFavorite(track.key);
+
+  @override
   bool isFavorite(String trackKey) => false;
 
   @override

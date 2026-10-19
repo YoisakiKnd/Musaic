@@ -1,3 +1,4 @@
+import 'dart:collection';
 import 'dart:convert';
 
 import 'package:crypto/crypto.dart' as crypto;
@@ -167,32 +168,58 @@ class YouTubeMusicSource extends MusicSource implements WebLoginCapable {
         authHeaders = await _youtubeAuthHeaders();
         visitorId = (await credentialReader())['VISITOR_INFO1_LIVE'];
       } catch (_) {}
-      final response = await _dio.post<dynamic>(
-        'https://music.youtube.com/youtubei/v1/search',
-        queryParameters: const <String, dynamic>{
-          'prettyPrint': false,
-          'key': _innerTubeKey,
-        },
-        options: Options(
-          headers: <String, String>{
-            'X-YouTube-Client-Name': '67',
-            'X-YouTube-Client-Version': _webRemixVersion,
-            if (visitorId != null && visitorId.isNotEmpty)
-              'X-Goog-Visitor-Id': visitorId,
-            ...authHeaders,
+      // 分页：InnerTube 用续页 token 而非 offset。按关键词缓存已取结果与
+      // 下一页 token；此前直接忽略 offset，「加载更多」会把第一页再追加一遍。
+      final session =
+          offset == 0
+              ? (_searchSessions[keyword] = _YtmSearchSession())
+              : _searchSessions.putIfAbsent(keyword, _YtmSearchSession.new);
+      final needed = offset + limit;
+      while (session.tracks.length < needed && !session.exhausted) {
+        final token = session.nextToken;
+        if (session.started && token == null) break;
+        final response = await _dio.post<dynamic>(
+          'https://music.youtube.com/youtubei/v1/search',
+          queryParameters: <String, dynamic>{
+            'prettyPrint': false,
+            'key': _innerTubeKey,
+            if (token != null) ...{
+              'continuation': token,
+              'ctoken': token,
+              'type': 'next',
+            },
           },
-        ),
-        data: <String, dynamic>{
-          'context': _webRemixContext(),
-          'query': keyword,
-          'params': _songsFilterParams,
-        },
+          options: Options(
+            headers: <String, String>{
+              'X-YouTube-Client-Name': '67',
+              'X-YouTube-Client-Version': _webRemixVersion,
+              if (visitorId != null && visitorId.isNotEmpty)
+                'X-Goog-Visitor-Id': visitorId,
+              ...authHeaders,
+            },
+          ),
+          data: <String, dynamic>{
+            'context': _webRemixContext(),
+            if (token == null) ...{
+              'query': keyword,
+              'params': _songsFilterParams,
+            },
+          },
+        );
+        final root = _asMap(response.data);
+        final batch = extractYtmSearchTracks(root, sourceId: sourceId);
+        session.started = true;
+        session.nextToken = extractYtmContinuation(root);
+        final known = session.tracks.map((t) => t.key).toSet();
+        session.tracks.addAll(batch.where((t) => known.add(t.key)));
+        if (batch.isEmpty || session.nextToken == null) {
+          session.exhausted = true;
+        }
+      }
+      if (offset >= session.tracks.length) return const <Track>[];
+      return List<Track>.unmodifiable(
+        session.tracks.sublist(offset, needed.clamp(0, session.tracks.length)),
       );
-      final results = extractYtmSearchTracks(
-        _asMap(response.data),
-        sourceId: sourceId,
-      );
-      return results.take(limit).toList(growable: false);
     } on DioException catch (e) {
       if (e.type == DioExceptionType.connectionError ||
           e.type == DioExceptionType.connectionTimeout) {
@@ -204,6 +231,10 @@ class YouTubeMusicSource extends MusicSource implements WebLoginCapable {
       throw NetworkSourceException('搜索失败：网络异常', sourceId: sourceId);
     }
   }
+
+  /// 关键词 → 已取到的搜索结果与下一页 token（只保留最近几次搜索）。
+  final Map<String, _YtmSearchSession> _searchSessions =
+      _LruMap<String, _YtmSearchSession>(8);
 
   @override
   Future<Track> getTrackDetail(Track track) async => track;
@@ -528,4 +559,40 @@ class YouTubeMusicSource extends MusicSource implements WebLoginCapable {
   }
 
   Map<String, dynamic>? _asMap(dynamic value) => asMap(value);
+}
+
+class _YtmSearchSession {
+  final List<Track> tracks = <Track>[];
+  String? nextToken;
+  bool started = false;
+  bool exhausted = false;
+}
+
+/// 容量受限的 Map：超出时丢弃最早插入的键，避免搜索缓存无限增长。
+class _LruMap<K, V> extends MapBase<K, V> {
+  _LruMap(this._capacity);
+
+  final int _capacity;
+  final LinkedHashMap<K, V> _inner = LinkedHashMap<K, V>();
+
+  @override
+  V? operator [](Object? key) => _inner[key];
+
+  @override
+  void operator []=(K key, V value) {
+    _inner.remove(key);
+    _inner[key] = value;
+    while (_inner.length > _capacity) {
+      _inner.remove(_inner.keys.first);
+    }
+  }
+
+  @override
+  void clear() => _inner.clear();
+
+  @override
+  Iterable<K> get keys => _inner.keys;
+
+  @override
+  V? remove(Object? key) => _inner.remove(key);
 }

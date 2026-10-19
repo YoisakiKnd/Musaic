@@ -168,4 +168,38 @@ void main() {
       expect(ordered.map((t) => t.sourceId), ['qqmusic', 'kugou', 'ytm']);
     });
   });
+
+  group('matchableWorkKey（收藏/历史的作品键，S4）', () {
+    Track t(String title, String artist, {String source = 'netease'}) =>
+        Track(id: title, sourceId: source, title: title, artist: artist);
+
+    test('跨渠道写法差异归一到同一键', () {
+      expect(
+        matchableWorkKey(t('晴天', '周杰伦')),
+        matchableWorkKey(t('晴天 (Live)', '周杰伦', source: 'qqmusic')),
+      );
+      expect(
+        matchableWorkKey(t('Song', 'A/B')),
+        matchableWorkKey(t('Song', 'B feat. A', source: 'ytm')),
+      );
+    });
+
+    test('不同歌曲不合并', () {
+      expect(
+        matchableWorkKey(t('晴天', '周杰伦')),
+        isNot(matchableWorkKey(t('晴天 (钢琴版)', '周杰伦'))),
+      );
+      expect(
+        matchableWorkKey(t('晴天', '周杰伦')),
+        isNot(matchableWorkKey(t('晴天', '五月天'))),
+      );
+    });
+
+    test('艺人缺失或为占位名时不参与作品判定', () {
+      expect(matchableWorkKey(t('01', '')), isNull);
+      expect(matchableWorkKey(t('Intro', '未知歌手')), isNull);
+      expect(matchableWorkKey(t('Intro', 'Unknown Artist')), isNull);
+      expect(matchableWorkKey(t('', '周杰伦')), isNull);
+    });
+  });
 }

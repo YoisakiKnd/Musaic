@@ -114,6 +114,19 @@ class PlaylistDetailPage extends ConsumerWidget {
       appBar: AppBar(
         title: Text(name),
         actions: [
+          IconButton(
+            tooltip: '随机播放',
+            onPressed:
+                (tracksAsync.valueOrNull?.isEmpty ?? true)
+                    ? null
+                    : () {
+                      ref
+                          .read(playerNotifierProvider.notifier)
+                          .shufflePlay(tracksAsync.requireValue);
+                      context.push('/player');
+                    },
+            icon: const Icon(Icons.shuffle_rounded),
+          ),
           // 少于 2 首没有可排序的意义，禁用而不是点了没反应
           IconButton(
             tooltip: '排序',

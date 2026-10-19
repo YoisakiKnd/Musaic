@@ -10,6 +10,7 @@ class ResolvedStream {
     required this.url,
     this.headers,
     this.isLocalFile = false,
+    this.isPreview = false,
   });
 
   /// 可直接交给播放器的地址：`https://`、`file://` 或本地绝对路径。
@@ -19,6 +20,11 @@ class ResolvedStream {
   final Map<String, String>? headers;
 
   final bool isLocalFile;
+
+  /// 是否只是试听片段（如未登录 / 非会员时渠道返回的 30 秒片段）。
+  ///
+  /// 播放器据此优先寻找其它渠道的完整版本，找不到时播放片段并提示用户。
+  final bool isPreview;
 }
 
 /// 凭据读取器：返回某渠道当前存储的全部凭据字段（无登录时为空 Map）。

@@ -15,6 +15,7 @@ import '../../core/utils/cover_cache.dart';
 import '../../core/theme/app_tokens.dart';
 import '../auth/presentation/channel/account_manage_page.dart';
 import '../library/data/backup_service.dart';
+import '../lyrics/data/lyrics_cache_repository.dart';
 import '../player/domain/crossfade.dart';
 import '../shared/error_text.dart';
 import '../shared/widgets/confirm_dialog.dart';
@@ -382,11 +383,9 @@ class PlaybackPage extends ConsumerWidget {
   }
 }
 
-/// 交叉淡入设置（N4）。
+/// 淡入淡出设置（N4）。
 ///
-/// 默认关闭：交叉淡入需要**两路音频同时解码**（双播放器），
-/// 在低端机上是实打实的额外开销；且它会改变「曲末听感」，
-/// 不适合替用户默认开启。
+/// 默认关闭：它会改变「曲末听感」，不适合替用户默认开启。
 class _CrossfadeCard extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -396,9 +395,9 @@ class _CrossfadeCard extends ConsumerWidget {
       child: Column(
         children: [
           SwitchListTile(
-            title: const Text('交叉淡入淡出'),
+            title: const Text('淡入淡出'),
             subtitle: const Text(
-              '曲末与下一首重叠渐变，消除曲间停顿（默认关闭）',
+              '曲末渐弱、下一首渐强，避免生硬切换（默认关闭）',
               style: TextStyle(fontSize: 12),
             ),
             value: enabled,
@@ -549,6 +548,14 @@ class DataPage extends ConsumerWidget {
                     );
                   },
                 ),
+                if (ref.watch(lyricsCacheRepositoryProvider)
+                    case final lyricsCache?) ...[
+                  const Divider(height: 1, indent: 56),
+                  _LyricsCacheTile(
+                    cache: lyricsCache,
+                    onCleared: () => _toast(context, '歌词缓存已清除'),
+                  ),
+                ],
                 const Divider(height: 1, indent: 56),
                 ListTile(
                   leading: const Icon(Icons.bug_report_outlined),
@@ -723,6 +730,47 @@ class DataPage extends ConsumerWidget {
 }
 
 /// 二级页：关于。
+/// 歌词缓存条目：展示已缓存条数，确认后清空（S6 歌词缓存）。
+///
+/// 有状态：清空后需要立即刷新条数，而缓存仓库本身不是响应式的。
+class _LyricsCacheTile extends StatefulWidget {
+  const _LyricsCacheTile({required this.cache, required this.onCleared});
+
+  final LyricsCacheRepository cache;
+  final VoidCallback onCleared;
+
+  @override
+  State<_LyricsCacheTile> createState() => _LyricsCacheTileState();
+}
+
+class _LyricsCacheTileState extends State<_LyricsCacheTile> {
+  @override
+  Widget build(BuildContext context) {
+    final count = widget.cache.count;
+    return ListTile(
+      leading: const Icon(Icons.lyrics_outlined),
+      title: const Text('清除歌词缓存'),
+      subtitle: Text(
+        count == 0 ? '暂无缓存' : '已缓存 $count 首歌词，听过的歌离线也能显示',
+        style: const TextStyle(fontSize: 12),
+      ),
+      onTap: () async {
+        final confirmed = await confirmDestructiveAction(
+          context,
+          title: '清除歌词缓存？',
+          message: '将删除已缓存的歌词；再次播放时会重新从渠道获取，不影响曲库与歌单。',
+          confirmLabel: '清除',
+        );
+        if (!confirmed || !mounted) return;
+        await widget.cache.clear();
+        if (!mounted) return;
+        setState(() {});
+        widget.onCleared();
+      },
+    );
+  }
+}
+
 class AboutPage extends StatelessWidget {
   const AboutPage({super.key});
 

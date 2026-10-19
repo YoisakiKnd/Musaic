@@ -23,11 +23,13 @@ import 'core/network/network_config.dart';
 import 'core/theme/app_tokens.dart';
 import 'features/auth/data/account_repository.dart';
 import 'features/library/data/library_repository.dart';
+import 'features/lyrics/data/lyrics_cache_repository.dart';
 import 'features/player/audio_handler.dart';
 import 'features/player/data/resume_repository.dart';
 import 'features/search/data/search_history_repository.dart';
 import 'features/settings/data/local_music_settings_repository.dart';
 import 'features/player/player_notifier.dart';
+import 'features/player/widgets/player_shortcuts.dart';
 import 'features/settings/settings_providers.dart'
     show
         AppSettingsRepository,
@@ -51,13 +53,7 @@ class _Bootstrap {
   static Future<MusaicAudioHandler> _initAudioHandler() async {
     try {
       return await AudioService.init(
-        // 交叉淡入（N4）需要第二路音频同时出声，故预建次播放器。
-        // 默认不启用（crossfadeSeconds = 0），此时它不参与播放。
-        builder:
-            () => MusaicAudioHandler(
-              player: AudioPlayer(),
-              secondary: AudioPlayer(),
-            ),
+        builder: () => MusaicAudioHandler(player: AudioPlayer()),
         config: const AudioServiceConfig(
           androidNotificationChannelId: 'dev.musaic.audio.playback',
           androidNotificationChannelName: 'Musaic 播放',
@@ -168,6 +164,7 @@ Future<void> main() async {
     openBoxSafely(SearchHistoryRepository.boxName, hiveDir),
     openBoxSafely(LocalMusicSettingsRepository.boxName, hiveDir),
     openBoxSafely(AppSettingsRepository.boxName, hiveDir),
+    openBoxSafely(LyricsCacheRepository.boxName, hiveDir),
   ]);
   final accountsBox = boxes[0];
   final favoritesBox = boxes[1];
@@ -176,6 +173,7 @@ Future<void> main() async {
   final searchHistoryBox = boxes[4];
   final localMusicSettingsBox = boxes[5];
   final appSettingsBox = boxes[6];
+  final lyricsCacheBox = boxes[7];
   final resumeBox = await openBoxSafely<String>(
     ResumeRepository.boxName,
     hiveDir,
@@ -193,6 +191,7 @@ Future<void> main() async {
     LocalMusicSettingsRepository.boxName: localMusicSettingsBox,
     AppSettingsRepository.boxName: appSettingsBox,
     ResumeRepository.boxName: resumeBox,
+    LyricsCacheRepository.boxName: lyricsCacheBox,
   }, hiveDir);
 
   await _Bootstrap._configureDesktopWindow();
@@ -235,6 +234,9 @@ Future<void> main() async {
         appSettingsRepositoryProvider.overrideWithValue(appSettingsRepository),
         resumeRepositoryProvider.overrideWithValue(
           ResumeRepository(box: resumeBox),
+        ),
+        lyricsCacheRepositoryProvider.overrideWithValue(
+          LyricsCacheRepository(box: lyricsCacheBox),
         ),
       ],
       child: const AppLifecycleObserver(child: MusaicApp()),
@@ -281,6 +283,12 @@ class _MusaicAppState extends ConsumerState<MusaicApp> {
       darkTheme: oled ? AppTokens.oledTheme : AppTokens.darkTheme,
       themeMode: themeMode,
       routerConfig: router,
+      // 包在 Navigator 外层：任何页面（含全屏播放页）都能响应快捷键
+      builder:
+          (context, child) => PlayerShortcuts(
+            onBack: router.routerDelegate.popRoute,
+            child: child ?? const SizedBox.shrink(),
+          ),
     );
   }
 }

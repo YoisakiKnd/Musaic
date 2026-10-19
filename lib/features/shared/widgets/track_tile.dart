@@ -14,7 +14,7 @@ import '../../player/player_notifier.dart';
 import 'track_cover.dart';
 
 /// 统一曲目行：封面 + 标题/歌手 + 渠道徽章 + 收藏心。
-/// 点击即以 [queue] 为队列从本曲播放。
+/// 点击即以 [queue] 为队列从本曲播放；[keepQueue] 时只插播本曲。
 class TrackTile extends ConsumerWidget {
   const TrackTile({
     super.key,
@@ -26,6 +26,7 @@ class TrackTile extends ConsumerWidget {
     this.onCheckboxChanged,
     this.dense = false,
     this.leadingCheckbox,
+    this.keepQueue = false,
   });
 
   final Track track;
@@ -53,11 +54,18 @@ class TrackTile extends ConsumerWidget {
   final bool? leadingCheckbox;
   final bool dense;
 
+  /// 点击时**保留当前播放队列**，只把本曲插到当前曲之后立即播放；
+  /// [queue] 仅作为跨渠道换源候选。
+  ///
+  /// 搜索结果用：结果页往往是同一首歌的几十个版本，整页替换队列会让
+  /// 播完一首后接着播同名的其它版本，并且冲掉用户原来的队列。
+  final bool keepQueue;
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final registry = ref.watch(sourceRegistryProvider);
     final source = registry.resolve(track.sourceId);
-    final isFavorite = ref.watch(isFavoriteProvider(track.key));
+    final isFavorite = ref.watch(isFavoriteProvider(track));
     final current = ref.watch(playerNotifierProvider.select((s) => s.current));
     final isCurrent = current?.key == track.key;
     final scheme = Theme.of(context).colorScheme;
@@ -70,14 +78,17 @@ class TrackTile extends ConsumerWidget {
       onTap:
           onTapOverride ??
           () {
-            ref
-                .read(playerNotifierProvider.notifier)
-                .playQueue(
-                  queue,
-                  startIndex: queue
-                      .indexWhere((t) => t.key == track.key)
-                      .clamp(0, queue.isEmpty ? 0 : queue.length - 1),
-                );
+            final notifier = ref.read(playerNotifierProvider.notifier);
+            if (keepQueue) {
+              notifier.playNow(track, alternativesPool: queue);
+            } else {
+              notifier.playQueue(
+                queue,
+                startIndex: queue
+                    .indexWhere((t) => t.key == track.key)
+                    .clamp(0, queue.isEmpty ? 0 : queue.length - 1),
+              );
+            }
             context.push('/player');
           },
       onLongPress:
@@ -196,7 +207,7 @@ class TrackTile extends ConsumerWidget {
     final messenger = ScaffoldMessenger.of(context);
     final wasFavorite = ref
         .read(libraryRepositoryProvider)
-        .isFavorite(track.key);
+        .isFavoriteTrack(track);
     try {
       final added = await ref
           .read(libraryRepositoryProvider)
@@ -216,78 +227,119 @@ class TrackTile extends ConsumerWidget {
     }
   }
 
-  /// 曲目操作菜单（日常可用性计划 D2）。
-  ///
-  /// 此前收藏 / 历史 / 歌单详情里的曲目**只能播放或收藏**，
-  /// 想加入歌单必须回搜索页重新找。此菜单把常用操作收在一处，
-  /// 所有使用 [TrackTile] 的页面自动获得完整能力。
-  Future<void> _openActions(BuildContext context, WidgetRef ref) async {
-    final action = await showModalBottomSheet<String>(
-      context: context,
-      showDragHandle: true,
-      builder:
-          (sheetContext) => SafeArea(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
-                  child: Text(
-                    track.title,
-                    style: const TextStyle(fontWeight: FontWeight.w700),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ),
-                ListTile(
-                  leading: const Icon(Icons.playlist_add_rounded),
-                  title: const Text('加入歌单'),
-                  onTap: () => Navigator.of(sheetContext).pop('playlist'),
-                ),
-                ListTile(
-                  leading: const Icon(Icons.playlist_play_rounded),
-                  title: const Text('下一首播放'),
-                  onTap: () => Navigator.of(sheetContext).pop('next'),
-                ),
-                ListTile(
-                  leading: const Icon(Icons.queue_music_rounded),
-                  title: const Text('添加到队列末尾'),
-                  onTap: () => Navigator.of(sheetContext).pop('queue'),
-                ),
-                if (onRemove != null)
-                  ListTile(
-                    leading: const Icon(Icons.remove_circle_outline_rounded),
-                    title: const Text('从当前列表移除'),
-                    onTap: () => Navigator.of(sheetContext).pop('remove'),
-                  ),
-              ],
-            ),
-          ),
-    );
-    if (!context.mounted || action == null) return;
-
-    switch (action) {
-      case 'playlist':
-        await AddToPlaylistSheet.show(context, [track]);
-      case 'next':
-        await _quickPlayNext(context, ref);
-      case 'queue':
-        ref.read(playerNotifierProvider.notifier).addToQueue(track);
-        if (!context.mounted) return;
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('已添加「${track.title}」到队列')));
-      case 'remove':
-        onRemove?.call();
-    }
-  }
+  Future<void> _openActions(BuildContext context, WidgetRef ref) =>
+      showTrackActions(context, ref, track, onRemove: onRemove);
 
   /// 无自定义长按行为的曲目：快捷「下一首播放」。
-  Future<void> _quickPlayNext(BuildContext context, WidgetRef ref) async {
-    unawaited(ref.read(playerNotifierProvider.notifier).insertNext(track));
-    if (!context.mounted) return;
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(SnackBar(content: Text('下一首播放「${track.title}」')));
+  Future<void> _quickPlayNext(BuildContext context, WidgetRef ref) =>
+      _playNext(context, ref, track);
+}
+
+Future<void> _playNext(BuildContext context, WidgetRef ref, Track track) async {
+  unawaited(ref.read(playerNotifierProvider.notifier).insertNext(track));
+  if (!context.mounted) return;
+  ScaffoldMessenger.of(
+    context,
+  ).showSnackBar(SnackBar(content: Text('下一首播放「${track.title}」')));
+}
+
+/// 曲目操作菜单（日常可用性计划 D2）。
+///
+/// 此前收藏 / 历史 / 歌单详情里的曲目**只能播放或收藏**，
+/// 想加入歌单必须回搜索页重新找。此菜单把常用操作收在一处：
+/// 所有使用 [TrackTile] 的页面自动获得完整能力，不使用 [TrackTile] 的列表
+/// （如云端歌单）直接调用本函数。
+///
+/// [includeFavorite]：行内没有红心按钮的列表需要在菜单里提供「喜欢」。
+Future<void> showTrackActions(
+  BuildContext context,
+  WidgetRef ref,
+  Track track, {
+  VoidCallback? onRemove,
+  bool includeFavorite = false,
+}) async {
+  final isFavorite =
+      includeFavorite &&
+      ref.read(libraryRepositoryProvider).isFavoriteTrack(track);
+  final action = await showModalBottomSheet<String>(
+    context: context,
+    showDragHandle: true,
+    builder:
+        (sheetContext) => SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
+                child: Text(
+                  track.title,
+                  style: const TextStyle(fontWeight: FontWeight.w700),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              if (includeFavorite)
+                ListTile(
+                  leading: Icon(
+                    isFavorite
+                        ? Icons.favorite_rounded
+                        : Icons.favorite_border_rounded,
+                  ),
+                  title: Text(isFavorite ? '取消喜欢' : '喜欢'),
+                  onTap: () => Navigator.of(sheetContext).pop('favorite'),
+                ),
+              ListTile(
+                leading: const Icon(Icons.playlist_add_rounded),
+                title: const Text('加入歌单'),
+                onTap: () => Navigator.of(sheetContext).pop('playlist'),
+              ),
+              ListTile(
+                leading: const Icon(Icons.playlist_play_rounded),
+                title: const Text('下一首播放'),
+                onTap: () => Navigator.of(sheetContext).pop('next'),
+              ),
+              ListTile(
+                leading: const Icon(Icons.queue_music_rounded),
+                title: const Text('添加到队列末尾'),
+                onTap: () => Navigator.of(sheetContext).pop('queue'),
+              ),
+              if (onRemove != null)
+                ListTile(
+                  leading: const Icon(Icons.remove_circle_outline_rounded),
+                  title: const Text('从当前列表移除'),
+                  onTap: () => Navigator.of(sheetContext).pop('remove'),
+                ),
+            ],
+          ),
+        ),
+  );
+  if (!context.mounted || action == null) return;
+
+  switch (action) {
+    case 'favorite':
+      final messenger = ScaffoldMessenger.of(context);
+      try {
+        final added = await ref
+            .read(libraryRepositoryProvider)
+            .toggleFavorite(track);
+        messenger.showSnackBar(
+          SnackBar(content: Text(added ? '已加入喜欢' : '已取消喜欢')),
+        );
+      } catch (e) {
+        AppLog.error('收藏写入失败：${track.key} | $e', tag: 'MusaicLibrary');
+        messenger.showSnackBar(const SnackBar(content: Text('操作失败，请重试')));
+      }
+    case 'playlist':
+      await AddToPlaylistSheet.show(context, [track]);
+    case 'next':
+      await _playNext(context, ref, track);
+    case 'queue':
+      ref.read(playerNotifierProvider.notifier).addToQueue(track);
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('已添加「${track.title}」到队列')));
+    case 'remove':
+      onRemove?.call();
   }
 }

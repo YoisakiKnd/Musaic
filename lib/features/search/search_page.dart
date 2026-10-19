@@ -12,7 +12,9 @@ import '../../core/utils/nav_intent.dart';
 import '../../core/utils/track_link_parser.dart';
 import '../player/player_notifier.dart';
 import '../shared/error_text.dart';
+import '../settings/settings_providers.dart' show appSettingsRepositoryProvider;
 import '../shared/widgets/confirm_dialog.dart';
+import 'data/search_prefs.dart';
 import 'search_results_page.dart';
 
 enum _AggregateMode { grouped, merged }
@@ -66,16 +68,29 @@ class _SearchPageState extends ConsumerState<SearchPage> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       final sources = ref.read(sourceRegistryProvider).all;
+      final ids = sources.map((s) => s.sourceId).toSet();
+      final prefs = SearchPrefs.load(
+        ref.read(appSettingsRepositoryProvider).box,
+      );
       setState(() {
-        // 单一模式优先选渠道声明的默认渠道（preferredByDefault），无则取第一个
+        _scope = prefs.aggregate ? _ScopeMode.aggregate : _ScopeMode.single;
+        // 单一模式：沿用上次选择；无效时优先渠道声明的默认渠道，再取第一个
         _singleTarget =
-            sources
-                .where((s) => s.preferredByDefault)
-                .map((s) => s.sourceId)
-                .firstOrNull ??
-            (sources.isNotEmpty ? sources.first.sourceId : null);
-        // 聚合模式默认全选
-        _targets = sources.map((s) => s.sourceId).toSet();
+            ids.contains(prefs.singleTarget)
+                ? prefs.singleTarget
+                : sources
+                        .where((s) => s.preferredByDefault)
+                        .map((s) => s.sourceId)
+                        .firstOrNull ??
+                    (sources.isNotEmpty ? sources.first.sourceId : null);
+        // 聚合模式：默认全选，扣掉用户上次取消的渠道（全扣光则回到全选）
+        final kept = ids.difference(prefs.excludedTargets);
+        _targets = kept.isEmpty ? ids : kept;
+        _mode = prefs.merged ? _AggregateMode.merged : _AggregateMode.grouped;
+        _sort = _SortMode.values.firstWhere(
+          (m) => m.name == prefs.sort,
+          orElse: () => _SortMode.relevance,
+        );
         _history = ref.read(searchHistoryRepositoryProvider).load();
         _uiReady = true;
       });
@@ -126,6 +141,21 @@ class _SearchPageState extends ConsumerState<SearchPage> {
     super.dispose();
   }
 
+  /// 修改搜索偏好并持久化（下次打开沿用）。
+  void _updatePrefs(VoidCallback change) {
+    setState(change);
+    final ids = ref.read(sourceRegistryProvider).all.map((s) => s.sourceId);
+    unawaited(
+      SearchPrefs(
+        aggregate: _scope == _ScopeMode.aggregate,
+        singleTarget: _singleTarget,
+        excludedTargets: ids.where((id) => !_targets.contains(id)).toSet(),
+        merged: _mode == _AggregateMode.merged,
+        sort: _sort.name,
+      ).save(ref.read(appSettingsRepositoryProvider).box).catchError((_) {}),
+    );
+  }
+
   /// 打开解析出的链接：按渠道补全曲目详情后直接播放。
   ///
   /// 用「补全详情 → 播放」而非「搜索 id」：分享链接给的是精确的曲目标识，
@@ -155,8 +185,9 @@ class _SearchPageState extends ConsumerState<SearchPage> {
     try {
       final detail = await source.getTrackDetail(placeholder);
       if (!mounted) return;
-      await ref.read(playerNotifierProvider.notifier).playQueue([detail]);
-      if (!mounted) return;
+      // 插播而非替换队列（与搜索结果点歌一致）；不等加载完成就进播放页，
+      // 加载状态由播放页自己展示
+      unawaited(ref.read(playerNotifierProvider.notifier).playNow(detail));
       // push 的 Future 在页面 pop 时才完成，此处无需等待
       unawaited(context.push('/player'));
     } catch (e) {
@@ -262,8 +293,11 @@ class _SearchPageState extends ConsumerState<SearchPage> {
     // 立即进入结果页，由结果页按渠道流式接收结果（迭代计划 §10.6 / B19：
     // 搜索首屏不再等待最慢渠道，先到先展示）
     if (!mounted) return;
+    // 在「搜索」分支的导航器里打开（而非根导航器）：结果页要保留外壳的
+    // 迷你播放条与导航栏——点歌后用户还在结果页继续挑歌，此前根导航器
+    // 盖住了外壳，正在播放的歌既不能暂停也不能切，只能先退回搜索页。
     unawaited(
-      Navigator.of(context, rootNavigator: true).push(
+      Navigator.of(context).push(
         MaterialPageRoute<void>(
           builder:
               (_) => SearchResultsPage(
@@ -342,12 +376,12 @@ class _SearchPageState extends ConsumerState<SearchPage> {
               _choiceChip(
                 '单曲搜索',
                 _scope == _ScopeMode.single,
-                () => setState(() => _scope = _ScopeMode.single),
+                () => _updatePrefs(() => _scope = _ScopeMode.single),
               ),
               _choiceChip(
                 '聚合搜索',
                 _scope == _ScopeMode.aggregate,
-                () => setState(() => _scope = _ScopeMode.aggregate),
+                () => _updatePrefs(() => _scope = _ScopeMode.aggregate),
               ),
             ],
           ),
@@ -360,13 +394,13 @@ class _SearchPageState extends ConsumerState<SearchPage> {
                 Expanded(child: _sectionLabel('搜索渠道')),
                 TextButton(
                   onPressed:
-                      () => setState(() {
+                      () => _updatePrefs(() {
                         _targets = sources.map((s) => s.sourceId).toSet();
                       }),
                   child: const Text('全选'),
                 ),
                 TextButton(
-                  onPressed: () => setState(() => _targets = <String>{}),
+                  onPressed: () => _updatePrefs(() => _targets = <String>{}),
                   child: const Text('全部取消'),
                 ),
               ],
@@ -379,12 +413,12 @@ class _SearchPageState extends ConsumerState<SearchPage> {
                 _choiceChip(
                   '分开展示',
                   _mode == _AggregateMode.grouped,
-                  () => setState(() => _mode = _AggregateMode.grouped),
+                  () => _updatePrefs(() => _mode = _AggregateMode.grouped),
                 ),
                 _choiceChip(
                   '合并展示',
                   _mode == _AggregateMode.merged,
-                  () => setState(() => _mode = _AggregateMode.merged),
+                  () => _updatePrefs(() => _mode = _AggregateMode.merged),
                 ),
               ],
             ),
@@ -395,17 +429,17 @@ class _SearchPageState extends ConsumerState<SearchPage> {
                 _choiceChip(
                   '相关度',
                   _sort == _SortMode.relevance,
-                  () => setState(() => _sort = _SortMode.relevance),
+                  () => _updatePrefs(() => _sort = _SortMode.relevance),
                 ),
                 _choiceChip(
                   '时长 ↑',
                   _sort == _SortMode.durationAsc,
-                  () => setState(() => _sort = _SortMode.durationAsc),
+                  () => _updatePrefs(() => _sort = _SortMode.durationAsc),
                 ),
                 _choiceChip(
                   '时长 ↓',
                   _sort == _SortMode.durationDesc,
-                  () => setState(() => _sort = _SortMode.durationDesc),
+                  () => _updatePrefs(() => _sort = _SortMode.durationDesc),
                 ),
               ],
             ),
@@ -471,7 +505,7 @@ class _SearchPageState extends ConsumerState<SearchPage> {
           _choiceChip(
             source.displayName,
             _singleTarget == source.sourceId,
-            () => setState(() => _singleTarget = source.sourceId),
+            () => _updatePrefs(() => _singleTarget = source.sourceId),
           ),
       ],
     );
@@ -488,7 +522,7 @@ class _SearchPageState extends ConsumerState<SearchPage> {
             label: Text(source.displayName),
             selected: _targets.contains(source.sourceId),
             onSelected:
-                (selected) => setState(() {
+                (selected) => _updatePrefs(() {
                   selected
                       ? _targets.add(source.sourceId)
                       : _targets.remove(source.sourceId);

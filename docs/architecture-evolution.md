@@ -405,8 +405,35 @@ String localTrackId(String path, int size, String headHash) => 'local:$size:$hea
 | 阶段 | 状态 | 产物 |
 |---|---|---|
 | S1 schema 迁移框架 | ✅ 已完成 | `core/storage/schema_migrator.dart`、`core/storage/app_schema.dart`、`test/core/storage/*`（30 用例） |
-| S2 Work/WorkId + 归一化 | 🟡 归一化器已完成并验证 | `core/model/work_id.dart`、`test/core/model/work_id_test.dart`（26 用例）；待补 `Work` 聚合与渠道接入 |
-| S3 本地曲目稳定 id | ⬜ 待开始 | — |
-| S4 收藏/历史迁移到 workId | ⬜ 待开始（依赖 S1 ✅ + S2） | — |
-| S5 回退链 | ⬜ 待开始（依赖 S2） | — |
-| S6 缓存层 | ⬜ 待开始 | — |
+| S2 Work/WorkId + 归一化 | ✅ 已完成 | `core/model/work_id.dart`（归一化器）、`core/model/work_grouping.dart`（分组 / 换源候选 / `matchableWorkKey`） |
+| S3 本地曲目稳定 id | ✅ 已完成 | 日常可用性计划 D9：`local:<size>:<head-sha1>` 内容指纹 |
+| S4 收藏/历史按作品判定 | ✅ 已完成（实现方式与 §2.4 不同，见下） | `LibraryRepository.isFavoriteTrack` / `removeFavorites` / `addHistory` |
+| S5 回退链 | ✅ 已完成 | 日常可用性计划 D7：`_resolveWithFallback` |
+| S6 缓存层 | 🟡 歌词缓存已完成 | `features/lyrics/data/lyrics_cache_repository.dart`、`core/lyrics/lyric_codec.dart`；详情缓存待做 |
+
+### S4 实现与 §2.4 设计的差异
+
+§2.4 原计划把收藏 Box 的**存储键**改成 workId 并配套 schema v2 迁移。实际落地改为
+**存储键不变、读取侧按作品判定**：
+
+- `LibraryRepository` 维护「作品键 → 已收藏渠道记录」的内存索引（按需构建，收藏写入时失效）；
+- 红心状态用 `isFavoriteTrack(track)`：本记录或同作品任一渠道版本已收藏即为 true；
+- 取消喜欢移除该作品**全部**渠道记录（否则红心因其它版本而亮、点了却不灭）；
+- 「喜欢」页批量移除走 `removeFavorites(keys)` 精确删除——循环 toggle 会在
+  所选含同作品两条记录时把第二条**加回来**；
+- 历史在 `addHistory` 时删除同作品的旧渠道记录。
+
+取舍理由：用户可感知的收益（跨渠道红心、历史不重复）完全相同，但**零破坏性迁移**、
+备份格式不变；且归一化规则以后调整时，旧数据会按新规则自动重新分组，不会被旧键锁死。
+
+作品判定比换源（D7）更保守：标题或艺人为空、艺人为占位名（「未知歌手」/ Unknown Artist 等）
+时 `matchableWorkKey` 返回 null，退回按 `track.key` 精确匹配——误判在这里的代价是
+「没喜欢过的歌亮红心」或「取消喜欢时连带删掉另一首」，比换源没换成更糟。
+
+### S6 歌词缓存的取舍
+
+- 键为 `track.key` 而非 workId：不同渠道的同一首歌是不同录音，时间轴不通用；
+- **只缓存有歌词的结果**：各渠道 `fetchLyrics` 把网络失败也吞成 null，缓存 null
+  会把一次断网固化成长期无歌词；
+- 本地文件不缓存（`.lrc` 修改应立即生效）；有效期 30 天、容量 300 条、按写入时间淘汰；
+- 设置 → 数据管理可查看条数并清除。

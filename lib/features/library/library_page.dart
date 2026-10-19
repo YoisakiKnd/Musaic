@@ -117,14 +117,9 @@ class _FavoritesTab extends ConsumerWidget {
         return _TrackListWithActions(
           tracks: favorites,
           // 收藏页：移除 = 取消收藏。
-          onRemoveSelected: (keys) async {
-            final repository = ref.read(libraryRepositoryProvider);
-            for (final track in favorites) {
-              if (keys.contains(track.key)) {
-                await repository.toggleFavorite(track);
-              }
-            }
-          },
+          onRemoveSelected:
+              (keys) =>
+                  ref.read(libraryRepositoryProvider).removeFavorites(keys),
           removedLabel: '已取消喜欢',
           onClear: () async {
             await ref.read(libraryRepositoryProvider).clearFavorites();
@@ -190,13 +185,8 @@ class _PlaylistsTab extends ConsumerWidget {
               for (final s in ref.watch(sourceRegistryProvider).all)
                 if (s is RemotePlaylistCapable) s,
             ];
-            final hasAnyRemote = remoteSources.isNotEmpty;
-            if (names.isEmpty && !hasAnyRemote) {
-              return const _EmptyHint(
-                icon: Icons.queue_music_rounded,
-                text: '创建你的第一个歌单',
-              );
-            }
+            // 注意：不能用「有没有支持云端歌单的渠道」判断空态——网易云/QQ/
+            // 酷狗总是注册着，而未登录时它们的分区都是零尺寸，此前整页空白。
             return ListView(
               padding: AppTokens.pagePadding,
               children: [
@@ -209,7 +199,8 @@ class _PlaylistsTab extends ConsumerWidget {
                 if (names.isNotEmpty) ...[
                   const _SectionTitle('本地歌单'),
                   for (final name in names) _LocalPlaylistCard(name: name),
-                ],
+                ] else
+                  const _NoLocalPlaylistsHint(),
               ],
             );
           },
@@ -226,8 +217,30 @@ class _PlaylistsTab extends ConsumerWidget {
                 title: '新建歌单',
                 confirmLabel: '创建',
               );
-              if (name != null && name.isNotEmpty) {
+              if (name == null || name.trim().isEmpty || !context.mounted) {
+                return;
+              }
+              final messenger = ScaffoldMessenger.of(context);
+              // 重名时 createPlaylist 静默不建，此前用户点了「创建」毫无反馈
+              if (repository.playlistNames.contains(name.trim())) {
+                messenger.showSnackBar(
+                  SnackBar(content: Text('已有名为「${name.trim()}」的歌单')),
+                );
+                return;
+              }
+              try {
                 await repository.createPlaylist(name);
+                messenger.showSnackBar(
+                  SnackBar(content: Text('已创建「${name.trim()}」')),
+                );
+              } on ArgumentError catch (e) {
+                // 名称过长等校验失败：给出原因，而不是让异常冒到全局
+                messenger.showSnackBar(SnackBar(content: Text('${e.message}')));
+              } catch (e) {
+                AppLog.error('新建歌单失败：$e', tag: 'MusaicLibrary');
+                messenger.showSnackBar(
+                  const SnackBar(content: Text('创建失败，请重试')),
+                );
               }
             },
             icon: const Icon(Icons.add_rounded),
@@ -379,6 +392,14 @@ class _TrackListWithActionsState extends ConsumerState<_TrackListWithActions> {
                 },
                 icon: const Icon(Icons.play_arrow_rounded, size: 18),
                 label: Text('播放全部（${tracks.length}）'),
+              ),
+              IconButton(
+                tooltip: '随机播放',
+                onPressed: () {
+                  ref.read(playerNotifierProvider.notifier).shufflePlay(tracks);
+                  context.push('/player');
+                },
+                icon: const Icon(Icons.shuffle_rounded, size: 20),
               ),
               const Spacer(),
               if (_selecting) ...[
@@ -662,6 +683,44 @@ class _RemotePlaylistCard extends ConsumerWidget {
                 builder: (_) => RemotePlaylistPage(playlist: playlist),
               ),
             ),
+      ),
+    );
+  }
+}
+
+/// 还没有本地歌单时的引导（不居中占满：上方可能还有云端歌单分区）。
+class _NoLocalPlaylistsHint extends StatelessWidget {
+  const _NoLocalPlaylistsHint();
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 48, horizontal: 16),
+      child: Column(
+        children: [
+          Icon(
+            Icons.queue_music_rounded,
+            size: 48,
+            color: AppTokens.accent.withValues(alpha: 0.8),
+          ),
+          const SizedBox(height: 12),
+          const Text(
+            '还没有歌单',
+            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            '点右下角「新建歌单」，或在任意歌曲的「⋮」菜单里选择「加入歌单」。\n'
+            '登录渠道账号后，这里还会显示你的云端歌单。',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              fontSize: 13,
+              height: 1.5,
+              color: scheme.onSurface.withValues(alpha: 0.55),
+            ),
+          ),
+        ],
       ),
     );
   }

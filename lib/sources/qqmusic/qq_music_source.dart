@@ -86,7 +86,16 @@ class QqMusicSource extends MusicSource
   }) async {
     final keyword = query.trim();
     if (keyword.isEmpty) return const <Track>[];
+    // 首选完整搜索接口：smartbox 只是「联想词」接口，常年只给 4~10 条、
+    // 没有时长与专辑，封面还要逐首查详情（N 次请求）。
     try {
+      final full = await _searchFull(keyword, limit: limit, offset: offset);
+      if (full != null) return full;
+    } on DioException {
+      throw NetworkSourceException('搜索失败：网络异常', sourceId: sourceId);
+    }
+    try {
+      // 兜底：完整搜索接口结构异常时退回 smartbox。
       // 需要覆盖到 offset+limit 的累计长度，按 smartbox 页大小向上取整。
       final needed = offset + limit;
       final cache = _searchCache.putIfAbsent(keyword, () => <Track>[]);
@@ -112,6 +121,74 @@ class QqMusicSource extends MusicSource
     } on DioException {
       throw NetworkSourceException('搜索失败：网络异常', sourceId: sourceId);
     }
+  }
+
+  /// 完整搜索（client_search_cp，公开接口，无需登录）。
+  ///
+  /// 返回 null 表示响应结构无法识别，调用方应退回 smartbox。
+  Future<List<Track>?> _searchFull(
+    String keyword, {
+    required int limit,
+    required int offset,
+  }) async {
+    // 接口按页（1 基）取数；offset 不是 limit 整数倍时（结果页去重后
+    // 可能出现）从第 1 页取足再切片，保证不漏不重。
+    final aligned = offset % limit == 0;
+    final response = await _dio.get<dynamic>(
+      'https://c.y.qq.com/soso/fcgi-bin/client_search_cp',
+      queryParameters: <String, dynamic>{
+        'w': keyword,
+        'p': aligned ? offset ~/ limit + 1 : 1,
+        'n': aligned ? limit : offset + limit,
+        'format': 'json',
+        't': 0,
+      },
+    );
+    final tracks = parseFullSearch(_decoded(response));
+    if (tracks == null) return null;
+    if (aligned) return tracks;
+    return offset >= tracks.length ? const <Track>[] : tracks.sublist(offset);
+  }
+
+  /// 解析 client_search_cp 响应；结构无法识别时返回 null。
+  @visibleForTesting
+  static List<Track>? parseFullSearch(dynamic body) {
+    final song = asMap(asMap(asMap(body)?['data'])?['song']);
+    if (song == null) return null;
+    final list = asList(song['list']);
+    if (list == null) return null;
+    return list.map(_trackFromFullSearchItem).whereType<Track>().toList();
+  }
+
+  static Track? _trackFromFullSearchItem(dynamic raw) {
+    final item = asMap(raw);
+    final mid = asStringOrNull(item?['songmid']);
+    final name = asStringOrNull(item?['songname']);
+    if (item == null || mid == null || mid.isEmpty || name == null) {
+      return null;
+    }
+    final artists = (asList(item['singer']) ?? const <dynamic>[])
+        .map((a) => asStringOrNull(asMap(a)?['name']))
+        .whereType<String>()
+        .where((n) => n.isNotEmpty)
+        .join('/');
+    final albumMid = asStringOrNull(item['albummid']);
+    final interval = asIntOrNull(item['interval']);
+    final album = asStringOrNull(item['albumname']);
+    return Track(
+      id: mid,
+      sourceId: QqMusicSource.id,
+      title: name,
+      artist: artists.isEmpty ? '未知歌手' : artists,
+      album: album == null || album.isEmpty ? null : album,
+      // QQ 的 interval 单位是秒
+      duration: interval == null ? null : Duration(seconds: interval),
+      coverUrl:
+          albumMid == null || albumMid.isEmpty
+              ? null
+              : _qqCoverUrl('T002R300x300M000$albumMid.jpg'),
+      sourceData: <String, dynamic>{'songmid': mid},
+    );
   }
 
   /// 拉取第 [page] 页 smartbox 联想结果（0 基）。

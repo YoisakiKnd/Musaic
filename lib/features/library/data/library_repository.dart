@@ -4,10 +4,22 @@ import 'package:hive/hive.dart';
 import 'dart:convert';
 
 import '../../../core/model/track.dart';
+import '../../../core/model/work_grouping.dart';
 
 /// 本地资料库仓库：喜欢 / 最近播放 / 自建歌单（Master Plan §9，本地优先）。
 ///
 /// 三个 Hive Box，全部以 JSON 字符串存储，键为 `sourceId:trackId`。
+///
+/// ## 三类数据的「同一首歌」语义（架构演进设计 §2.4 / S4）
+///
+/// - **歌单**：按 [Track.key] 去重，同一首歌的多个渠道版本**必须共存**；
+/// - **收藏**：判定按作品（[matchableWorkKey]）——在网易云喜欢过的歌，
+///   换到 QQ 播放时红心也亮；取消喜欢会移除该作品的全部渠道记录；
+/// - **历史**：按作品去重——同一首歌换渠道再听，只刷新为一条最新记录。
+///
+/// 存储键**仍是 [Track.key]**（未按设计文档改成 workId 键）：作品判定在
+/// 读取侧通过内存索引完成，因此无需破坏性 schema 迁移，备份格式也不变；
+/// 将来归一化规则调整时，旧数据自动按新规则重新分组，不会被旧键锁死。
 class LibraryRepository {
   LibraryRepository({
     required Box<String> favoritesBox,
@@ -36,27 +48,88 @@ class LibraryRepository {
 
   // ---------- 喜欢 ----------
 
+  /// 作品键 → 该作品已收藏的渠道记录键。按需构建，收藏写入后失效。
+  Map<String, Set<String>>? _favoriteWorkIndex;
+
+  /// 按渠道记录精确判定（不做作品归一）。
   bool isFavorite(String trackKey) => _favorites.containsKey(trackKey);
+
+  /// 按作品判定：该曲目本身，或同一首歌的任一渠道版本已被收藏。
+  ///
+  /// UI 的红心状态应使用本方法。
+  bool isFavoriteTrack(Track track) {
+    if (_favorites.containsKey(track.key)) return true;
+    final work = matchableWorkKey(track);
+    return work != null && _favoriteWorks.containsKey(work);
+  }
+
+  Map<String, Set<String>> get _favoriteWorks =>
+      _favoriteWorkIndex ??= _buildFavoriteWorkIndex();
+
+  Map<String, Set<String>> _buildFavoriteWorkIndex() {
+    final index = <String, Set<String>>{};
+    for (final entry in _favorites.toMap().entries) {
+      final track = _decodeTrack(entry.value);
+      if (track == null) continue;
+      final work = matchableWorkKey(track);
+      if (work == null) continue;
+      index.putIfAbsent(work, () => <String>{}).add('${entry.key}');
+    }
+    return index;
+  }
+
+  /// 收藏写入前后各失效一次索引。Hive 在 await 落盘之前就已更新内存，
+  /// 因此写入前失效即可让 await 期间的读取看到新内容；写入后（含失败）
+  /// 再失效一次，是因为落盘失败时 Hive 会回滚内存，await 期间按新内容
+  /// 建立的索引随之过期。
+  Future<T> _writeFavorites<T>(Future<T> Function() write) async {
+    _favoriteWorkIndex = null;
+    try {
+      return await write();
+    } finally {
+      _favoriteWorkIndex = null;
+    }
+  }
 
   List<Track> get favorites =>
       _favorites.values.map(_decodeTrack).whereType<Track>().toList();
 
   /// 切换收藏状态，返回切换后的状态（true = 已收藏）。
+  ///
+  /// 「已收藏」按作品判定（见 [isFavoriteTrack]）：红心因其它渠道版本而亮时，
+  /// 点一下必须让它熄灭，所以取消时会移除该作品的**全部**渠道记录。
   Future<bool> toggleFavorite(Track track) async {
     final key = track.key;
-    if (_favorites.containsKey(key)) {
-      await _favorites.delete(key);
+    if (isFavoriteTrack(track)) {
+      final work = matchableWorkKey(track);
+      final keys = <String>{key, ...?_favoriteWorks[work]};
+      await _writeFavorites(() => _favorites.deleteAll(keys));
       return false;
     }
-    await _favorites.put(key, jsonEncode(track.toJson()));
+    await _writeFavorites(
+      () => _favorites.put(key, jsonEncode(track.toJson())),
+    );
     return true;
+  }
+
+  /// 按渠道记录键精确移除收藏（资料库「喜欢」页的批量移除）。
+  ///
+  /// 不能循环调用 [toggleFavorite]：后者按作品判定，若所选里有同一首歌的
+  /// 两个渠道版本，第一次调用就会把两条都删掉，第二次调用随即判定为
+  /// 「未收藏」而把它**加回来**。
+  Future<void> removeFavorites(Iterable<String> trackKeys) async {
+    final keys = trackKeys.toList(growable: false);
+    if (keys.isEmpty) return;
+    await _writeFavorites(() => _favorites.deleteAll(keys));
   }
 
   /// 批量导入收藏（一次 putAll，按 key 去重合并）。
   Future<void> addAllFavorites(Iterable<Track> tracks) async {
-    await _favorites.putAll({
-      for (final t in tracks) t.key: jsonEncode(t.toJson()),
-    });
+    await _writeFavorites(
+      () => _favorites.putAll({
+        for (final t in tracks) t.key: jsonEncode(t.toJson()),
+      }),
+    );
   }
 
   /// 清空全部收藏。
@@ -64,7 +137,7 @@ class LibraryRepository {
   /// 之所以放在仓库层而不是让调用方循环 [toggleFavorite]：
   /// 后者是 N 次「containsKey + delete」Hive 往返，大曲库下会阻塞
   /// 主 isolate；`clear()` 是一次批量删除（设置页「清空喜欢的音乐」）。
-  Future<void> clearFavorites() => _favorites.clear();
+  Future<void> clearFavorites() => _writeFavorites(_favorites.clear);
 
   /// 全量歌单快照（备份导出用）。
   Map<String, List<Track>> playlistSnapshot() => {
@@ -93,16 +166,38 @@ class LibraryRepository {
 
   // ---------- 最近播放 ----------
 
-  /// 记录一次播放（去重刷新时间，超上限裁剪最旧）。
+  /// 记录一次播放（按作品去重刷新时间，超上限裁剪最旧）。
+  ///
+  /// 同一首歌换渠道再听，旧渠道的那条记录会被替换——历史记的是
+  /// 「听过这首歌」，不该因为换了渠道就在「最近播放」里出现两次。
   Future<void> addHistory(Track track) async {
+    final work = matchableWorkKey(track);
+    if (work != null) {
+      final sameWork = <String>[
+        for (final entry in _history.toMap().entries)
+          if (entry.key != track.key && _historyWorkKey(entry.value) == work)
+            '${entry.key}',
+      ];
+      if (sameWork.isNotEmpty) await _history.deleteAll(sameWork);
+    }
     await _history.put(
       track.key,
       jsonEncode(<String, dynamic>{
-        'at': DateTime.now().millisecondsSinceEpoch,
+        'at': _nextHistoryAt(),
         'track': track.toJson(),
       }),
     );
     await _trimHistory();
+  }
+
+  int _lastHistoryAt = 0;
+
+  /// 严格递增的历史时间戳：同一毫秒内连续记录（快速切歌）时，
+  /// 相同的时间戳会让「最近播放」的先后顺序变得不确定。
+  int _nextHistoryAt() {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    _lastHistoryAt = now > _lastHistoryAt ? now : _lastHistoryAt + 1;
+    return _lastHistoryAt;
   }
 
   /// 按最近优先返回历史记录。
@@ -125,6 +220,18 @@ class LibraryRepository {
   }
 
   Future<void> clearHistory() => _history.clear();
+
+  String? _historyWorkKey(String raw) {
+    try {
+      final map = jsonDecode(raw) as Map<String, dynamic>;
+      final track = Track.fromJson(
+        Map<String, dynamic>.from(map['track'] as Map),
+      );
+      return matchableWorkKey(track);
+    } catch (_) {
+      return null;
+    }
+  }
 
   /// 按曲目 key 批量删除历史记录（资料库「最近播放」的批量移除）。
   ///
@@ -390,10 +497,12 @@ class LibraryRepository {
   /// 改为「先写后删」——任一时刻磁盘上都保留完整可用数据，
   /// 最坏情况是残留少量多余条目，不会出现空库（P1 数据安全回归）。
   Future<void> restoreSnapshot(LibrarySnapshot snapshot) async {
-    await _favorites.putAll(snapshot.favorites);
+    await _writeFavorites(() => _favorites.putAll(snapshot.favorites));
     await _history.putAll(snapshot.history);
     await _playlists.putAll(snapshot.playlists);
-    await _pruneKeys(_favorites, snapshot.favorites.keys);
+    await _writeFavorites(
+      () => _pruneKeys(_favorites, snapshot.favorites.keys),
+    );
     await _pruneKeys(_history, snapshot.history.keys);
     await _pruneKeys(_playlists, snapshot.playlists.keys);
   }

@@ -83,6 +83,11 @@ abstract final class AppTokens {
       brightness: brightness,
       primary: accent,
       secondary: accent,
+      // primary 覆盖成品牌粉后必须同时指定 onPrimary：fromSeed 在深色模式下
+      // 生成的 onPrimary 是深色调，配亮粉底几乎看不清（首页「扫描本地音乐」
+      // 实测）。品牌粉上一律用白字。
+      onPrimary: Colors.white,
+      onSecondary: Colors.white,
       surface: surface,
       onSurface: isDark ? darkTextPrimary : lightTextPrimary,
       surfaceContainerHighest: surfaceHigh,

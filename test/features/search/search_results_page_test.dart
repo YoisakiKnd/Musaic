@@ -441,6 +441,92 @@ void main() {
     expect(repository.createdPlaylists, isEmpty);
     expect(repository.addedTo, isEmpty);
   });
+
+  testWidgets('合并视图按排名交错：各渠道第 1 名排在最前', (tester) async {
+    final netease = _ControllableSource('netease', '网易云音乐');
+    final kugou = _ControllableSource('kugou', '酷狗音乐');
+    final registry =
+        SourceRegistry()
+          ..register(netease)
+          ..register(kugou);
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          sourceRegistryProvider.overrideWithValue(registry),
+          playerNotifierProvider.overrideWith(_StubPlayerNotifier.new),
+          isFavoriteProvider.overrideWith((ref, key) => false),
+        ],
+        child: const MaterialApp(
+          home: SearchResultsPage(
+            query: '测试',
+            results: <String, Object>{},
+            merged: <Track>[],
+            pendingSources: ['netease', 'kugou'],
+          ),
+        ),
+      ),
+    );
+    netease.completeFirstSearch([
+      _track('n1', 'netease', '网易1'),
+      _track('n2', 'netease', '网易2'),
+      _track('n3', 'netease', '网易3'),
+    ]);
+    kugou.completeFirstSearch([
+      _track('k1', 'kugou', '酷狗1'),
+      _track('k2', 'kugou', '酷狗2'),
+    ]);
+    await tester.pumpAndSettle();
+
+    final titles = ['网易1', '酷狗1', '网易2', '酷狗2', '网易3'];
+    final ys = [for (final t in titles) tester.getTopLeft(find.text(t)).dy];
+    expect(ys, orderedEquals([...ys]..sort()), reason: '应为 $titles 的顺序');
+  });
+
+  testWidgets('零结果：说明已搜渠道，并可一键扩展到全部渠道', (tester) async {
+    final kugou = _ControllableSource('kugou', '酷狗音乐');
+    final registry =
+        SourceRegistry()
+          ..register(_StubSource('netease', '网易云音乐'))
+          ..register(kugou);
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          sourceRegistryProvider.overrideWithValue(registry),
+          playerNotifierProvider.overrideWith(_StubPlayerNotifier.new),
+          isFavoriteProvider.overrideWith((ref, key) => false),
+        ],
+        child: const MaterialApp(
+          home: SearchResultsPage(
+            query: '晴天',
+            results: <String, Object>{'netease': <Track>[]},
+            merged: <Track>[],
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('没有找到「晴天」'), findsOneWidget);
+    expect(find.text('已搜索：网易云音乐'), findsOneWidget);
+
+    await tester.tap(find.text('在全部渠道中搜索'));
+    await tester.pump();
+    kugou.completeFirstSearch([_track('k1', 'kugou', '酷狗的晴天')]);
+    await tester.pumpAndSettle();
+
+    expect(find.text('酷狗的晴天'), findsOneWidget);
+  });
+
+  testWidgets('全部渠道都搜过仍为零：不再提供扩展按钮', (tester) async {
+    await _pumpPage(
+      tester,
+      results: <String, Object>{'netease': <Track>[], 'kugou': <Track>[]},
+      merged: const <Track>[],
+    );
+    expect(find.text('已搜索：网易云音乐、酷狗音乐'), findsOneWidget);
+    expect(find.text('在全部渠道中搜索'), findsNothing);
+    expect(find.text('修改关键词'), findsOneWidget);
+  });
 }
 
 /// 内存假仓库：只记录批量存歌单相关的调用，其余成员一律抛错。

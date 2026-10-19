@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hive/hive.dart';
@@ -84,10 +85,11 @@ void main() {
     duration: const Duration(minutes: 3),
   );
 
-  Widget host() {
+  Widget host({String? error, bool pushed = false}) {
     _StubPlayerNotifier.initialState = PlayerState(
       queue: <Track>[song('1')],
       currentIndex: 0,
+      error: error,
     );
     return ProviderScope(
       overrides: [
@@ -105,18 +107,41 @@ void main() {
         ),
         playerNotifierProvider.overrideWith(_StubPlayerNotifier.new),
       ],
-      child: MaterialApp(theme: AppTokens.darkTheme, home: const PlayerPage()),
+      child: MaterialApp(
+        theme: AppTokens.darkTheme,
+        home:
+            pushed
+                ? Builder(
+                  builder:
+                      (context) => Scaffold(
+                        body: TextButton(
+                          onPressed:
+                              () => Navigator.of(context).push(
+                                MaterialPageRoute<void>(
+                                  builder: (_) => const PlayerPage(),
+                                ),
+                              ),
+                          child: const Text('打开播放页'),
+                        ),
+                      ),
+                )
+                : const PlayerPage(),
+      ),
     );
   }
 
   /// 竖屏画布 + 装配播放页。返回后可安全 tap 头部收藏按钮。
-  Future<void> pumpPlayer(WidgetTester tester) async {
-    tester.view.physicalSize = const Size(400, 800);
+  Future<void> pumpPlayer(
+    WidgetTester tester, {
+    String? error,
+    Size size = const Size(400, 800),
+  }) async {
+    tester.view.physicalSize = size;
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
 
-    await tester.pumpWidget(host());
+    await tester.pumpWidget(host(error: error));
     await tester.pumpAndSettle();
   }
 
@@ -129,6 +154,54 @@ void main() {
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 300));
   }
+
+  group('桌面端（横屏）能退出播放页', () {
+    Future<void> openPushed(WidgetTester tester) async {
+      tester.view.physicalSize = const Size(1280, 720);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      await tester.pumpWidget(host(pushed: true));
+      await tester.tap(find.text('打开播放页'));
+      await tester.pumpAndSettle();
+    }
+
+    testWidgets('横屏控件布局有「收起」按钮，点击返回', (tester) async {
+      await openPushed(tester);
+      expect(find.byTooltip('收起（可下滑关闭）'), findsOneWidget);
+      await tester.tap(find.byTooltip('收起（可下滑关闭）'));
+      await tester.pumpAndSettle();
+      expect(find.byType(PlayerPage), findsNothing);
+    });
+
+    testWidgets('Esc 关闭播放页', (tester) async {
+      await openPushed(tester);
+      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+      await tester.pumpAndSettle();
+      expect(find.byType(PlayerPage), findsNothing);
+    });
+  });
+
+  group('错误横幅不遮挡页头', () {
+    // 横幅曾以 Positioned(top: 8) 叠在最上层，竖屏盖住「收起」「喜欢」，
+    // 横屏盖住歌名（Linux 实机截图发现）。现在放在布局流里。
+    for (final (name, size) in [
+      ('竖屏', const Size(400, 800)),
+      ('横屏', const Size(1280, 720)),
+    ]) {
+      testWidgets('$name：出错时页头按钮仍可点击', (tester) async {
+        await pumpPlayer(tester, error: '该曲目暂不可播放', size: size);
+        expect(find.text('该曲目暂不可播放'), findsOneWidget);
+
+        final banner = tester.getRect(find.text('该曲目暂不可播放'));
+        final favorite = tester.getRect(find.byTooltip('喜欢'));
+        expect(banner.overlaps(favorite), isFalse);
+
+        await tapFavorite(tester);
+        expect(repository.toggleCalls, ['netease:1']);
+      });
+    }
+  });
 
   group('播放页收藏失败反馈（计划 3.3）', () {
     testWidgets('收藏写盘失败时给出「收藏失败，请重试」并记日志', (tester) async {
@@ -200,6 +273,9 @@ class _FakeLibraryRepository implements LibraryRepository {
 
   @override
   List<Track> get favorites => List<Track>.of(_favoriteTracks);
+
+  @override
+  bool isFavoriteTrack(Track track) => isFavorite(track.key);
 
   @override
   bool isFavorite(String trackKey) =>

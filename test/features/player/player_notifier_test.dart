@@ -539,13 +539,13 @@ void main() {
       await notifier.playQueue([songOn('primary', '1'), songOn('backup', '2')]);
 
       // 提示必须出现在 state 里：私有字段无法被 ref.listen 观察到
-      final notice = notifier.state.sourceSwitchNotice;
+      final notice = notifier.state.notice;
       expect(notice, isNotNull, reason: '换源必须告知用户，否则会困惑于版本变化');
       expect(notice, contains('primary'));
       expect(notice, contains('backup'));
 
-      notifier.clearSourceSwitchNotice();
-      expect(notifier.state.sourceSwitchNotice, isNull);
+      notifier.clearNotice();
+      expect(notifier.state.notice, isNull);
       container.dispose();
     });
 
@@ -577,7 +577,7 @@ void main() {
 
       await notifier.playQueue([songOn('solo', '1')]);
 
-      expect(notifier.state.sourceSwitchNotice, isNull);
+      expect(notifier.state.notice, isNull);
       expect(notifier.state.playing, isTrue);
       container.dispose();
     });
@@ -981,11 +981,7 @@ void main() {
       await notifier.playQueue([song('1'), song('2')]);
       await Future<void>.delayed(const Duration(milliseconds: 50));
 
-      expect(
-        notifier.state.sourceSwitchNotice,
-        isNull,
-        reason: '预取是后台优化，不该弹任何用户可见提示',
-      );
+      expect(notifier.state.notice, isNull, reason: '预取是后台优化，不该弹任何用户可见提示');
       container.dispose();
     });
 
@@ -1057,11 +1053,11 @@ void main() {
     });
   });
 
-  group('交叉淡入（N4）', () {
+  group('淡入淡出（N4，单播放器）', () {
     test('默认关闭：crossfadeSeconds 为 0，不启用', () async {
       final container = createContainer(queue: [track('a')]);
       final settings = container.read(appSettingsRepositoryProvider);
-      expect(settings.crossfadeSeconds, 0, reason: '交叉淡入需双路解码，默认必须关闭');
+      expect(settings.crossfadeSeconds, 0, reason: '会改变曲末听感，默认必须关闭');
       container.dispose();
     });
 
@@ -1076,55 +1072,110 @@ void main() {
       expect(repo.crossfadeSeconds, 0);
     });
 
-    test('开启后未进入淡入窗口时不推进（剩余时间充足）', () async {
-      final box = _settingsBoxFor();
-      await AppSettingsRepository(box: box).setCrossfadeSeconds(4);
-
-      final container = createContainer(queue: [track('a'), track('b')]);
+    Future<_TestPlayerNotifier> fadingNotifier(ProviderContainer c) async {
+      await AppSettingsRepository(
+        box: _settingsBoxFor(),
+      ).setCrossfadeSeconds(4);
       final notifier =
-          container.read(playerNotifierProvider.notifier)
-              as _TestPlayerNotifier;
-
+          c.read(playerNotifierProvider.notifier) as _TestPlayerNotifier;
       await notifier.playQueue([track('a'), track('b')]);
-      // 曲长 30 秒，远大于 4 秒窗口
-      await Future<void>.delayed(const Duration(milliseconds: 100));
+      return notifier;
+    }
 
-      expect(notifier.debugCrossfading, isFalse, reason: '剩余时间充足时不该开始淡入');
+    test('剩余时间充足时保持设定音量，不进入窗口', () async {
+      final container = createContainer(queue: [track('a'), track('b')]);
+      final notifier = await fadingNotifier(container);
+
+      notifier.debugApplyFade(
+        const Duration(seconds: 10),
+        const Duration(seconds: 30),
+      );
+      expect(notifier.debugInFadeWindow, isFalse);
+      expect(notifier.debugAppliedVolume, closeTo(1.0, 0.01));
       container.dispose();
     });
 
-    test('手动切歌会取消进行中的交叉淡入', () async {
-      final box = _settingsBoxFor();
-      await AppSettingsRepository(box: box).setCrossfadeSeconds(4);
+    test('曲末渐弱：越接近结尾音量越低，结尾为 0', () async {
+      final container = createContainer(queue: [track('a'), track('b')]);
+      final notifier = await fadingNotifier(container);
+      const total = Duration(seconds: 30);
 
+      notifier.debugApplyFade(const Duration(seconds: 27), total);
+      final mid = notifier.debugAppliedVolume!;
+      expect(notifier.debugInFadeWindow, isTrue);
+      expect(mid, lessThan(1.0));
+      expect(mid, greaterThan(0.0));
+
+      notifier.debugApplyFade(total, total);
+      expect(notifier.debugAppliedVolume, closeTo(0.0, 0.01));
+      container.dispose();
+    });
+
+    test('播放器报告的时长未知时不渐弱（元数据时长可能不准）', () async {
+      final container = createContainer(queue: [track('a'), track('b')]);
+      final notifier = await fadingNotifier(container);
+
+      notifier.debugApplyFade(const Duration(seconds: 29), null);
+      expect(notifier.debugInFadeWindow, isFalse);
+      expect(notifier.debugAppliedVolume, closeTo(1.0, 0.01));
+      container.dispose();
+    });
+
+    test('手动切歌立即恢复设定音量（不停在渐弱后的低音量）', () async {
+      final container = createContainer(queue: [track('a'), track('b')]);
+      final notifier = await fadingNotifier(container);
+
+      notifier.debugApplyFade(
+        const Duration(seconds: 29),
+        const Duration(seconds: 30),
+      );
+      expect(notifier.debugAppliedVolume, lessThan(0.5));
+
+      await notifier.next();
+      expect(notifier.debugAppliedVolume, closeTo(1.0, 0.01));
+      container.dispose();
+    });
+
+    test('自然播完推进：下一首从 0 渐强，过了淡入时长后恢复设定音量', () async {
+      final container = createContainer(queue: [track('a'), track('b')]);
+      final notifier = await fadingNotifier(container);
+
+      await notifier.debugAdvanceOnComplete();
+      expect(notifier.state.current?.id, 'b');
+      expect(notifier.debugAppliedVolume, closeTo(0.0, 0.01));
+
+      notifier.debugApplyFade(
+        const Duration(seconds: 2),
+        const Duration(seconds: 30),
+      );
+      final rising = notifier.debugAppliedVolume!;
+      expect(rising, greaterThan(0.0));
+      expect(rising, lessThan(1.0));
+
+      notifier.debugApplyFade(
+        const Duration(seconds: 5),
+        const Duration(seconds: 30),
+      );
+      expect(notifier.debugAppliedVolume, closeTo(1.0, 0.01));
+      expect(notifier.debugInFadeWindow, isFalse);
+      container.dispose();
+    });
+
+    test('关闭时自然推进也直接用设定音量', () async {
       final container = createContainer(queue: [track('a'), track('b')]);
       final notifier =
           container.read(playerNotifierProvider.notifier)
               as _TestPlayerNotifier;
-
       await notifier.playQueue([track('a'), track('b')]);
-      await notifier.next();
-
-      expect(
-        notifier.debugCrossfading,
-        isFalse,
-        reason: '手动切歌必须取消淡入，否则音量会停在半途',
-      );
+      await notifier.debugAdvanceOnComplete();
+      expect(notifier.debugAppliedVolume, closeTo(1.0, 0.01));
       container.dispose();
     });
 
     test('dispose 时不因读 provider 而抛异常（回归）', () async {
-      final box = _settingsBoxFor();
-      await AppSettingsRepository(box: box).setCrossfadeSeconds(4);
-
       final container = createContainer(queue: [track('a')]);
-      final notifier =
-          container.read(playerNotifierProvider.notifier)
-              as _TestPlayerNotifier;
-      await notifier.playQueue([track('a')]);
-
-      // 曾在此处抛「Tried to read a provider from a ProviderContainer
-      // that was already disposed」——dispose 路径不得读 provider
+      final notifier = await fadingNotifier(container);
+      expect(notifier.state.current, isNotNull);
       expect(container.dispose, returnsNormally);
     });
   });
@@ -1199,8 +1250,9 @@ class _FakeSource extends MusicSource {
   @override
   String get sourceId => sourceIdOverride;
 
+  /// 展示名带上渠道 id：换源提示用的是展示名，断言需要区分两个渠道。
   @override
-  String get displayName => 'Fake';
+  String get displayName => 'Fake-$sourceIdOverride';
 
   @override
   AuthCapability get authCapability => AuthCapability.noAuth;

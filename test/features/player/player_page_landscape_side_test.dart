@@ -288,6 +288,9 @@ class _FakeLibraryRepository implements LibraryRepository {
   List<Track> get favorites => List<Track>.of(_favoriteTracks);
 
   @override
+  bool isFavoriteTrack(Track track) => isFavorite(track.key);
+
+  @override
   bool isFavorite(String trackKey) =>
       _favoriteTracks.any((t) => t.key == trackKey);
 

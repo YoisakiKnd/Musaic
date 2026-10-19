@@ -2,7 +2,8 @@ import 'dart:io' show File;
 
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart' show SystemChrome, SystemUiMode;
+import 'package:flutter/services.dart'
+    show LogicalKeyboardKey, SystemChrome, SystemUiMode;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/di/app_providers.dart'
@@ -95,7 +96,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
   Future<void> _toggleFavorite(Track track) async {
     final repository = ref.read(libraryRepositoryProvider);
     final messenger = ScaffoldMessenger.of(context);
-    final wasFavorite = repository.isFavorite(track.key);
+    final wasFavorite = repository.isFavoriteTrack(track);
     try {
       final added = await repository.toggleFavorite(track);
       if (!mounted) return;
@@ -156,18 +157,16 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
     final track = ref.watch(playerNotifierProvider.select((s) => s.current));
     final error = ref.watch(playerNotifierProvider.select((s) => s.error));
 
-    // 换源提示（D7）：以 SnackBar 告知「已切换到其它渠道」，
-    // 避免用户困惑于「怎么换了个版本 / 音质变了」。
+    // 播放提示（换源 D7 / 仅试听片段）：以 SnackBar 告知，
+    // 避免用户困惑于「怎么换了个版本 / 怎么半分钟就切歌了」。
     // 用 ref.listen 而非 watch：这是一次性事件，不是持续状态。
-    ref.listen(playerNotifierProvider.select((s) => s.sourceSwitchNotice), (
-      _,
-      notice,
-    ) {
+    // 不在播放页时由 AppShell 负责弹出。
+    ref.listen(playerNotifierProvider.select((s) => s.notice), (_, notice) {
       if (notice == null) return;
       ScaffoldMessenger.of(
         context,
       ).showSnackBar(SnackBar(content: Text(notice)));
-      ref.read(playerNotifierProvider.notifier).clearSourceSwitchNotice();
+      ref.read(playerNotifierProvider.notifier).clearNotice();
     });
 
     if (track == null) {
@@ -189,55 +188,69 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
     // 强制深色前景：沉浸式背景永远是暗的，浅色主题下也保持 Apple Music 观感
     return Theme(
       data: AppTokens.darkTheme,
-      child: Scaffold(
-        body: AnimatedBuilder(
-          animation: _dismiss,
-          builder: (context, child) {
-            final height = MediaQuery.sizeOf(context).height;
-            return Transform.translate(
-              offset: Offset(0, _dismiss.value * height),
-              child: Opacity(
-                opacity: (1 - _dismiss.value * 0.9).clamp(0.0, 1.0),
-                child: child,
-              ),
-            );
-          },
-          child: GestureDetector(
-            behavior: HitTestBehavior.opaque,
-            // 全页下滑关闭；歌词区的纵向滚动作为子手势优先，不受影响
-            onVerticalDragUpdate: _onDragUpdate,
-            onVerticalDragEnd: _onDragEnd,
-            child: _PlayerBackground(
-              track: track,
-              palette: palette,
-              child: SafeArea(
-                bottom: false,
-                child: Stack(
-                  children: [
-                    OrientationBuilder(
-                      builder:
-                          (context, orientation) =>
-                              orientation == Orientation.landscape
-                                  ? _buildLandscape(track)
-                                  : _buildPortrait(track),
+      // 桌面端：Esc 收起播放页
+      child: CallbackShortcuts(
+        bindings: <ShortcutActivator, VoidCallback>{
+          const SingleActivator(LogicalKeyboardKey.escape):
+              () => Navigator.of(context).maybePop(),
+        },
+        child: Focus(
+          autofocus: true,
+          child: Scaffold(
+            body: AnimatedBuilder(
+              animation: _dismiss,
+              builder: (context, child) {
+                final height = MediaQuery.sizeOf(context).height;
+                return Transform.translate(
+                  offset: Offset(0, _dismiss.value * height),
+                  child: Opacity(
+                    opacity: (1 - _dismiss.value * 0.9).clamp(0.0, 1.0),
+                    child: child,
+                  ),
+                );
+              },
+              child: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                // 全页下滑关闭；歌词区的纵向滚动作为子手势优先，不受影响
+                onVerticalDragUpdate: _onDragUpdate,
+                onVerticalDragEnd: _onDragEnd,
+                child: _PlayerBackground(
+                  track: track,
+                  palette: palette,
+                  child: SafeArea(
+                    bottom: false,
+                    child: Column(
+                      children: [
+                        // 错误横幅：与沉浸模式无关，保证解析超时 / 渠道不可用等
+                        // 失败始终可见且可重试（P0 回归）。
+                        // 放在布局流里（把内容往下推）而不是叠在顶部：叠放时会
+                        // 盖住页头的「收起」「喜欢」按钮和横屏的歌名。
+                        if (error != null)
+                          _PlayerErrorBanner(
+                            message: error,
+                            onRetry:
+                                () =>
+                                    ref
+                                        .read(playerNotifierProvider.notifier)
+                                        .retry(),
+                            onDismiss:
+                                () =>
+                                    ref
+                                        .read(playerNotifierProvider.notifier)
+                                        .clearError(),
+                          ),
+                        Expanded(
+                          child: OrientationBuilder(
+                            builder:
+                                (context, orientation) =>
+                                    orientation == Orientation.landscape
+                                        ? _buildLandscape(track)
+                                        : _buildPortrait(track),
+                          ),
+                        ),
+                      ],
                     ),
-                    // 错误横幅置于最上层：与沉浸模式无关，
-                    // 保证解析超时 / 渠道不可用等失败始终可见且可重试（P0 回归）。
-                    if (error != null)
-                      _PlayerErrorBanner(
-                        message: error,
-                        onRetry:
-                            () =>
-                                ref
-                                    .read(playerNotifierProvider.notifier)
-                                    .retry(),
-                        onDismiss:
-                            () =>
-                                ref
-                                    .read(playerNotifierProvider.notifier)
-                                    .clearError(),
-                      ),
-                  ],
+                  ),
                 ),
               ),
             ),
@@ -304,23 +317,33 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
   }
 
   /// 横屏控制布局：左 = 头部/封面，右 = 标题/进度/控制/音量/功能行。
+  ///
+  /// 头部（收起 / 加入歌单 / 喜欢）曾被漏掉：桌面端窗口恒为横向，
+  /// 打开播放页后只能「按住鼠标下拖」才能退出，几乎无法发现。
   Widget _buildLandscapeControls(Track track) {
     return Row(
       children: [
         Expanded(
-          child: AnimatedSwitcher(
-            duration: AppTokens.durationSlow,
-            switchInCurve: AppTokens.curveEmphasized,
-            child:
-                _showLyrics
-                    ? LyricsView(
-                      key: ValueKey('lyrics-${track.key}'),
-                      track: track,
-                    )
-                    : Padding(
-                      padding: const EdgeInsets.all(16),
-                      child: _ArtworkArea(track: track),
-                    ),
+          child: Column(
+            children: [
+              _buildHeader(track),
+              Expanded(
+                child: AnimatedSwitcher(
+                  duration: AppTokens.durationSlow,
+                  switchInCurve: AppTokens.curveEmphasized,
+                  child:
+                      _showLyrics
+                          ? LyricsView(
+                            key: ValueKey('lyrics-${track.key}'),
+                            track: track,
+                          )
+                          : Padding(
+                            padding: const EdgeInsets.all(16),
+                            child: _ArtworkArea(track: track),
+                          ),
+                ),
+              ),
+            ],
           ),
         ),
         SizedBox(
@@ -437,7 +460,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
             onPressed: () => _toggleFavorite(track),
             icon: Consumer(
               builder: (context, ref, _) {
-                final isFav = ref.watch(isFavoriteProvider(track.key));
+                final isFav = ref.watch(isFavoriteProvider(track));
                 return Icon(
                   isFav
                       ? Icons.favorite_rounded
@@ -556,7 +579,12 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
       duration: const Duration(milliseconds: 200),
       child:
           _immersive
-              ? const SizedBox.shrink(key: ValueKey('actions-anim'))
+              // 沉浸模式隐藏功能行，但底部仍要留白：否则音量条贴着屏幕
+              // 底边，与手势导航的「上滑回桌面」区域重叠，拖音量易误触退出。
+              ? SizedBox(
+                key: const ValueKey('actions-anim'),
+                height: 24 + MediaQuery.viewPaddingOf(context).bottom,
+              )
               : KeyedSubtree(
                 key: const ValueKey('actions-anim-v'),
                 child: _buildActionRow(),
@@ -1180,10 +1208,8 @@ class _PlayerErrorBanner extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    return Positioned(
-      top: 8,
-      left: 12,
-      right: 12,
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
       child: Material(
         color: Colors.transparent,
         child: Container(

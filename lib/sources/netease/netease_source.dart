@@ -103,28 +103,30 @@ class NeteaseSource extends MusicSource
     final keyword = query.trim();
     if (keyword.isEmpty) return const <Track>[];
     try {
+      // 2026-10 实测：/api/search/get/web 的 result 已变为加密的十六进制串，
+      // /api/search/get 会把中文关键词搜成无关结果（「晴天」→「93」）。
+      // cloudsearch/pc 仍返回明文，且 al.picUrl 自带封面，省掉一次补封面请求。
       final response = await _dio.get<dynamic>(
-        '/api/search/get/web',
+        '/api/cloudsearch/pc',
         queryParameters: <String, dynamic>{
-          'csrf_token': '',
-          'hlpretag': '',
-          'hlposttag': '',
           's': keyword,
           'type': 1,
           'offset': offset,
-          'total': true,
           'limit': limit,
         },
         options: Options(responseType: ResponseType.plain),
       );
-      final result = _asMap(_decoded(response)['result']);
-      final songs = asList(result?['songs']);
-      if (songs == null) return const <Track>[];
-      final tracks =
-          songs.map(_trackFromSearchSong).whereType<Track>().toList();
-      // 搜索接口的 result.songs[].album.picUrl 实测恒为 null（EMU/线上验证）：
-      // 用 /api/song/detail 批量接口一次补全封面，失败静默不影响结果
-      await _fillCoversFromDetail(tracks);
+      final List<Track> tracks;
+      try {
+        tracks = parseSearchSongs(_decoded(response));
+      } on FormatException catch (e) {
+        AppLog.debug('search 响应无法解析: ${e.message}', tag: 'MusaicNetease');
+        throw NetworkSourceException('搜索接口暂时不可用，请稍后重试', sourceId: sourceId);
+      }
+      // 旧接口结构里封面恒为 null：只为缺封面的曲目补一次，失败静默
+      if (tracks.any((t) => t.coverUrl == null)) {
+        await _fillCoversFromDetail(tracks);
+      }
       return List.unmodifiable(tracks);
     } on DioException catch (e) {
       AppLog.debug(
@@ -206,6 +208,9 @@ class NeteaseSource extends MusicSource
       return ResolvedStream(
         url: secureUrl,
         headers: <String, String>{'Referer': 'https://music.163.com'},
+        // 会员曲目在未登录 / 非会员时仍返回 code 200，但地址只是试听片段，
+        // 以 freeTrialInfo 非空为标志。
+        isPreview: item?['freeTrialInfo'] != null,
       );
     } on DioException {
       throw NetworkSourceException('获取播放地址失败：网络异常', sourceId: sourceId);
@@ -860,18 +865,39 @@ class NeteaseSource extends MusicSource
     }
   }
 
-  Track? _trackFromSearchSong(dynamic raw) {
-    final song = _asMap(raw);
+  /// 解析搜索响应体为曲目列表。
+  ///
+  /// - `result` 是对象但没有 `songs`：确实没有结果，返回空列表；
+  /// - `result` 缺失或不是对象（如被加密成字符串）：抛 [FormatException]。
+  ///   **不能**当作「没有结果」——那会让接口变更伪装成「搜不到」，
+  ///   用户只会以为这首歌不存在。
+  @visibleForTesting
+  static List<Track> parseSearchSongs(dynamic body) {
+    final map = asMap(body);
+    final code = asIntOrNull(map?['code']);
+    final result = asMap(map?['result']);
+    if (result == null) {
+      throw FormatException('result 不是对象（code=$code）');
+    }
+    final songs = asList(result['songs']);
+    if (songs == null) return <Track>[];
+    return songs.map(_trackFromSearchSong).whereType<Track>().toList();
+  }
+
+  /// 兼容两种曲目结构：cloudsearch 的 `ar/al/dt` 与旧接口的
+  /// `artists/album/duration`。
+  static Track? _trackFromSearchSong(dynamic raw) {
+    final song = asMap(raw);
     if (song == null) return null;
     final songId = asIntOrNull(song['id']);
     final name = asStringOrNull(song['name']);
     if (songId == null || name == null) return null;
-    final artists = (asList(song['artists']) ?? const <dynamic>[])
-        .map((a) => asStringOrNull(_asMap(a)?['name']))
+    final artists = (asList(song['ar'] ?? song['artists']) ?? const <dynamic>[])
+        .map((a) => asStringOrNull(asMap(a)?['name']))
         .whereType<String>()
         .join('/');
-    final album = _asMap(song['album']);
-    final durationMs = asIntOrNull(song['duration']);
+    final album = asMap(song['al'] ?? song['album']);
+    final durationMs = asIntOrNull(song['dt'] ?? song['duration']);
     return Track(
       id: '$songId',
       sourceId: NeteaseSource.id,

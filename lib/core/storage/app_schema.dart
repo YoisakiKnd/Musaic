@@ -42,6 +42,7 @@ abstract final class AppSchema {
   static const int localMusicSettingsVersion = 1;
   static const int appSettingsVersion = 1;
   static const int resumeVersion = 1;
+  static const int lyricsCacheVersion = 1;
 
   /// Box 名 → 目标版本。
   static const Map<String, int> targetVersions = <String, int>{
@@ -53,6 +54,7 @@ abstract final class AppSchema {
     'local_music_settings': localMusicSettingsVersion,
     'app_settings': appSettingsVersion,
     'musaic_resume': resumeVersion,
+    'musaic_lyrics_cache': lyricsCacheVersion,
   };
 
   /// Box 名 → 迁移步骤（按 `toVersion` 升序）。
