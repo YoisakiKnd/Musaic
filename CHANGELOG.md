@@ -3,7 +3,9 @@
 本文件记录 Musaic 的版本变更。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)。
 
-## [Unreleased]
+## [1.1.0] - 2026-10-19
+
+日常使用打磨版：修复多渠道搜索失效、播放中断卡死等问题，并按实机走查补齐操作逻辑。
 
 ### 新增
 
@@ -111,4 +113,5 @@
 - 歌单按渠道相关键去重，同一首歌的多个渠道版本**刻意共存**（音质 / 版权 / 会员各渠道不同）。
 - 本项目仅用于学习研究，只调用各渠道公开接口，不破解、不缓存受限内容，请支持正版音乐服务。
 
+[1.1.0]: https://github.com/YoisakiKnd/Musaic/releases/tag/v1.1.0
 [1.0.0]: https://github.com/YoisakiKnd/Musaic/releases/tag/v1.0.0
