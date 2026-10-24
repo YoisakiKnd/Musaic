@@ -5,132 +5,144 @@ import '../../../core/theme/app_tokens.dart';
 import '../domain/queue_logic.dart';
 import '../player_notifier.dart';
 
-/// 全屏播放器的控制区（模式 / 上一首 / 播放暂停 / 下一首）。
+/// 播放控制区（随机 / 上一首 / 播放暂停 / 下一首 / 循环模式）。
+///
+/// [compact] 用于底部播放条：按钮更小、间距更紧。
+///
+/// 只订阅控制区用得到的字段：此前 watch 完整播放状态，
+/// 播放中每 100ms 的进度更新都会让整排按钮重建。
 class PlayerControls extends ConsumerWidget {
-  const PlayerControls({super.key, this.accentColor});
+  const PlayerControls({super.key, this.accentColor, this.compact = false});
 
   final Color? accentColor;
+  final bool compact;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final notifier = ref.read(playerNotifierProvider.notifier);
-    final state = ref.watch(playerNotifierProvider);
+    final shuffleOn = ref.watch(
+      playerNotifierProvider.select((s) => s.shuffleOn),
+    );
+    final mode = ref.watch(playerNotifierProvider.select((s) => s.mode));
+    final hasQueue = ref.watch(
+      playerNotifierProvider.select((s) => s.hasQueue),
+    );
     final accent = accentColor ?? AppTokens.accent;
     final scheme = Theme.of(context).colorScheme;
+    final dim = scheme.onSurface.withValues(alpha: 0.6);
+    final skipSize = compact ? 26.0 : 36.0;
+    final sideSize = compact ? 18.0 : 22.0;
 
+    final children = <Widget>[
+      IconButton(
+        tooltip: '随机播放',
+        onPressed: notifier.toggleShuffle,
+        icon: Icon(
+          Icons.shuffle_rounded,
+          size: sideSize,
+          color: shuffleOn ? accent : dim,
+        ),
+      ),
+      IconButton(
+        tooltip: '上一首',
+        onPressed: hasQueue ? notifier.previous : null,
+        icon: Icon(
+          Icons.skip_previous_rounded,
+          size: skipSize,
+          color: scheme.onSurface,
+        ),
+      ),
+      PlayPauseButton(size: compact ? 40 : 72),
+      IconButton(
+        tooltip: '下一首',
+        onPressed: hasQueue ? notifier.next : null,
+        icon: Icon(
+          Icons.skip_next_rounded,
+          size: skipSize,
+          color: scheme.onSurface,
+        ),
+      ),
+      IconButton(
+        tooltip: switch (mode) {
+          PlayMode.sequential => '顺序播放',
+          PlayMode.loopAll => '列表循环',
+          PlayMode.loopOne => '单曲循环',
+        },
+        onPressed:
+            () => notifier.setMode(switch (mode) {
+              PlayMode.sequential => PlayMode.loopAll,
+              PlayMode.loopAll => PlayMode.loopOne,
+              PlayMode.loopOne => PlayMode.sequential,
+            }),
+        icon: Icon(
+          switch (mode) {
+            PlayMode.sequential => Icons.repeat_rounded,
+            PlayMode.loopAll => Icons.repeat_rounded,
+            PlayMode.loopOne => Icons.repeat_one_rounded,
+          },
+          size: sideSize,
+          color: mode == PlayMode.sequential ? dim : accent,
+        ),
+      ),
+    ];
+
+    if (compact) {
+      return Row(mainAxisSize: MainAxisSize.min, children: children);
+    }
     return Row(
       mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-      children: [
-        IconButton(
-          tooltip: '随机播放',
-          onPressed: notifier.toggleShuffle,
-          icon: Icon(
-            Icons.shuffle_rounded,
-            size: 22,
-            color:
-                state.shuffleOn
-                    ? accent
-                    : scheme.onSurface.withValues(alpha: 0.6),
-          ),
-        ),
-        IconButton(
-          tooltip: '上一首',
-          onPressed: state.hasQueue ? notifier.previous : null,
-          icon: Icon(
-            Icons.skip_previous_rounded,
-            size: 36,
-            color: scheme.onSurface,
-          ),
-        ),
-        _PlayPauseButton(state: state, accent: accent),
-        IconButton(
-          tooltip: '下一首',
-          onPressed: state.hasQueue ? notifier.next : null,
-          icon: Icon(
-            Icons.skip_next_rounded,
-            size: 36,
-            color: scheme.onSurface,
-          ),
-        ),
-        IconButton(
-          tooltip: '播放模式',
-          onPressed: () {
-            switch (state.mode) {
-              case PlayMode.sequential:
-                notifier.setMode(PlayMode.loopAll);
-              case PlayMode.loopAll:
-                notifier.setMode(PlayMode.loopOne);
-              case PlayMode.loopOne:
-                notifier.setMode(PlayMode.sequential);
-            }
-          },
-          icon: Icon(
-            switch (state.mode) {
-              PlayMode.sequential => Icons.format_list_numbered_rounded,
-              PlayMode.loopAll => Icons.repeat_rounded,
-              PlayMode.loopOne => Icons.repeat_one_rounded,
-            },
-            size: 22,
-            color:
-                state.mode == PlayMode.sequential
-                    ? scheme.onSurface.withValues(alpha: 0.6)
-                    : accent,
-          ),
-        ),
-      ],
+      children: children,
     );
   }
 }
 
-class _PlayPauseButton extends ConsumerWidget {
-  const _PlayPauseButton({required this.state, required this.accent});
+/// 圆形播放/暂停按钮（播放页大号 / 播放条小号 / 迷你条共用）。
+class PlayPauseButton extends ConsumerWidget {
+  const PlayPauseButton({super.key, this.size = 72, this.filled = true});
 
-  final PlayerState state;
-  final Color accent;
+  final double size;
+
+  /// false 时只画图标（迷你条用），不画品牌色圆底。
+  final bool filled;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final notifier = ref.read(playerNotifierProvider.notifier);
-    final busy = state.loading;
+    final playing = ref.watch(playerNotifierProvider.select((s) => s.playing));
+    final busy = ref.watch(playerNotifierProvider.select((s) => s.loading));
+    final hasQueue = ref.watch(
+      playerNotifierProvider.select((s) => s.hasQueue),
+    );
+    final fg = filled ? Colors.white : Theme.of(context).colorScheme.onSurface;
 
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        gradient: AppTokens.brandGradient,
-        shape: BoxShape.circle,
-        boxShadow: [
-          BoxShadow(
-            color: accent.withValues(alpha: 0.35),
-            blurRadius: 24,
-            offset: const Offset(0, 8),
-          ),
-        ],
-      ),
+    return Tooltip(
+      message: playing ? '暂停' : '播放',
       child: Material(
-        color: Colors.transparent,
+        color: filled ? AppTokens.accent : Colors.transparent,
         shape: const CircleBorder(),
         child: InkWell(
           customBorder: const CircleBorder(),
-          onTap: busy || !state.hasQueue ? null : notifier.toggle,
+          onTap: busy || !hasQueue ? null : notifier.toggle,
           child: SizedBox(
-            width: 72,
-            height: 72,
+            width: size,
+            height: size,
             child: Center(
               child:
                   busy
                       ? SizedBox(
-                        width: 26,
-                        height: 26,
+                        width: size * 0.36,
+                        height: size * 0.36,
                         child: CircularProgressIndicator(
-                          strokeWidth: 2.4,
-                          color: Colors.white.withValues(alpha: 0.9),
+                          strokeWidth: size > 50 ? 2.4 : 2,
+                          color: fg.withValues(alpha: 0.9),
                         ),
                       )
                       : Icon(
-                        state.playing
+                        playing
                             ? Icons.pause_rounded
                             : Icons.play_arrow_rounded,
-                        size: 42,
-                        color: Colors.white,
+                        size: size * 0.58,
+                        color: fg,
                       ),
             ),
           ),

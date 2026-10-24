@@ -12,6 +12,7 @@ import '../shared/widgets/text_input_dialog.dart';
 import '../shared/widgets/track_tile.dart';
 import 'data/library_providers.dart';
 import 'data/library_repository.dart';
+import '../player/open_player.dart';
 
 /// 歌单详情（Master Plan P6）：播放全部 / 移除单曲 / 重命名。
 class PlaylistDetailPage extends ConsumerWidget {
@@ -67,6 +68,7 @@ class PlaylistDetailPage extends ConsumerWidget {
     final messenger = ScaffoldMessenger.of(context);
     final order = await showModalBottomSheet<PlaylistSortOrder>(
       context: context,
+      useRootNavigator: true,
       builder:
           (sheetContext) => SafeArea(
             child: Column(
@@ -123,7 +125,7 @@ class PlaylistDetailPage extends ConsumerWidget {
                       ref
                           .read(playerNotifierProvider.notifier)
                           .shufflePlay(tracksAsync.requireValue);
-                      context.push('/player');
+                      openPlayerAfterPlay(context);
                     },
             icon: const Icon(Icons.shuffle_rounded),
           ),
@@ -181,7 +183,7 @@ class PlaylistDetailPage extends ConsumerWidget {
                         ref
                             .read(playerNotifierProvider.notifier)
                             .playQueue(tracks);
-                        context.push('/player');
+                        openPlayerAfterPlay(context);
                       },
                       icon: const Icon(Icons.play_arrow_rounded),
                       label: const Text('播放全部'),

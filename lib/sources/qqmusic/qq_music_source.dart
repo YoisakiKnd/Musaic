@@ -886,6 +886,9 @@ class QqMusicSource extends MusicSource
 
   // ---------- 账号歌单能力（RemotePlaylistCapable） ----------
 
+  @override
+  bool get remotePlaylistsArePersonal => true;
+
   /// 歌单详情单次请求的曲目上限。
   ///
   /// `song_num` 直接给 1000 而非分页：QQ 自建歌单的容量上限本就接近该值，

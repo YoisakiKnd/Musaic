@@ -10,6 +10,7 @@ import '../../core/source/capabilities.dart';
 import '../../core/theme/app_tokens.dart';
 import '../shared/widgets/confirm_dialog.dart';
 import 'data/local_music_settings_repository.dart';
+import '../shared/widgets/readable_width.dart';
 
 /// 本地音乐设置页：扫描文件夹管理 + 扫描偏好 + 立即扫描。
 class LocalMusicSettingsPage extends ConsumerStatefulWidget {
@@ -143,162 +144,164 @@ class _LocalMusicSettingsPageState
 
     return Scaffold(
       appBar: AppBar(title: const Text('本地音乐')),
-      body: ListView(
-        padding: const EdgeInsets.fromLTRB(16, 8, 16, 40),
-        children: [
-          // ---------- 扫描文件夹 ----------
-          Row(
-            children: [
-              Expanded(
-                child: Text(
-                  '扫描文件夹（${folders.length}）',
-                  style: const TextStyle(
-                    fontSize: 15,
-                    fontWeight: FontWeight.w700,
+      body: ReadableWidth(
+        child: ListView(
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 40),
+          children: [
+            // ---------- 扫描文件夹 ----------
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    '扫描文件夹（${folders.length}）',
+                    style: const TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w700,
+                    ),
                   ),
                 ),
-              ),
-              IconButton(
-                tooltip: '前往文件管理器选择文件夹',
-                icon: const Icon(
-                  Icons.create_new_folder_rounded,
-                  color: AppTokens.accent,
-                ),
-                onPressed: _pickAndAddFolder,
-              ),
-            ],
-          ),
-          if (folders.isEmpty)
-            Card(
-              child: ListTile(
-                leading: Icon(
-                  Icons.folder_off_rounded,
-                  color: scheme.onSurface.withValues(alpha: 0.4),
-                ),
-                title: const Text('尚未添加文件夹'),
-                subtitle: Text(
-                  '添加音乐文件夹后点击「立即扫描」建立本地曲库',
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: scheme.onSurface.withValues(alpha: 0.55),
-                  ),
-                ),
-              ),
-            )
-          else
-            for (final folder in folders)
-              Card(
-                child: ListTile(
-                  leading: const Icon(
-                    Icons.folder_rounded,
+                IconButton(
+                  tooltip: '前往文件管理器选择文件夹',
+                  icon: const Icon(
+                    Icons.create_new_folder_rounded,
                     color: AppTokens.accent,
                   ),
-                  title: Text(folder, style: const TextStyle(fontSize: 13)),
-                  trailing: IconButton(
-                    tooltip: '移除',
-                    icon: Icon(
-                      Icons.close_rounded,
-                      size: 20,
-                      color: scheme.onSurface.withValues(alpha: 0.5),
+                  onPressed: _pickAndAddFolder,
+                ),
+              ],
+            ),
+            if (folders.isEmpty)
+              Card(
+                child: ListTile(
+                  leading: Icon(
+                    Icons.folder_off_rounded,
+                    color: scheme.onSurface.withValues(alpha: 0.4),
+                  ),
+                  title: const Text('尚未添加文件夹'),
+                  subtitle: Text(
+                    '添加音乐文件夹后点击「立即扫描」建立本地曲库',
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: scheme.onSurface.withValues(alpha: 0.55),
                     ),
-                    onPressed: () async {
-                      // 移除后该目录的曲目会从本地曲库消失（需重新添加并
-                      // 扫描才能恢复），因此先确认再执行（计划 2.1）。
-                      final confirmed = await confirmDestructiveAction(
-                        context,
-                        title: '移除该文件夹？',
-                        message:
-                            '将从本地曲库中移除此文件夹及其中的曲目；'
-                            '重新添加并扫描可恢复。',
-                        confirmLabel: '移除',
-                      );
-                      if (!confirmed || !mounted) return;
-                      await _repo.removeFolder(folder);
-                      if (!mounted) return;
-                      setState(() {});
-                    },
+                  ),
+                ),
+              )
+            else
+              for (final folder in folders)
+                Card(
+                  child: ListTile(
+                    leading: const Icon(
+                      Icons.folder_rounded,
+                      color: AppTokens.accent,
+                    ),
+                    title: Text(folder, style: const TextStyle(fontSize: 13)),
+                    trailing: IconButton(
+                      tooltip: '移除',
+                      icon: Icon(
+                        Icons.close_rounded,
+                        size: 20,
+                        color: scheme.onSurface.withValues(alpha: 0.5),
+                      ),
+                      onPressed: () async {
+                        // 移除后该目录的曲目会从本地曲库消失（需重新添加并
+                        // 扫描才能恢复），因此先确认再执行（计划 2.1）。
+                        final confirmed = await confirmDestructiveAction(
+                          context,
+                          title: '移除该文件夹？',
+                          message:
+                              '将从本地曲库中移除此文件夹及其中的曲目；'
+                              '重新添加并扫描可恢复。',
+                          confirmLabel: '移除',
+                        );
+                        if (!confirmed || !mounted) return;
+                        await _repo.removeFolder(folder);
+                        if (!mounted) return;
+                        setState(() {});
+                      },
+                    ),
+                  ),
+                ),
+            const SizedBox(height: 4),
+            Center(
+              child: TextButton.icon(
+                onPressed: _addAppFolder,
+                icon: const Icon(Icons.inventory_2_outlined, size: 16),
+                label: const Text(
+                  '添加应用内置目录（无需权限）',
+                  style: TextStyle(fontSize: 12),
+                ),
+              ),
+            ),
+            const SizedBox(height: 8),
+            FilledButton.icon(
+              style: FilledButton.styleFrom(
+                backgroundColor: AppTokens.accent,
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(vertical: 14),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(24),
+                ),
+              ),
+              onPressed: _scanning ? null : _scan,
+              icon:
+                  _scanning
+                      ? const SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: Colors.white,
+                        ),
+                      )
+                      : const Icon(Icons.radar_rounded),
+              label: Text(_scanning ? '正在扫描…' : '立即扫描'),
+            ),
+            if (_lastCount != null) ...[
+              const SizedBox(height: 8),
+              Center(
+                child: Text(
+                  '上次扫描：$_lastCount 首',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: scheme.onSurface.withValues(alpha: 0.5),
                   ),
                 ),
               ),
-          const SizedBox(height: 4),
-          Center(
-            child: TextButton.icon(
-              onPressed: _addAppFolder,
-              icon: const Icon(Icons.inventory_2_outlined, size: 16),
-              label: const Text(
-                '添加应用内置目录（无需权限）',
-                style: TextStyle(fontSize: 12),
-              ),
+            ],
+            const SizedBox(height: 16),
+            // ---------- 扫描设置 ----------
+            const Text(
+              '扫描设置',
+              style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700),
             ),
-          ),
-          const SizedBox(height: 8),
-          FilledButton.icon(
-            style: FilledButton.styleFrom(
-              backgroundColor: AppTokens.accent,
-              foregroundColor: Colors.white,
-              padding: const EdgeInsets.symmetric(vertical: 14),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(24),
-              ),
-            ),
-            onPressed: _scanning ? null : _scan,
-            icon:
-                _scanning
-                    ? const SizedBox(
-                      width: 18,
-                      height: 18,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2,
-                        color: Colors.white,
-                      ),
-                    )
-                    : const Icon(Icons.radar_rounded),
-            label: Text(_scanning ? '正在扫描…' : '立即扫描'),
-          ),
-          if (_lastCount != null) ...[
             const SizedBox(height: 8),
-            Center(
-              child: Text(
-                '上次扫描：$_lastCount 首',
-                style: TextStyle(
-                  fontSize: 12,
-                  color: scheme.onSurface.withValues(alpha: 0.5),
+            Card(
+              child: SwitchListTile(
+                title: const Text('启动时自动扫描'),
+                subtitle: const Text(
+                  '打开应用时在后台刷新本地曲库',
+                  style: TextStyle(fontSize: 12),
                 ),
+                value: repo.autoScanOnStartup,
+                activeThumbColor: AppTokens.accent,
+                onChanged: (value) async {
+                  await _repo.setAutoScanOnStartup(value);
+                  if (mounted) setState(() {});
+                },
+              ),
+            ),
+            const SizedBox(height: 16),
+            Text(
+              '提示：Android 13+ 首次扫描会请求「音乐和音频」权限；'
+              '内置目录（应用文档目录）无需权限。',
+              style: TextStyle(
+                fontSize: 11,
+                color: scheme.onSurface.withValues(alpha: 0.45),
               ),
             ),
           ],
-          const SizedBox(height: 16),
-          // ---------- 扫描设置 ----------
-          const Text(
-            '扫描设置',
-            style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700),
-          ),
-          const SizedBox(height: 8),
-          Card(
-            child: SwitchListTile(
-              title: const Text('启动时自动扫描'),
-              subtitle: const Text(
-                '打开应用时在后台刷新本地曲库',
-                style: TextStyle(fontSize: 12),
-              ),
-              value: repo.autoScanOnStartup,
-              activeThumbColor: AppTokens.accent,
-              onChanged: (value) async {
-                await _repo.setAutoScanOnStartup(value);
-                if (mounted) setState(() {});
-              },
-            ),
-          ),
-          const SizedBox(height: 16),
-          Text(
-            '提示：Android 13+ 首次扫描会请求「音乐和音频」权限；'
-            '内置目录（应用文档目录）无需权限。',
-            style: TextStyle(
-              fontSize: 11,
-              color: scheme.onSurface.withValues(alpha: 0.45),
-            ),
-          ),
-        ],
+        ),
       ),
     );
   }

@@ -281,6 +281,7 @@ class _SearchResultsPageState extends ConsumerState<SearchResultsPage> {
     final names = repository.playlistNames;
     final target = await showModalBottomSheet<String>(
       context: context,
+      useRootNavigator: true,
       showDragHandle: true,
       builder:
           (sheetContext) => SafeArea(
@@ -777,6 +778,7 @@ class _SearchResultsPageState extends ConsumerState<SearchResultsPage> {
                   child: TrackTile(
                     key: ValueKey('grouped-${track.key}'),
                     track: track,
+                    showSource: false,
                     // 换源候选要跨渠道：传全部结果而非本渠道分组
                     queue: _tracks,
                     keepQueue: true,

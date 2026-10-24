@@ -125,6 +125,12 @@ abstract class WebLoginCapable {
 
 /// 具备「登录后拉取账号歌单」能力的渠道。
 abstract class RemotePlaylistCapable {
+  /// 返回的是否为**账号本人**的歌单。
+  ///
+  /// 酷狗目前只接了公开的推荐歌单链（无需登录），不能当成「我的歌单」
+  /// 混进首页，也不能在资料库里标成账号歌单。
+  bool get remotePlaylistsArePersonal;
+
   /// 当前登录账号（[userId] 来自 [SourceAccount]）的歌单列表。
   Future<List<RemotePlaylist>> fetchRemotePlaylists(String userId);
 

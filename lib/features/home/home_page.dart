@@ -8,16 +8,22 @@ import '../../core/di/app_providers.dart';
 import '../../core/source/capabilities.dart';
 import '../../core/theme/app_tokens.dart';
 import '../../core/utils/nav_intent.dart';
+import '../auth/presentation/channel/account_manage_page.dart';
 import '../library/data/library_providers.dart';
+import '../library/data/remote_playlists_provider.dart';
+import '../library/playlist_detail_page.dart';
+import '../library/playlists_tab.dart';
+import '../library/widgets/playlist_card.dart';
 import '../player/player_notifier.dart';
 import '../shared/error_text.dart';
 import '../shared/widgets/track_cover.dart';
 import '../shared/widgets/track_tile.dart';
+import '../player/open_player.dart';
 
 /// 资料库 Tab 索引（与 `LibraryPage` 的 TabBar 顺序一致）。
-enum LibraryTab { favorites, history, playlists }
+enum LibraryTab { playlists, favorites, history }
 
-/// 首页（传统 Material 风格）：标准 AppBar + 列表式最近播放。
+/// 首页：继续收听 / 我喜欢 / 我的歌单 / 最近播放。
 class HomePage extends ConsumerStatefulWidget {
   const HomePage({super.key});
 
@@ -60,17 +66,20 @@ class _HomePageState extends ConsumerState<HomePage> {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text(
-          'Musaic',
-          style: TextStyle(fontWeight: FontWeight.w800),
+        toolbarHeight: 64,
+        title: Text(
+          _greeting(DateTime.now()),
+          style: Theme.of(context).textTheme.headlineSmall,
         ),
         actions: [
-          IconButton(
-            tooltip: '设置与账号',
-            // push 而非 go：go 会替换导航栈，系统返回会直接退出应用
-            onPressed: () => context.push('/settings'),
-            icon: const Icon(Icons.settings_rounded),
-          ),
+          // 平板 / 桌面的导航栏轨和侧边栏里已有「设置」
+          if (MediaQuery.sizeOf(context).width < AppTokens.mediumBreakpoint)
+            IconButton(
+              tooltip: '设置与账号',
+              // push 而非 go：go 会替换导航栈，系统返回会直接退出应用
+              onPressed: () => context.push('/settings'),
+              icon: const Icon(Icons.settings_outlined),
+            ),
           const SizedBox(width: 4),
         ],
       ),
@@ -80,34 +89,299 @@ class _HomePageState extends ConsumerState<HomePage> {
             (e, _) =>
                 Center(child: Text(loadFailureText(e, tag: 'MusaicHome'))),
         data: (tracks) {
-          // 头部两项常驻（继续收听卡无快照时自身收成零尺寸 + 快捷入口），
-          // 下方交给 Expanded：空态仍能像以前一样垂直居中，
-          // 有历史时列表继续走 builder 按需构建（最近播放上限 50 条）。
-          return Column(
+          // 首页 = 继续收听 + 我喜欢 + 我的歌单 + 最近播放。
+          // 此前只有三个写着数字的方块和一串历史，登录后的账号歌单
+          // 完全不出现在首页（真机反馈「登录之后也没有看到歌单」）。
+          final recent = tracks.take(_recentLimit).toList(growable: false);
+          return ListView(
+            padding: const EdgeInsets.only(bottom: 24),
             children: [
               const _ResumeCard(),
-              const _QuickEntries(),
-              Expanded(
-                child:
-                    tracks.isEmpty
-                        ? _EmptyHome(
-                          onScan: _scanLocalLibrary,
-                          scanning: _scanning,
-                        )
-                        : ListView.builder(
-                          padding: const EdgeInsets.only(bottom: 24),
-                          itemCount: tracks.length,
-                          itemBuilder:
-                              (context, index) => TrackTile(
-                                track: tracks[index],
-                                queue: tracks,
-                              ),
-                        ),
-              ),
+              const _FavoritesBanner(),
+              const _HomePlaylistsSection(),
+              if (tracks.isEmpty)
+                Padding(
+                  padding: const EdgeInsets.only(top: 56),
+                  child: _EmptyHome(
+                    onScan: _scanLocalLibrary,
+                    scanning: _scanning,
+                  ),
+                )
+              else ...[
+                _HomeSectionHeader(
+                  title: '最近播放',
+                  onMore: () => openLibraryTab(context, LibraryTab.history),
+                ),
+                for (final track in recent)
+                  TrackTile(track: track, queue: tracks),
+              ],
             ],
           );
         },
       ),
+    );
+  }
+
+  static String _greeting(DateTime now) => switch (now.hour) {
+    >= 5 && < 11 => '早上好',
+    >= 11 && < 13 => '中午好',
+    >= 13 && < 18 => '下午好',
+    _ => '晚上好',
+  };
+
+  /// 首页只露出最近 [_recentLimit] 首，完整列表在资料库。
+  static const int _recentLimit = 8;
+}
+
+/// 切到资料库分支并指定 Tab。
+///
+/// 用 [NavIntent] 携带索引，保证「先点歌单、再点歌单」这类重复点击也能生效。
+void openLibraryTab(BuildContext context, LibraryTab tab) {
+  context.go('/library', extra: NavIntent<int>(tab.index));
+}
+
+/// 首页分区标题：左侧标题，右侧「全部」。
+class _HomeSectionHeader extends StatelessWidget {
+  const _HomeSectionHeader({required this.title, this.onMore});
+
+  final String title;
+  final VoidCallback? onMore;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(20, 16, 8, 4),
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(
+              title,
+              style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800),
+            ),
+          ),
+          if (onMore != null)
+            TextButton(
+              onPressed: onMore,
+              style: TextButton.styleFrom(
+                foregroundColor: Theme.of(
+                  context,
+                ).colorScheme.onSurface.withValues(alpha: 0.6),
+              ),
+              child: const Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [Text('全部'), Icon(Icons.chevron_right_rounded)],
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+/// 「我喜欢的音乐」横幅：点击进收藏列表，右侧按钮直接播放全部。
+class _FavoritesBanner extends ConsumerWidget {
+  const _FavoritesBanner();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final favorites = ref.watch(favoritesProvider).valueOrNull;
+    final scheme = Theme.of(context).colorScheme;
+    return Card(
+      margin: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        onTap: () => openLibraryTab(context, LibraryTab.favorites),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
+          child: Row(
+            children: [
+              Container(
+                width: 52,
+                height: 52,
+                decoration: BoxDecoration(
+                  gradient: AppTokens.brandGradient,
+                  borderRadius: BorderRadius.circular(14),
+                ),
+                child: const Icon(
+                  Icons.favorite_rounded,
+                  color: Colors.white,
+                  size: 26,
+                ),
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      '我喜欢的音乐',
+                      style: TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      // 数据未就绪时不写 0：0 是「确实没有」的结论
+                      favorites == null
+                          ? '—'
+                          : favorites.isEmpty
+                          ? '点歌曲旁的 ♡ 收藏'
+                          : '${favorites.length} 首',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: scheme.onSurface.withValues(alpha: 0.55),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              if (favorites != null && favorites.isNotEmpty)
+                IconButton.filled(
+                  tooltip: '播放全部喜欢',
+                  style: IconButton.styleFrom(
+                    backgroundColor: AppTokens.accent,
+                    foregroundColor: Colors.white,
+                  ),
+                  onPressed:
+                      () => ref
+                          .read(playerNotifierProvider.notifier)
+                          .playQueue(favorites),
+                  icon: const Icon(Icons.play_arrow_rounded),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// 「我的歌单」横滑：各渠道账号歌单 + 本地歌单。
+///
+/// 只汇总**账号本人**的歌单（[RemotePlaylistCapable.remotePlaylistsArePersonal]），
+/// 推荐歌单留在资料库里单独成节。没有登录任何可同步渠道时，
+/// 末尾放一张「同步账号歌单」卡引导登录。
+class _HomePlaylistsSection extends ConsumerWidget {
+  const _HomePlaylistsSection();
+
+  static const double _cardWidth = 128;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final sources = ref.watch(sourceRegistryProvider).all;
+    final cards = <Widget>[];
+    final failed = <String>[];
+    var loading = false;
+    var hasPersonalSource = false;
+    var anyLoggedIn = false;
+
+    for (final source in sources) {
+      if (source is! RemotePlaylistCapable) continue;
+      final personal =
+          (source as RemotePlaylistCapable).remotePlaylistsArePersonal;
+      if (!personal) continue;
+      hasPersonalSource = true;
+      if (ref.watch(remotePlaylistCapableProvider(source.sourceId)) == null) {
+        continue;
+      }
+      anyLoggedIn = true;
+      final async = ref.watch(remotePlaylistsProvider(source.sourceId));
+      switch (async) {
+        case AsyncData(:final value):
+          for (final playlist in value) {
+            cards.add(
+              RemotePlaylistCard(playlist: playlist, badge: source.displayName),
+            );
+          }
+        case AsyncError():
+          failed.add(source.sourceId);
+        default:
+          loading = true;
+      }
+    }
+
+    final localNames = ref.watch(playlistsProvider).valueOrNull ?? const [];
+    for (final name in localNames) {
+      cards.add(
+        LocalPlaylistCard(
+          name: name,
+          // 在首页分支内打开：底部导航停留在「首页」，返回回到首页
+          onOpen:
+              () => Navigator.of(context).push(
+                MaterialPageRoute<void>(
+                  builder: (_) => PlaylistDetailPage(name: name),
+                ),
+              ),
+        ),
+      );
+    }
+    if (hasPersonalSource && !anyLoggedIn) {
+      cards.add(
+        PlaylistActionCard(
+          icon: Icons.cloud_sync_rounded,
+          title: '同步账号歌单',
+          subtitle: '登录网易云 / QQ 音乐',
+          onTap: () => AccountManagePage.open(context),
+        ),
+      );
+    }
+    if (cards.isEmpty && !loading && failed.isEmpty) {
+      return const SizedBox.shrink();
+    }
+
+    final scheme = Theme.of(context).colorScheme;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _HomeSectionHeader(
+          title: '我的歌单',
+          onMore: () => openLibraryTab(context, LibraryTab.playlists),
+        ),
+        if (failed.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 0, 8, 4),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    '部分账号歌单加载失败',
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: scheme.onSurface.withValues(alpha: 0.6),
+                    ),
+                  ),
+                ),
+                TextButton(
+                  onPressed: () {
+                    for (final id in failed) {
+                      ref.invalidate(remotePlaylistsProvider(id));
+                    }
+                  },
+                  child: const Text('重试'),
+                ),
+              ],
+            ),
+          ),
+        if (cards.isEmpty && loading)
+          const Padding(
+            padding: EdgeInsets.all(24),
+            child: Center(child: CircularProgressIndicator(strokeWidth: 2)),
+          )
+        else if (cards.isNotEmpty)
+          SizedBox(
+            height: _cardWidth + 50 * MediaQuery.textScalerOf(context).scale(1),
+            child: ListView.separated(
+              scrollDirection: Axis.horizontal,
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              itemCount: cards.length,
+              separatorBuilder: (_, _) => const SizedBox(width: 4),
+              itemBuilder:
+                  (context, index) =>
+                      SizedBox(width: _cardWidth, child: cards[index]),
+            ),
+          ),
+      ],
     );
   }
 }
@@ -219,116 +493,7 @@ class _ResumeCard extends ConsumerWidget {
   /// 跨 await 后用 context 必须先判 `mounted`（`use_build_context_synchronously`）。
   Future<void> _resume(BuildContext context, WidgetRef ref) async {
     final ok = await ref.read(playerNotifierProvider.notifier).restoreResume();
-    if (ok && context.mounted) unawaited(context.push('/player'));
-  }
-}
-
-/// 快捷入口行：喜欢 / 最近播放 / 歌单（日常可用性计划 D6）。
-///
-/// 数量直接取自本地资料库的既有 Provider（[favoritesProvider] /
-/// [recentHistoryProvider] / [playlistsProvider]），不触发网络请求。
-/// 点击经 `go('/library', extra: ...)` 切到资料库分支并指定 Tab——
-/// 用 [NavIntent] 携带索引，保证「先点歌单、再点歌单」这类重复点击也能生效。
-class _QuickEntries extends ConsumerWidget {
-  const _QuickEntries();
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final favorites = ref.watch(favoritesProvider).valueOrNull;
-    final history = ref.watch(recentHistoryProvider).valueOrNull;
-    final playlists = ref.watch(playlistsProvider).valueOrNull;
-
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
-      child: Row(
-        children: [
-          _QuickEntry(
-            icon: Icons.favorite_rounded,
-            label: '喜欢',
-            // 数据未就绪时显示占位符而不是 0：0 是「确实没有」的确定结论，
-            // 加载中显示 0 会让用户以为收藏丢了
-            count: favorites?.length,
-            onTap: () => _openTab(context, LibraryTab.favorites),
-          ),
-          const SizedBox(width: 10),
-          _QuickEntry(
-            icon: Icons.queue_music_rounded,
-            label: '歌单',
-            count: playlists?.length,
-            onTap: () => _openTab(context, LibraryTab.playlists),
-          ),
-          const SizedBox(width: 10),
-          _QuickEntry(
-            icon: Icons.history_rounded,
-            label: '最近播放',
-            count: history?.length,
-            onTap: () => _openTab(context, LibraryTab.history),
-          ),
-        ],
-      ),
-    );
-  }
-
-  void _openTab(BuildContext context, LibraryTab tab) {
-    context.go('/library', extra: NavIntent<int>(tab.index));
-  }
-}
-
-/// 单个快捷入口（图标 + 名称 + 数量）。
-class _QuickEntry extends StatelessWidget {
-  const _QuickEntry({
-    required this.icon,
-    required this.label,
-    required this.count,
-    required this.onTap,
-  });
-
-  final IconData icon;
-  final String label;
-
-  /// null = 数据尚未就绪（显示「—」而非 0）。
-  final int? count;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return Expanded(
-      child: Card(
-        margin: EdgeInsets.zero,
-        clipBehavior: Clip.antiAlias,
-        child: InkWell(
-          onTap: onTap,
-          child: Padding(
-            padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 8),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(icon, size: 22, color: AppTokens.accent),
-                const SizedBox(height: 6),
-                Text(
-                  label,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    fontSize: 12,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  count == null ? '—' : '$count',
-                  style: TextStyle(
-                    fontSize: 11,
-                    color: scheme.onSurface.withValues(alpha: 0.55),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
+    if (ok && context.mounted) unawaited(openPlayerAfterPlay(context));
   }
 }
 

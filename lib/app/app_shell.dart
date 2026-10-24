@@ -8,21 +8,24 @@ import '../core/theme/app_tokens.dart';
 import '../features/auth/application/account_notifier.dart';
 import '../features/auth/presentation/login_launcher.dart';
 import '../features/player/mini_player.dart';
+import '../features/player/now_playing_bar.dart';
 import '../features/player/player_notifier.dart';
 import 'route_location.dart';
+import 'widgets/side_nav.dart';
 
-/// 自适应骨架（Master Plan §8）：
-/// - < 840dp：全宽底部导航（MiniPlayer 贴于导航上方，方角）
-/// - >= 840dp：NavigationRail（MiniPlayer 作为底部全宽条）
+/// 自适应骨架（Material 3 窗口尺寸类）：
+/// - < 600：手机——底部导航 + 悬浮迷你播放条，点开全屏播放页；
+/// - 600–1024：平板 / 小窗口——导航栏轨 + 底部完整播放条；
+/// - >= 1024：桌面 / 大屏——侧边栏（含歌单快捷入口）+ 底部完整播放条。
 class AppShell extends ConsumerWidget {
   const AppShell({super.key, required this.navigationShell});
 
   final StatefulNavigationShell navigationShell;
 
-  static const _destinations = <(IconData, String)>[
-    (Icons.home_rounded, '首页'),
-    (Icons.search_rounded, '搜索'),
-    (Icons.library_music_rounded, '资料库'),
+  static const _destinations = <(IconData, IconData, String)>[
+    (Icons.home_outlined, Icons.home_rounded, '首页'),
+    (Icons.search_rounded, Icons.saved_search_rounded, '搜索'),
+    (Icons.library_music_outlined, Icons.library_music_rounded, '资料库'),
   ];
 
   @override
@@ -89,8 +92,13 @@ class AppShell extends ConsumerWidget {
 
     return LayoutBuilder(
       builder: (context, constraints) {
-        final isWide = constraints.maxWidth >= AppTokens.compactBreakpoint;
-        if (isWide) return _buildWide(context, hasQueue);
+        final width = constraints.maxWidth;
+        if (width >= AppTokens.expandedBreakpoint) {
+          return _buildExpanded(context, hasQueue);
+        }
+        if (width >= AppTokens.mediumBreakpoint) {
+          return _buildMedium(context, hasQueue);
+        }
         return _buildCompact(context, hasQueue);
       },
     );
@@ -113,24 +121,32 @@ class AppShell extends ConsumerWidget {
     );
   }
 
+  /// 在当前栏目的导航器里打开页面（侧边栏歌单用）：侧边栏与播放条保持可见。
+  void _pushInCurrentBranch(Widget page) {
+    navigationShell
+        .route
+        .branches[navigationShell.currentIndex]
+        .navigatorKey
+        .currentState
+        ?.push(MaterialPageRoute<void>(builder: (_) => page));
+  }
+
+  /// 手机：底部导航 + 悬浮迷你播放条。
   Widget _buildCompact(BuildContext context, bool hasQueue) {
     return Scaffold(
       body: navigationShell,
-      // 传统 Material：标准全宽 NavigationBar（无圆角、无悬浮边框），
-      // MiniPlayer 作为方角条直接贴在导航上方
       bottomNavigationBar: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
           if (hasQueue) const MiniPlayer(),
           NavigationBar(
-            height: 76,
             selectedIndex: navigationShell.currentIndex,
             onDestinationSelected: _selectDestination,
             destinations: [
-              for (final (icon, label) in _destinations)
+              for (final (icon, selectedIcon, label) in _destinations)
                 NavigationDestination(
                   icon: Icon(icon),
-                  selectedIcon: Icon(icon),
+                  selectedIcon: Icon(selectedIcon),
                   label: label,
                 ),
             ],
@@ -140,7 +156,8 @@ class AppShell extends ConsumerWidget {
     );
   }
 
-  Widget _buildWide(BuildContext context, bool hasQueue) {
+  /// 平板 / 小窗口：导航栏轨 + 底部完整播放条。
+  Widget _buildMedium(BuildContext context, bool hasQueue) {
     return Scaffold(
       body: Row(
         children: [
@@ -148,36 +165,76 @@ class AppShell extends ConsumerWidget {
             selectedIndex: navigationShell.currentIndex,
             onDestinationSelected: _selectDestination,
             labelType: NavigationRailLabelType.all,
-            leading: Padding(
-              padding: const EdgeInsets.symmetric(vertical: 18),
-              child: Container(
-                width: 36,
-                height: 36,
-                decoration: const BoxDecoration(
-                  gradient: AppTokens.brandGradient,
-                  shape: BoxShape.circle,
-                ),
-                child: const Icon(
-                  Icons.graphic_eq_rounded,
-                  size: 20,
-                  color: Colors.white,
+            leading: const Padding(
+              padding: EdgeInsets.symmetric(vertical: 16),
+              child: _AppMark(),
+            ),
+            trailing: Expanded(
+              child: Align(
+                alignment: Alignment.bottomCenter,
+                child: Padding(
+                  padding: const EdgeInsets.only(bottom: 16),
+                  child: IconButton(
+                    tooltip: '设置',
+                    onPressed: () => context.push('/settings'),
+                    icon: const Icon(Icons.settings_outlined),
+                  ),
                 ),
               ),
             ),
             destinations: [
-              for (final (icon, label) in _destinations)
+              for (final (icon, selectedIcon, label) in _destinations)
                 NavigationRailDestination(
                   icon: Icon(icon),
-                  selectedIcon: Icon(icon),
+                  selectedIcon: Icon(selectedIcon),
                   label: Text(label),
                 ),
             ],
           ),
-          const VerticalDivider(width: 1),
           Expanded(child: navigationShell),
         ],
       ),
-      bottomNavigationBar: hasQueue ? const MiniPlayer() : null,
+      bottomNavigationBar: hasQueue ? const NowPlayingBar() : null,
+    );
+  }
+
+  /// 桌面 / 大屏：侧边栏（导航 + 歌单快捷入口）+ 底部完整播放条。
+  Widget _buildExpanded(BuildContext context, bool hasQueue) {
+    return Scaffold(
+      body: Row(
+        children: [
+          SideNav(
+            selectedIndex: navigationShell.currentIndex,
+            destinations: _destinations,
+            onSelect: _selectDestination,
+            onOpenPage: _pushInCurrentBranch,
+          ),
+          Expanded(child: navigationShell),
+        ],
+      ),
+      bottomNavigationBar: hasQueue ? const NowPlayingBar() : null,
+    );
+  }
+}
+
+/// 应用标识（导航栏轨顶部）。
+class _AppMark extends StatelessWidget {
+  const _AppMark();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 36,
+      height: 36,
+      decoration: const BoxDecoration(
+        gradient: AppTokens.brandGradient,
+        shape: BoxShape.circle,
+      ),
+      child: const Icon(
+        Icons.graphic_eq_rounded,
+        size: 20,
+        color: Colors.white,
+      ),
     );
   }
 }

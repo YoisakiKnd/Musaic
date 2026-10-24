@@ -287,6 +287,9 @@ class NeteaseSource extends MusicSource
         );
       },
       poll: (session) => pollQrLogin(session.pollKey),
+      // 账号歌单接口按 uid 查询：扫码凭据里只有 MUSIC_U，此前 userId 恒为空，
+      // 登录后资料库里的账号歌单永远是空的（真机反馈）
+      userIdCredentialKey: uidCredentialKey,
       fallbackNickname: '网易云用户',
       footerHint: '扫码登录后可播放 VIP 曲目并同步账号歌单',
     ),
@@ -493,12 +496,17 @@ class NeteaseSource extends MusicSource
           throw NetworkSourceException('授权成功但未取得登录凭据，请重试', sourceId: sourceId);
         }
         String? nickname;
+        String? uid;
         try {
-          final info = await fetchAccountSummary(cookie: 'MUSIC_U=$musicU');
-          nickname = info?.nickname;
+          final profile = await _fetchProfile(cookie: 'MUSIC_U=$musicU');
+          nickname = asStringOrNull(profile?['nickname']);
+          uid = profile?['userId']?.toString();
         } catch (_) {}
         return QrLoginPoll.success(
-          credentials: <String, String>{'MUSIC_U': musicU},
+          credentials: <String, String>{
+            'MUSIC_U': musicU,
+            if (uid != null && uid.isNotEmpty) uidCredentialKey: uid,
+          },
           nickname: nickname,
         );
       default:
@@ -565,6 +573,9 @@ class NeteaseSource extends MusicSource
 
   // ---------- 账号歌单能力（RemotePlaylistCapable） ----------
 
+  @override
+  bool get remotePlaylistsArePersonal => true;
+
   /// 账号歌单列表。
   ///
   /// 失败处理与搜索 / 播放地址对齐（此前这里是唯一没有 try/catch 的取数路径，
@@ -575,10 +586,15 @@ class NeteaseSource extends MusicSource
   @override
   Future<List<RemotePlaylist>> fetchRemotePlaylists(String userId) async {
     try {
-      // uid 传空串 = 网易云按当前 Cookie 返回本人歌单，保持原行为
+      final uid = userId.trim().isNotEmpty ? userId.trim() : await _ownUid();
+      // 拿不到 uid 只可能是凭据缺失 / 失效：明确报「需要登录」，
+      // 而不是带空 uid 去请求、得到空列表后整块歌单分区被静默隐藏
+      if (uid == null) {
+        throw AuthRequiredException('登录已过期，请重新登录网易云', sourceId: sourceId);
+      }
       final response = await _dio.get<dynamic>(
         '/api/user/playlist',
-        queryParameters: <String, dynamic>{'uid': userId, 'limit': 100},
+        queryParameters: <String, dynamic>{'uid': uid, 'limit': 1000},
         options: Options(responseType: ResponseType.plain),
       );
       final body = _asMap(_decoded(response));
@@ -587,6 +603,24 @@ class NeteaseSource extends MusicSource
     } on DioException catch (e) {
       throw normalizeDioException(e, '获取账号歌单失败');
     }
+  }
+
+  /// 凭据里的账号 uid（扫码登录时写入）。
+  static const String uidCredentialKey = 'uid';
+
+  /// 当前登录账号的 uid。
+  ///
+  /// 旧版本扫码登录没有保存 uid，这里按已存的 MUSIC_U 现查一次，
+  /// 已登录用户升级后无需重新扫码即可看到账号歌单。
+  Future<String?> _ownUid() async {
+    final credentials = await credentialReader();
+    final saved = credentials[uidCredentialKey];
+    if (saved != null && saved.isNotEmpty) return saved;
+    final musicU = credentials['MUSIC_U'] ?? '';
+    if (musicU.isEmpty) return null;
+    final profile = await _fetchProfile(cookie: 'MUSIC_U=$musicU');
+    final uid = profile?['userId']?.toString();
+    return uid == null || uid.isEmpty ? null : uid;
   }
 
   /// 解析 `/api/user/playlist` 的 `playlist` 数组。

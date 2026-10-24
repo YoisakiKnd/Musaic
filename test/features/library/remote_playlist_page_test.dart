@@ -52,7 +52,7 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.text('我的歌单'), findsOneWidget);
-      expect(find.text('2 首'), findsOneWidget);
+      expect(find.textContaining('2 首'), findsOneWidget);
       expect(find.text('播放全部'), findsOneWidget);
     });
 
@@ -173,6 +173,9 @@ void main() {
 /// 可控的账号歌单渠道：成功 / 失败 / 恢复由测试驱动。
 class _StubPlaylistSource extends _PlainSource
     implements RemotePlaylistCapable {
+  @override
+  bool get remotePlaylistsArePersonal => true;
+
   _StubPlaylistSource({this.tracks = const [], this.failure});
 
   List<Track> tracks;

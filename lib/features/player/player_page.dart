@@ -19,7 +19,6 @@ import '../library/data/library_providers.dart';
 import '../library/widgets/add_to_playlist_sheet.dart';
 import '../lyrics/presentation/lyrics_view.dart';
 import '../settings/settings_providers.dart';
-import '../shared/widgets/confirm_dialog.dart';
 import '../theme/dynamic_color_provider.dart'
     show
         CoverPalette,
@@ -29,6 +28,7 @@ import '../theme/dynamic_color_provider.dart'
 import 'player_notifier.dart';
 import 'widgets/player_controls.dart';
 import 'widgets/player_progress_bar.dart';
+import 'widgets/queue_panel.dart';
 import 'widgets/sleep_timer_button.dart';
 
 /// 全屏沉浸式播放器（Apple Music 复刻）。
@@ -75,6 +75,9 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) {
         SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
+        // 在别的页面弹出的全局提示（多为播放失败）会浮在播放页底部、
+        // 盖住播放控制；播放页有自己的错误横幅，收起它们
+        ScaffoldMessenger.maybeOf(context)?.clearSnackBars();
       }
     });
     // 音量取自持久化设置：PlayerNotifier 在 build 时已把存储值应用到播放器，
@@ -352,6 +355,8 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
             onTap: _toggleLandscapeSide,
             hint: '点击切换到歌词',
             child: Column(
+              // 垂直居中：此前控件全挤在顶部，下半截空着
+              mainAxisAlignment: MainAxisAlignment.center,
               children: [
                 _buildTitleRow(track),
                 _buildProgress(track),
@@ -501,13 +506,16 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
                 const SizedBox(height: 2),
                 Row(
                   children: [
-                    Text(
-                      track.artist,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        fontSize: 15,
-                        color: scheme.onSurface.withValues(alpha: 0.62),
+                    // Flexible：多歌手时名字很长，不收缩会把徽标挤出屏幕（窄屏溢出）
+                    Flexible(
+                      child: Text(
+                        track.artist,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 15,
+                          color: scheme.onSurface.withValues(alpha: 0.62),
+                        ),
                       ),
                     ),
                     // 音源渠道徽标（D8）：用户需要知道当前听的是哪个渠道——
@@ -829,133 +837,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
     );
   }
 
-  // ---------- 队列底部弹层 ----------
-
-  Future<void> _openQueueSheet(BuildContext context) async {
-    await showModalBottomSheet<void>(
-      context: context,
-      showDragHandle: true,
-      isScrollControlled: true,
-      builder:
-          (sheetContext) => Consumer(
-            builder: (context, ref, _) {
-              final state = ref.watch(playerNotifierProvider);
-              final notifier = ref.read(playerNotifierProvider.notifier);
-              return SafeArea(
-                child: SizedBox(
-                  height: MediaQuery.sizeOf(context).height * 0.6,
-                  child: Column(
-                    children: [
-                      Padding(
-                        padding: const EdgeInsets.fromLTRB(16, 0, 8, 0),
-                        child: Row(
-                          children: [
-                            Text(
-                              '播放队列（${state.queue.length}）',
-                              style: const TextStyle(
-                                fontWeight: FontWeight.w700,
-                                fontSize: 15,
-                              ),
-                            ),
-                            const Spacer(),
-                            TextButton.icon(
-                              onPressed:
-                                  state.queue.length > 1
-                                      ? () async {
-                                        // 清空队列会丢弃用户手工排好的顺序
-                                        // （尤其「下一首播放」的插入），
-                                        // 因此先确认（用户层交互计划 2.1）。
-                                        final confirmed =
-                                            await confirmDestructiveAction(
-                                              context,
-                                              title: '清空播放队列？',
-                                              message:
-                                                  '将移除队列中除当前曲目外的全部曲目，该操作不可恢复。',
-                                            );
-                                        if (!confirmed) return;
-                                        notifier.clearQueue();
-                                      }
-                                      : null,
-                              icon: const Icon(
-                                Icons.delete_sweep_rounded,
-                                size: 18,
-                              ),
-                              label: const Text('清空'),
-                            ),
-                          ],
-                        ),
-                      ),
-                      const Divider(height: 1),
-                      Expanded(
-                        child: ReorderableListView.builder(
-                          padding: const EdgeInsets.only(bottom: 96),
-                          itemCount: state.queue.length,
-                          // onReorderItem：newIndex 已按移除后语义给出，直接转发
-                          onReorderItem: notifier.moveInQueue,
-                          itemBuilder: (context, index) {
-                            final t = state.queue[index];
-                            final active = index == state.currentIndex;
-                            return ListTile(
-                              key: ValueKey('${t.key}@$index'),
-                              leading:
-                                  active
-                                      ? const Icon(
-                                        Icons.equalizer_rounded,
-                                        size: 20,
-                                        color: AppTokens.accent,
-                                      )
-                                      : Icon(
-                                        Icons.drag_handle_rounded,
-                                        size: 20,
-                                        color: Theme.of(context)
-                                            .colorScheme
-                                            .onSurface
-                                            .withValues(alpha: 0.4),
-                                      ),
-                              title: Text(
-                                t.title,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: TextStyle(
-                                  fontWeight:
-                                      active
-                                          ? FontWeight.w700
-                                          : FontWeight.w400,
-                                ),
-                              ),
-                              subtitle: Text(
-                                '${t.artist} · ${t.sourceId}',
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: const TextStyle(fontSize: 12),
-                              ),
-                              trailing: IconButton(
-                                tooltip: '从队列移除',
-                                icon: Icon(
-                                  Icons.close_rounded,
-                                  size: 18,
-                                  color: Theme.of(context).colorScheme.onSurface
-                                      .withValues(alpha: 0.5),
-                                ),
-                                onPressed:
-                                    () => notifier.removeFromQueue(index),
-                              ),
-                              onTap: () {
-                                notifier.playAt(index);
-                                Navigator.of(sheetContext).pop();
-                              },
-                            );
-                          },
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              );
-            },
-          ),
-    );
-  }
+  Future<void> _openQueueSheet(BuildContext context) => showQueueSheet(context);
 }
 
 /// 横屏右侧区域的点击切换外壳（歌词 ↔ 控件）。

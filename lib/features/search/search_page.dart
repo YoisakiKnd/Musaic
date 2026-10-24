@@ -2,7 +2,6 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:go_router/go_router.dart';
 
 import '../../core/di/app_providers.dart';
 import '../../core/model/track.dart';
@@ -16,6 +15,8 @@ import '../settings/settings_providers.dart' show appSettingsRepositoryProvider;
 import '../shared/widgets/confirm_dialog.dart';
 import 'data/search_prefs.dart';
 import 'search_results_page.dart';
+import '../player/open_player.dart';
+import '../shared/widgets/readable_width.dart';
 
 enum _AggregateMode { grouped, merged }
 
@@ -46,6 +47,10 @@ class _SearchPageState extends ConsumerState<SearchPage> {
   _AggregateMode _mode = _AggregateMode.grouped;
   _SortMode _sort = _SortMode.relevance;
   List<String> _history = const <String>[];
+
+  /// 「搜索选项」是否展开。默认收起：选项一次设好就很少再动，
+  /// 此前整页铺满筛选项，像一张表单而不是搜索页。
+  bool _optionsExpanded = false;
   bool _uiReady = false;
   int _searchGeneration = 0;
 
@@ -189,7 +194,7 @@ class _SearchPageState extends ConsumerState<SearchPage> {
       // 加载状态由播放页自己展示
       unawaited(ref.read(playerNotifierProvider.notifier).playNow(detail));
       // push 的 Future 在页面 pop 时才完成，此处无需等待
-      unawaited(context.push('/player'));
+      unawaited(openPlayerAfterPlay(context));
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -337,153 +342,277 @@ class _SearchPageState extends ConsumerState<SearchPage> {
     return Scaffold(
       appBar: AppBar(
         titleSpacing: 12,
-        title: TextField(
-          controller: _controller,
-          textInputAction: TextInputAction.search,
-          onSubmitted: _submit,
-          decoration: InputDecoration(
-            hintText: '搜索 / 链接 / ID',
-            prefixIcon: const Icon(
-              Icons.search_rounded,
-              color: AppTokens.accent,
+        // 与正文同宽居中（桌面宽窗口里输入框不拉满整行）
+        title: Center(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(
+              maxWidth: AppTokens.readableMaxWidth,
             ),
-            filled: true,
-            fillColor: Theme.of(
-              context,
-            ).colorScheme.surfaceContainerHighest.withValues(alpha: 0.55),
-            border: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(26),
-              borderSide: BorderSide.none,
+            child: TextField(
+              controller: _controller,
+              textInputAction: TextInputAction.search,
+              onSubmitted: _submit,
+              decoration: InputDecoration(
+                hintText: '搜索 / 链接 / ID',
+                prefixIcon: const Icon(
+                  Icons.search_rounded,
+                  color: AppTokens.accent,
+                ),
+                filled: true,
+                fillColor: Theme.of(
+                  context,
+                ).colorScheme.surfaceContainerHighest.withValues(alpha: 0.55),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(26),
+                  borderSide: BorderSide.none,
+                ),
+                contentPadding: const EdgeInsets.symmetric(vertical: 14),
+                // 搜索按钮放进输入框：此前是 AppBar 上一个孤零零的「↑」箭头
+                suffixIcon: IconButton(
+                  icon: const Icon(Icons.arrow_forward_rounded),
+                  tooltip: '搜索',
+                  onPressed: () => _submit(_controller.text),
+                ),
+              ),
             ),
-            contentPadding: const EdgeInsets.symmetric(vertical: 14),
           ),
         ),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.arrow_upward_rounded),
-            tooltip: '搜索',
-            onPressed: () => _submit(_controller.text),
+        actions: const [SizedBox(width: 4)],
+      ),
+      body: ReadableWidth(
+        child: ListView(
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 160),
+          children: [
+            _buildOptionsSummary(sources),
+            AnimatedSize(
+              duration: AppTokens.durationNormal,
+              curve: AppTokens.curveEmphasized,
+              alignment: Alignment.topCenter,
+              child:
+                  _optionsExpanded
+                      ? _buildOptions(sources)
+                      : const SizedBox(width: double.infinity),
+            ),
+            ..._buildHistory(),
+            if (_history.isEmpty) _buildTips(),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// 收起态的一行摘要：当前范围 / 渠道 / 展示 / 排序一目了然，点击展开。
+  Widget _buildOptionsSummary(List<MusicSource> sources) {
+    final scheme = Theme.of(context).colorScheme;
+    final String summary;
+    if (_scope == _ScopeMode.single) {
+      final name =
+          sources
+              .where((s) => s.sourceId == _singleTarget)
+              .map((s) => s.displayName)
+              .firstOrNull ??
+          '未选择渠道';
+      summary = '单曲搜索 · $name';
+    } else {
+      final count = sources.where((s) => _targets.contains(s.sourceId)).length;
+      summary = [
+        '聚合搜索',
+        count == sources.length ? '全部 $count 个渠道' : '$count 个渠道',
+        if (_mode == _AggregateMode.merged) '合并展示',
+        if (_sort == _SortMode.durationAsc) '时长 ↑',
+        if (_sort == _SortMode.durationDesc) '时长 ↓',
+      ].join(' · ');
+    }
+    return Material(
+      color: scheme.surfaceContainerHighest.withValues(alpha: 0.35),
+      borderRadius: BorderRadius.circular(14),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(14),
+        onTap: () => setState(() => _optionsExpanded = !_optionsExpanded),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(14, 10, 8, 10),
+          child: Row(
+            children: [
+              const Icon(Icons.tune_rounded, size: 18, color: AppTokens.accent),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  summary,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(fontSize: 13),
+                ),
+              ),
+              Tooltip(
+                message: '搜索选项',
+                child: AnimatedRotation(
+                  turns: _optionsExpanded ? 0.5 : 0,
+                  duration: AppTokens.durationFast,
+                  child: Icon(
+                    Icons.expand_more_rounded,
+                    color: scheme.onSurface.withValues(alpha: 0.6),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// 首次使用（还没有历史）时的提示：告诉用户能搜什么。
+  Widget _buildTips() {
+    final color = Theme.of(
+      context,
+    ).colorScheme.onSurface.withValues(alpha: 0.5);
+    Widget tip(IconData icon, String text) => Padding(
+      padding: const EdgeInsets.symmetric(vertical: 6),
+      child: Row(
+        children: [
+          Icon(icon, size: 18, color: color),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(text, style: TextStyle(fontSize: 13, color: color)),
           ),
         ],
       ),
-      body: ListView(
-        padding: const EdgeInsets.fromLTRB(16, 12, 16, 160),
+    );
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(4, 24, 4, 0),
+      child: Column(
         children: [
-          _sectionLabel('搜索范围'),
+          tip(Icons.music_note_rounded, '输入歌名、歌手或专辑，同时搜索多个渠道'),
+          tip(Icons.link_rounded, '粘贴网易云 / QQ 音乐 / 酷狗 / YouTube 的分享链接直接播放'),
+          tip(Icons.swap_horiz_rounded, '某个渠道放不了时，会自动换到其他渠道的同一首歌'),
+        ],
+      ),
+    );
+  }
+
+  List<Widget> _buildHistory() {
+    if (_history.isEmpty) return const <Widget>[];
+    return [
+      Row(
+        children: [
+          Expanded(child: _sectionLabel('历史搜索')),
+          IconButton(
+            tooltip: '清空历史',
+            icon: const Icon(Icons.delete_outline_rounded, size: 20),
+            onPressed: () async {
+              // 历史是用户积累的数据：先确认再清空（用户层交互计划 2.1）
+              final confirmed = await confirmDestructiveAction(
+                context,
+                title: '清空历史搜索？',
+                message: '将删除全部历史搜索记录，该操作不可恢复。',
+              );
+              if (!confirmed || !mounted) return;
+              final repo = ref.read(searchHistoryRepositoryProvider);
+              final cleared = await repo.clear();
+              if (!mounted) return;
+              setState(() => _history = cleared);
+            },
+          ),
+        ],
+      ),
+      Wrap(
+        spacing: 8,
+        runSpacing: 8,
+        children: [
+          for (final keyword in _history)
+            ActionChip(
+              label: Text(keyword, style: const TextStyle(fontSize: 13)),
+              onPressed: () {
+                _controller.text = keyword;
+                _submit(keyword);
+              },
+            ),
+        ],
+      ),
+    ];
+  }
+
+  /// 展开后的完整搜索选项。
+  Widget _buildOptions(List<MusicSource> sources) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _sectionLabel('搜索范围'),
+        Wrap(
+          spacing: 8,
+          children: [
+            _choiceChip(
+              '单曲搜索',
+              _scope == _ScopeMode.single,
+              () => _updatePrefs(() => _scope = _ScopeMode.single),
+            ),
+            _choiceChip(
+              '聚合搜索',
+              _scope == _ScopeMode.aggregate,
+              () => _updatePrefs(() => _scope = _ScopeMode.aggregate),
+            ),
+          ],
+        ),
+        if (_scope == _ScopeMode.single) ...[
+          _sectionLabel('搜索渠道'),
+          _buildSingleTargetChips(sources),
+        ] else ...[
+          Row(
+            children: [
+              Expanded(child: _sectionLabel('搜索渠道')),
+              TextButton(
+                onPressed:
+                    () => _updatePrefs(() {
+                      _targets = sources.map((s) => s.sourceId).toSet();
+                    }),
+                child: const Text('全选'),
+              ),
+              TextButton(
+                onPressed: () => _updatePrefs(() => _targets = <String>{}),
+                child: const Text('全部取消'),
+              ),
+            ],
+          ),
+          _buildAggregateTargetChips(sources),
+          _sectionLabel('结果展示'),
           Wrap(
             spacing: 8,
             children: [
               _choiceChip(
-                '单曲搜索',
-                _scope == _ScopeMode.single,
-                () => _updatePrefs(() => _scope = _ScopeMode.single),
+                '分开展示',
+                _mode == _AggregateMode.grouped,
+                () => _updatePrefs(() => _mode = _AggregateMode.grouped),
               ),
               _choiceChip(
-                '聚合搜索',
-                _scope == _ScopeMode.aggregate,
-                () => _updatePrefs(() => _scope = _ScopeMode.aggregate),
+                '合并展示',
+                _mode == _AggregateMode.merged,
+                () => _updatePrefs(() => _mode = _AggregateMode.merged),
               ),
             ],
           ),
-          if (_scope == _ScopeMode.single) ...[
-            _sectionLabel('搜索渠道'),
-            _buildSingleTargetChips(sources),
-          ] else ...[
-            Row(
-              children: [
-                Expanded(child: _sectionLabel('搜索渠道')),
-                TextButton(
-                  onPressed:
-                      () => _updatePrefs(() {
-                        _targets = sources.map((s) => s.sourceId).toSet();
-                      }),
-                  child: const Text('全选'),
-                ),
-                TextButton(
-                  onPressed: () => _updatePrefs(() => _targets = <String>{}),
-                  child: const Text('全部取消'),
-                ),
-              ],
-            ),
-            _buildAggregateTargetChips(sources),
-            _sectionLabel('结果展示'),
-            Wrap(
-              spacing: 8,
-              children: [
-                _choiceChip(
-                  '分开展示',
-                  _mode == _AggregateMode.grouped,
-                  () => _updatePrefs(() => _mode = _AggregateMode.grouped),
-                ),
-                _choiceChip(
-                  '合并展示',
-                  _mode == _AggregateMode.merged,
-                  () => _updatePrefs(() => _mode = _AggregateMode.merged),
-                ),
-              ],
-            ),
-            _sectionLabel('排序'),
-            Wrap(
-              spacing: 8,
-              children: [
-                _choiceChip(
-                  '相关度',
-                  _sort == _SortMode.relevance,
-                  () => _updatePrefs(() => _sort = _SortMode.relevance),
-                ),
-                _choiceChip(
-                  '时长 ↑',
-                  _sort == _SortMode.durationAsc,
-                  () => _updatePrefs(() => _sort = _SortMode.durationAsc),
-                ),
-                _choiceChip(
-                  '时长 ↓',
-                  _sort == _SortMode.durationDesc,
-                  () => _updatePrefs(() => _sort = _SortMode.durationDesc),
-                ),
-              ],
-            ),
-          ],
-          if (_history.isNotEmpty) ...[
-            Row(
-              children: [
-                Expanded(child: _sectionLabel('历史搜索')),
-                IconButton(
-                  tooltip: '清空历史',
-                  icon: const Icon(Icons.delete_outline_rounded, size: 20),
-                  onPressed: () async {
-                    // 历史是用户积累的数据：先确认再清空（用户层交互计划 2.1）
-                    final confirmed = await confirmDestructiveAction(
-                      context,
-                      title: '清空历史搜索？',
-                      message: '将删除全部历史搜索记录，该操作不可恢复。',
-                    );
-                    if (!confirmed || !mounted) return;
-                    final repo = ref.read(searchHistoryRepositoryProvider);
-                    final cleared = await repo.clear();
-                    if (!mounted) return;
-                    setState(() => _history = cleared);
-                  },
-                ),
-              ],
-            ),
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: [
-                for (final keyword in _history)
-                  ActionChip(
-                    label: Text(keyword, style: const TextStyle(fontSize: 13)),
-                    onPressed: () {
-                      _controller.text = keyword;
-                      _submit(keyword);
-                    },
-                  ),
-              ],
-            ),
-          ],
+          _sectionLabel('排序'),
+          Wrap(
+            spacing: 8,
+            children: [
+              _choiceChip(
+                '相关度',
+                _sort == _SortMode.relevance,
+                () => _updatePrefs(() => _sort = _SortMode.relevance),
+              ),
+              _choiceChip(
+                '时长 ↑',
+                _sort == _SortMode.durationAsc,
+                () => _updatePrefs(() => _sort = _SortMode.durationAsc),
+              ),
+              _choiceChip(
+                '时长 ↓',
+                _sort == _SortMode.durationDesc,
+                () => _updatePrefs(() => _sort = _SortMode.durationDesc),
+              ),
+            ],
+          ),
         ],
-      ),
+      ],
     );
   }
 

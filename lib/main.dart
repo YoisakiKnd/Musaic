@@ -147,9 +147,13 @@ Future<void> main() async {
     return true;
   };
 
-  // 图片缓存上限（迭代计划 §9.1）：数量 300、字节 100MB，防止长会话内存爬升
-  PaintingBinding.instance.imageCache.maximumSize = 300;
-  PaintingBinding.instance.imageCache.maximumSizeBytes = 100 << 20;
+  // 已解码图片缓存上限（迭代计划 §9.1）。列表封面都按显示尺寸解码
+  // （单张几十 KB），手机上 48MB 足够覆盖几屏滚动；桌面窗口大、
+  // 同屏封面多，放宽到 96MB。超出按 LRU 淘汰，滚回来再从磁盘缓存解码。
+  final mobile = !kIsWeb && (Platform.isAndroid || Platform.isIOS);
+  PaintingBinding.instance.imageCache
+    ..maximumSize = mobile ? 200 : 400
+    ..maximumSizeBytes = (mobile ? 48 : 96) << 20;
 
   await Hive.initFlutter();
   // Box 文件位于系统文档目录（hive_flutter 1.1.0 initFlutter 的默认位置）
@@ -164,7 +168,6 @@ Future<void> main() async {
     openBoxSafely(SearchHistoryRepository.boxName, hiveDir),
     openBoxSafely(LocalMusicSettingsRepository.boxName, hiveDir),
     openBoxSafely(AppSettingsRepository.boxName, hiveDir),
-    openBoxSafely(LyricsCacheRepository.boxName, hiveDir),
   ]);
   final accountsBox = boxes[0];
   final favoritesBox = boxes[1];
@@ -173,9 +176,13 @@ Future<void> main() async {
   final searchHistoryBox = boxes[4];
   final localMusicSettingsBox = boxes[5];
   final appSettingsBox = boxes[6];
-  final lyricsCacheBox = boxes[7];
   final resumeBox = await openBoxSafely<String>(
     ResumeRepository.boxName,
+    hiveDir,
+  );
+  // 歌词缓存用懒加载 Box（值按需读盘）；它只是缓存，不参与 schema 迁移
+  final lyricsCacheBox = await openLazyBoxSafely<String>(
+    LyricsCacheRepository.boxName,
     hiveDir,
   );
 
@@ -191,7 +198,6 @@ Future<void> main() async {
     LocalMusicSettingsRepository.boxName: localMusicSettingsBox,
     AppSettingsRepository.boxName: appSettingsBox,
     ResumeRepository.boxName: resumeBox,
-    LyricsCacheRepository.boxName: lyricsCacheBox,
   }, hiveDir);
 
   await _Bootstrap._configureDesktopWindow();

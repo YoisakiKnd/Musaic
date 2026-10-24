@@ -4,9 +4,16 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hive/hive.dart';
+import 'package:musaic/core/auth/auth_capability.dart';
+import 'package:musaic/core/auth/source_account.dart';
 import 'package:musaic/core/di/app_providers.dart';
+import 'package:musaic/core/lyrics/lyric_bundle.dart';
+import 'package:musaic/core/model/remote_playlist.dart';
 import 'package:musaic/core/model/track.dart';
+import 'package:musaic/core/source/capabilities.dart';
+import 'package:musaic/core/source/music_source.dart';
 import 'package:musaic/core/source/source_registry.dart';
+import 'package:musaic/features/auth/application/account_notifier.dart';
 import 'package:musaic/features/home/home_page.dart';
 import 'package:musaic/features/library/data/library_repository.dart';
 import 'package:musaic/features/player/data/resume_repository.dart';
@@ -17,7 +24,7 @@ import 'package:musaic/features/player/player_notifier.dart';
 /// 重点钉住两条容易回退的契约：
 /// 1. **无断点快照时不显示「继续收听」卡**——不留空占位。
 ///    这是「打开应用第一眼看到的是内容而不是空壳」的底线；
-/// 2. 快捷入口的数量取自本地资料库，且三入口齐全。
+/// 2. 登录渠道的账号歌单出现在首页「我的歌单」，未登录时给出登录入口。
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
@@ -73,14 +80,23 @@ void main() {
     return result as T;
   }
 
-  Future<void> pumpHome(WidgetTester tester) async {
+  Future<void> pumpHome(
+    WidgetTester tester, {
+    List<MusicSource> sources = const [],
+    AccountNotifier Function()? accounts,
+  }) async {
+    final registry = SourceRegistry();
+    for (final source in sources) {
+      registry.register(source);
+    }
     await tester.pumpWidget(
       ProviderScope(
         overrides: [
           libraryRepositoryProvider.overrideWithValue(library),
           resumeRepositoryProvider.overrideWithValue(resume),
           // 首页不直接查渠道，但快捷入口/空态依赖注册表存在
-          sourceRegistryProvider.overrideWithValue(SourceRegistry()),
+          sourceRegistryProvider.overrideWithValue(registry),
+          if (accounts != null) accountsProvider.overrideWith(accounts),
           // 播放器桩：不触碰 audioHandler，避免测试环境初始化音频栈
           playerNotifierProvider.overrideWith(_StubPlayerNotifier.new),
         ],
@@ -124,7 +140,7 @@ void main() {
     expect(find.textContaining('Beyond'), findsWidgets);
   });
 
-  testWidgets('快捷入口齐全且数量取自本地资料库', (tester) async {
+  testWidgets('「我喜欢的音乐」显示收藏数量，本地歌单出现在「我的歌单」', (tester) async {
     await realIo(
       tester,
       () => favoritesBox.put(
@@ -136,14 +152,117 @@ void main() {
 
     await pumpHome(tester);
 
-    expect(find.text('喜欢'), findsOneWidget);
-    expect(find.text('歌单'), findsOneWidget);
-    expect(find.text('最近播放'), findsOneWidget);
-
-    // 喜欢 1 首、歌单 1 个、历史 0 条
-    expect(find.text('1'), findsNWidgets(2));
-    expect(find.text('0'), findsOneWidget);
+    expect(find.text('我喜欢的音乐'), findsOneWidget);
+    expect(find.text('1 首'), findsOneWidget);
+    expect(find.byTooltip('播放全部喜欢'), findsOneWidget);
+    expect(find.text('我的歌单'), findsOneWidget);
+    expect(find.text('通勤'), findsOneWidget);
   });
+
+  group('账号歌单上首页（真机反馈：登录后看不到歌单）', () {
+    testWidgets('已登录：账号歌单出现在「我的歌单」并标注渠道', (tester) async {
+      await pumpHome(
+        tester,
+        sources: [_PlaylistSource(personal: true)],
+        accounts: _LoggedInAccounts.new,
+      );
+
+      expect(find.text('我的歌单'), findsOneWidget);
+      expect(find.text('我喜欢的音乐(网易云)'), findsOneWidget);
+      expect(find.text('假渠道'), findsOneWidget, reason: '多渠道混排时需看出来源');
+      expect(find.text('同步账号歌单'), findsNothing);
+    });
+
+    testWidgets('未登录：给出「同步账号歌单」入口而不是什么都不显示', (tester) async {
+      await pumpHome(
+        tester,
+        sources: [_PlaylistSource(personal: true)],
+        accounts: _LoggedOutAccounts.new,
+      );
+
+      expect(find.text('同步账号歌单'), findsOneWidget);
+    });
+
+    testWidgets('推荐歌单（非本人）不混进「我的歌单」', (tester) async {
+      await pumpHome(
+        tester,
+        sources: [_PlaylistSource(personal: false)],
+        accounts: _LoggedInAccounts.new,
+      );
+
+      expect(find.text('我喜欢的音乐(网易云)'), findsNothing);
+      expect(find.text('我的歌单'), findsNothing);
+    });
+  });
+}
+
+class _PlaylistSource extends MusicSource implements RemotePlaylistCapable {
+  _PlaylistSource({required this.personal})
+    : super(credentialReader: () async => const <String, String>{});
+
+  final bool personal;
+
+  @override
+  bool get remotePlaylistsArePersonal => personal;
+
+  @override
+  String get sourceId => 'fake';
+
+  @override
+  String get displayName => '假渠道';
+
+  @override
+  AuthCapability get authCapability => AuthCapability.noAuth;
+
+  @override
+  Future<List<Track>> search(
+    String query, {
+    int limit = 30,
+    int offset = 0,
+  }) async => const <Track>[];
+
+  @override
+  Future<Track> getTrackDetail(Track track) async => track;
+
+  @override
+  Future<ResolvedStream> resolveStream(Track track) async =>
+      const ResolvedStream(url: '');
+
+  @override
+  Future<LyricBundle?> fetchLyrics(Track track) async => null;
+
+  @override
+  Future<List<RemotePlaylist>> fetchRemotePlaylists(String userId) async =>
+      const [
+        RemotePlaylist(
+          sourceId: 'fake',
+          id: '1',
+          name: '我喜欢的音乐(网易云)',
+          trackCount: 12,
+        ),
+      ];
+
+  @override
+  Future<List<Track>> fetchRemotePlaylistTracks(String playlistId) async =>
+      const <Track>[];
+}
+
+class _LoggedInAccounts extends AccountNotifier {
+  @override
+  AccountsState build() => AccountsState(
+    bySource: <String, SourceAccount>{
+      'fake': SourceAccount.markNow(
+        sourceId: 'fake',
+        status: AccountStatus.loggedIn,
+        userId: '1',
+      ),
+    },
+  );
+}
+
+class _LoggedOutAccounts extends AccountNotifier {
+  @override
+  AccountsState build() => const AccountsState();
 }
 
 /// 跳过 audioHandler 初始化的播放器状态（与其他 Widget 测试同款桩）。

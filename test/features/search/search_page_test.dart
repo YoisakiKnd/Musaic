@@ -83,6 +83,12 @@ void main() {
   /// 首个路由（SearchPage 自身）占用一次 didPush，计数时要扣掉。
   int pushedRoutes(_RouteCounter counter) => counter.pushes - 1;
 
+  /// 搜索选项默认收起，改偏好前先展开。
+  Future<void> expandOptions(WidgetTester tester) async {
+    await tester.tap(find.byTooltip('搜索选项'));
+    await tester.pumpAndSettle();
+  }
+
   Future<void> submit(WidgetTester tester) async {
     await tester.tap(find.byTooltip('搜索'));
   }
@@ -91,6 +97,7 @@ void main() {
     testWidgets('新用户默认聚合搜索、渠道全选', (tester) async {
       await settingsBox.clear();
       await pumpSearchPage(tester);
+      await expandOptions(tester);
       expect(find.text('结果展示'), findsOneWidget, reason: '聚合模式才有这组选项');
       expect(find.text('全选'), findsOneWidget);
     });
@@ -98,6 +105,7 @@ void main() {
     testWidgets('切到单曲搜索并选渠道后，下次打开沿用', (tester) async {
       await settingsBox.clear();
       await pumpSearchPage(tester);
+      await expandOptions(tester);
       await tester.tap(find.text('单曲搜索'));
       await tester.pumpAndSettle();
       await tester.tap(find.text('QQ 音乐'));
@@ -110,12 +118,15 @@ void main() {
       // 重新打开页面
       await tester.pumpWidget(const SizedBox());
       await pumpSearchPage(tester);
+      expect(find.text('单曲搜索 · QQ 音乐'), findsOneWidget, reason: '收起态摘要应沿用单曲搜索');
+      await expandOptions(tester);
       expect(find.text('结果展示'), findsNothing, reason: '应沿用单曲搜索');
     });
 
     testWidgets('聚合时取消的渠道被记住', (tester) async {
       await settingsBox.clear();
       await pumpSearchPage(tester);
+      await expandOptions(tester);
       await tester.tap(find.widgetWithText(FilterChip, '网易云'));
       await tester.pumpAndSettle();
       expect(SearchPrefs.load(settingsBox).excludedTargets, {'netease'});
@@ -157,7 +168,7 @@ void main() {
       // 「因为按钮点不到」而通过，而不是因为防抖生效——那是假通过。
       // 直接调回调才能确保两次提交都真正进入 _submit。
       final searchButton = tester.widget<IconButton>(
-        find.widgetWithIcon(IconButton, Icons.arrow_upward_rounded),
+        find.widgetWithIcon(IconButton, Icons.arrow_forward_rounded),
       );
       searchButton.onPressed!();
       searchButton.onPressed!();

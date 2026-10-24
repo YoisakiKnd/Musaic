@@ -21,6 +21,7 @@ import '../shared/error_text.dart';
 import '../shared/widgets/confirm_dialog.dart';
 import 'local_music_settings_page.dart';
 import 'settings_providers.dart';
+import '../shared/widgets/readable_width.dart';
 
 /// 设置页（一级）：账号管理 / 外观 / 播放与性能 / 数据管理 / 关于，
 /// 全部为二级页面入口。
@@ -33,81 +34,85 @@ class SettingsPage extends ConsumerWidget {
 
     return Scaffold(
       appBar: AppBar(title: const Text('设置')),
-      body: ListView(
-        padding: const EdgeInsets.fromLTRB(16, 8, 16, 40),
-        children: [
-          _EntryCard(
-            icon: Icons.library_music_rounded,
-            title: '本地音乐',
-            subtitle: '扫描文件夹管理 / 启动自动扫描',
-            onTap:
-                () => Navigator.of(context).push(
-                  MaterialPageRoute<void>(
-                    builder: (_) => const LocalMusicSettingsPage(),
+      body: ReadableWidth(
+        child: ListView(
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 40),
+          children: [
+            _EntryCard(
+              icon: Icons.library_music_rounded,
+              title: '本地音乐',
+              subtitle: '扫描文件夹管理 / 启动自动扫描',
+              onTap:
+                  () => Navigator.of(context).push(
+                    MaterialPageRoute<void>(
+                      builder: (_) => const LocalMusicSettingsPage(),
+                    ),
                   ),
-                ),
-          ),
-          _EntryCard(
-            icon: Icons.person_rounded,
-            title: '账号管理',
-            subtitle: '网易云 / QQ 音乐 / 酷狗 / YouTube Music 登录与状态',
-            onTap:
-                () => Navigator.of(context).push(
-                  MaterialPageRoute<void>(
-                    builder: (_) => const AccountManagePage(),
+            ),
+            _EntryCard(
+              icon: Icons.person_rounded,
+              title: '账号管理',
+              subtitle: '网易云 / QQ 音乐 / 酷狗 / YouTube Music 登录与状态',
+              onTap:
+                  () => Navigator.of(context).push(
+                    MaterialPageRoute<void>(
+                      builder: (_) => const AccountManagePage(),
+                    ),
                   ),
-                ),
-          ),
-          _EntryCard(
-            icon: Icons.palette_rounded,
-            title: '外观',
-            subtitle: '主题模式（跟随系统 / 深色 / 浅色）',
-            onTap:
-                () => Navigator.of(context).push(
-                  MaterialPageRoute<void>(
-                    builder: (_) => const AppearancePage(),
+            ),
+            _EntryCard(
+              icon: Icons.palette_rounded,
+              title: '外观',
+              subtitle: '主题模式（跟随系统 / 深色 / 浅色）',
+              onTap:
+                  () => Navigator.of(context).push(
+                    MaterialPageRoute<void>(
+                      builder: (_) => const AppearancePage(),
+                    ),
                   ),
+            ),
+            _EntryCard(
+              icon: Icons.tune_rounded,
+              title: '播放与性能',
+              subtitle: '玻璃模糊效果等',
+              onTap:
+                  () => Navigator.of(context).push(
+                    MaterialPageRoute<void>(
+                      builder: (_) => const PlaybackPage(),
+                    ),
+                  ),
+            ),
+            _EntryCard(
+              icon: Icons.storage_rounded,
+              title: '数据管理',
+              subtitle: '搜索历史 / 播放历史 / 喜欢的音乐',
+              onTap:
+                  () => Navigator.of(context).push(
+                    MaterialPageRoute<void>(builder: (_) => const DataPage()),
+                  ),
+            ),
+            _EntryCard(
+              icon: Icons.info_outline_rounded,
+              title: '关于',
+              subtitle: '版本与免责声明',
+              onTap:
+                  () => Navigator.of(context).push(
+                    MaterialPageRoute<void>(builder: (_) => const AboutPage()),
+                  ),
+            ),
+            const SizedBox(height: 24),
+            Center(
+              child: Text(
+                '凭据仅存于本机安全存储（Keychain / Keystore），永不明文上传',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontSize: 11,
+                  color: scheme.onSurface.withValues(alpha: 0.45),
                 ),
-          ),
-          _EntryCard(
-            icon: Icons.tune_rounded,
-            title: '播放与性能',
-            subtitle: '玻璃模糊效果等',
-            onTap:
-                () => Navigator.of(context).push(
-                  MaterialPageRoute<void>(builder: (_) => const PlaybackPage()),
-                ),
-          ),
-          _EntryCard(
-            icon: Icons.storage_rounded,
-            title: '数据管理',
-            subtitle: '搜索历史 / 播放历史 / 喜欢的音乐',
-            onTap:
-                () => Navigator.of(context).push(
-                  MaterialPageRoute<void>(builder: (_) => const DataPage()),
-                ),
-          ),
-          _EntryCard(
-            icon: Icons.info_outline_rounded,
-            title: '关于',
-            subtitle: '版本与免责声明',
-            onTap:
-                () => Navigator.of(context).push(
-                  MaterialPageRoute<void>(builder: (_) => const AboutPage()),
-                ),
-          ),
-          const SizedBox(height: 24),
-          Center(
-            child: Text(
-              '凭据仅存于本机安全存储（Keychain / Keystore），永不明文上传',
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                fontSize: 11,
-                color: scheme.onSurface.withValues(alpha: 0.45),
               ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
@@ -122,61 +127,63 @@ class AppearancePage extends ConsumerWidget {
     final themeMode = ref.watch(themeModeProvider);
     return Scaffold(
       appBar: AppBar(title: const Text('外观')),
-      body: ListView(
-        padding: const EdgeInsets.all(16),
-        children: [
-          Card(
-            child: RadioGroup<ThemeMode>(
-              groupValue: themeMode,
-              onChanged:
-                  (value) => ref
-                      .read(themeModeProvider.notifier)
-                      .set(value ?? ThemeMode.dark),
-              child: Column(
-                children: [
-                  for (final mode in ThemeMode.values)
-                    RadioListTile<ThemeMode>(
-                      value: mode,
-                      title: Text(switch (mode) {
-                        ThemeMode.system => '跟随系统',
-                        ThemeMode.dark => '深色',
-                        ThemeMode.light => '浅色',
-                      }),
-                    ),
-                ],
+      body: ReadableWidth(
+        child: ListView(
+          padding: const EdgeInsets.all(16),
+          children: [
+            Card(
+              child: RadioGroup<ThemeMode>(
+                groupValue: themeMode,
+                onChanged:
+                    (value) => ref
+                        .read(themeModeProvider.notifier)
+                        .set(value ?? ThemeMode.dark),
+                child: Column(
+                  children: [
+                    for (final mode in ThemeMode.values)
+                      RadioListTile<ThemeMode>(
+                        value: mode,
+                        title: Text(switch (mode) {
+                          ThemeMode.system => '跟随系统',
+                          ThemeMode.dark => '深色',
+                          ThemeMode.light => '浅色',
+                        }),
+                      ),
+                  ],
+                ),
               ),
             ),
-          ),
-          const SizedBox(height: 12),
-          Card(
-            child: SwitchListTile(
-              title: const Text('OLED 纯黑背景'),
-              subtitle: const Text(
-                '深色主题下使用纯黑背景，省电且对比更强',
-                style: TextStyle(fontSize: 12),
+            const SizedBox(height: 12),
+            Card(
+              child: SwitchListTile(
+                title: const Text('OLED 纯黑背景'),
+                subtitle: const Text(
+                  '深色主题下使用纯黑背景，省电且对比更强',
+                  style: TextStyle(fontSize: 12),
+                ),
+                value: ref.watch(oledBlackProvider),
+                activeThumbColor: AppTokens.accent,
+                onChanged:
+                    (value) => ref.read(oledBlackProvider.notifier).set(value),
               ),
-              value: ref.watch(oledBlackProvider),
-              activeThumbColor: AppTokens.accent,
-              onChanged:
-                  (value) => ref.read(oledBlackProvider.notifier).set(value),
             ),
-          ),
-          const SizedBox(height: 12),
-          // ---------- 封面取色 ----------
-          Card(
-            child: SwitchListTile(
-              title: const Text('封面取色动态背景'),
-              subtitle: const Text(
-                '播放页背景随专辑封面取色；关闭统一使用品牌渐变',
-                style: TextStyle(fontSize: 12),
+            const SizedBox(height: 12),
+            // ---------- 封面取色 ----------
+            Card(
+              child: SwitchListTile(
+                title: const Text('封面取色动态背景'),
+                subtitle: const Text(
+                  '播放页背景随专辑封面取色；关闭统一使用品牌渐变',
+                  style: TextStyle(fontSize: 12),
+                ),
+                value: ref.watch(dynamicCoverColorProvider),
+                onChanged:
+                    (value) =>
+                        ref.read(dynamicCoverColorProvider.notifier).set(value),
               ),
-              value: ref.watch(dynamicCoverColorProvider),
-              onChanged:
-                  (value) =>
-                      ref.read(dynamicCoverColorProvider.notifier).set(value),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
@@ -205,179 +212,184 @@ class PlaybackPage extends ConsumerWidget {
     );
     return Scaffold(
       appBar: AppBar(title: const Text('播放与性能')),
-      body: ListView(
-        padding: const EdgeInsets.all(16),
-        children: [
-          // ---------- 播放音质 ----------
-          Card(
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text(
-                    '播放音质',
-                    style: TextStyle(fontWeight: FontWeight.w600),
-                  ),
-                  const SizedBox(height: 2),
-                  const Text(
-                    '下次播放生效；不支持档位切换的渠道按默认码率播放',
-                    style: TextStyle(fontSize: 12),
-                  ),
-                  const SizedBox(height: 10),
-                  SizedBox(
-                    width: double.infinity,
-                    child: SegmentedButton<AudioQuality>(
-                      segments: [
-                        for (final entry in _qualityLabels.entries)
-                          ButtonSegment(
-                            value: entry.key,
-                            label: Text(entry.value),
-                          ),
-                      ],
-                      selected: {quality},
-                      onSelectionChanged:
-                          (selection) => ref
-                              .read(audioQualityProvider.notifier)
-                              .set(selection.first),
+      body: ReadableWidth(
+        child: ListView(
+          padding: const EdgeInsets.all(16),
+          children: [
+            // ---------- 播放音质 ----------
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      '播放音质',
+                      style: TextStyle(fontWeight: FontWeight.w600),
                     ),
-                  ),
-                  const SizedBox(height: 4),
-                  SwitchListTile(
-                    contentPadding: EdgeInsets.zero,
-                    dense: true,
-                    title: const Text(
-                      '蜂窝网络自动降质',
-                      style: TextStyle(fontSize: 14),
-                    ),
-                    subtitle: const Text(
-                      '移动流量下自动降低一档音质，减少流量与电量消耗',
+                    const SizedBox(height: 2),
+                    const Text(
+                      '下次播放生效；不支持档位切换的渠道按默认码率播放',
                       style: TextStyle(fontSize: 12),
                     ),
-                    value: cellularDowngrade,
-                    onChanged:
-                        (value) => ref
-                            .read(cellularAutoDowngradeProvider.notifier)
-                            .set(value),
-                  ),
-                ],
-              ),
-            ),
-          ),
-          const SizedBox(height: 12),
-          // ---------- 歌词时间偏移 ----------
-          Card(
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    '歌词时间偏移 ${offsetMs > 0 ? '+' : ''}'
-                    '${(offsetMs / 1000).toStringAsFixed(1)}s',
-                    style: const TextStyle(fontWeight: FontWeight.w600),
-                  ),
-                  const Text(
-                    '歌词显快调负、显慢调正（±10s）',
-                    style: TextStyle(fontSize: 12),
-                  ),
-                  Slider(
-                    value: offsetMs.toDouble().clamp(-10000, 10000),
-                    min: -10000,
-                    max: 10000,
-                    divisions: 100,
-                    label: '${(offsetMs / 1000).toStringAsFixed(1)}s',
-                    onChanged:
-                        (v) => ref
-                            .read(lyricOffsetMsProvider.notifier)
-                            .set(v.round()),
-                  ),
-                  if (offsetMs != 0)
-                    Align(
-                      alignment: Alignment.centerRight,
-                      child: TextButton(
-                        onPressed:
-                            () =>
-                                ref.read(lyricOffsetMsProvider.notifier).set(0),
-                        child: const Text('归零'),
+                    const SizedBox(height: 10),
+                    SizedBox(
+                      width: double.infinity,
+                      child: SegmentedButton<AudioQuality>(
+                        segments: [
+                          for (final entry in _qualityLabels.entries)
+                            ButtonSegment(
+                              value: entry.key,
+                              label: Text(entry.value),
+                            ),
+                        ],
+                        selected: {quality},
+                        onSelectionChanged:
+                            (selection) => ref
+                                .read(audioQualityProvider.notifier)
+                                .set(selection.first),
                       ),
                     ),
-                ],
-              ),
-            ),
-          ),
-          const SizedBox(height: 12),
-          // ---------- 请求超时 ----------
-          Card(
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text(
-                    '网络请求超时',
-                    style: TextStyle(fontWeight: FontWeight.w600),
-                  ),
-                  const SizedBox(height: 2),
-                  const Text(
-                    '受限网络 / 代理环境可调大档位，播放与搜索即时生效',
-                    style: TextStyle(fontSize: 12),
-                  ),
-                  const SizedBox(height: 10),
-                  SizedBox(
-                    width: double.infinity,
-                    child: SegmentedButton<int>(
-                      segments: const [
-                        ButtonSegment(value: 8, label: Text('标准 8s')),
-                        ButtonSegment(value: 14, label: Text('宽松 14s')),
-                        ButtonSegment(value: 20, label: Text('弱网 20s')),
-                      ],
-                      selected: {timeoutSeconds},
-                      onSelectionChanged:
-                          (selection) => ref
-                              .read(networkTimeoutSecondsProvider.notifier)
-                              .set(selection.first),
+                    const SizedBox(height: 4),
+                    SwitchListTile(
+                      contentPadding: EdgeInsets.zero,
+                      dense: true,
+                      title: const Text(
+                        '蜂窝网络自动降质',
+                        style: TextStyle(fontSize: 14),
+                      ),
+                      subtitle: const Text(
+                        '移动流量下自动降低一档音质，减少流量与电量消耗',
+                        style: TextStyle(fontSize: 12),
+                      ),
+                      value: cellularDowngrade,
+                      onChanged:
+                          (value) => ref
+                              .read(cellularAutoDowngradeProvider.notifier)
+                              .set(value),
                     ),
-                  ),
-                ],
+                  ],
+                ),
               ),
             ),
-          ),
-          const SizedBox(height: 12),
-          // ---------- 玻璃效果 ----------
-          Card(
-            child: SwitchListTile(
-              title: const Text('播放页封面模糊背景'),
-              subtitle: const Text(
-                '开启：封面低分辨率上采样模糊；关闭：取色渐变',
-                style: TextStyle(fontSize: 12),
+            const SizedBox(height: 12),
+            // ---------- 歌词时间偏移 ----------
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      '歌词时间偏移 ${offsetMs > 0 ? '+' : ''}'
+                      '${(offsetMs / 1000).toStringAsFixed(1)}s',
+                      style: const TextStyle(fontWeight: FontWeight.w600),
+                    ),
+                    const Text(
+                      '歌词显快调负、显慢调正（±10s）',
+                      style: TextStyle(fontSize: 12),
+                    ),
+                    Slider(
+                      value: offsetMs.toDouble().clamp(-10000, 10000),
+                      min: -10000,
+                      max: 10000,
+                      divisions: 100,
+                      label: '${(offsetMs / 1000).toStringAsFixed(1)}s',
+                      onChanged:
+                          (v) => ref
+                              .read(lyricOffsetMsProvider.notifier)
+                              .set(v.round()),
+                    ),
+                    if (offsetMs != 0)
+                      Align(
+                        alignment: Alignment.centerRight,
+                        child: TextButton(
+                          onPressed:
+                              () => ref
+                                  .read(lyricOffsetMsProvider.notifier)
+                                  .set(0),
+                          child: const Text('归零'),
+                        ),
+                      ),
+                  ],
+                ),
               ),
-              value: glass,
-              activeThumbColor: AppTokens.accent,
-              onChanged:
-                  (value) => ref.read(enableGlassProvider.notifier).set(value),
             ),
-          ),
-          const SizedBox(height: 12),
-          // ---------- 启动自动恢复 ----------
-          Card(
-            child: SwitchListTile(
-              title: const Text('启动时自动恢复上次播放'),
-              subtitle: const Text(
-                '打开应用后自动续播断点曲目（默认关闭）',
-                style: TextStyle(fontSize: 12),
+            const SizedBox(height: 12),
+            // ---------- 请求超时 ----------
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      '网络请求超时',
+                      style: TextStyle(fontWeight: FontWeight.w600),
+                    ),
+                    const SizedBox(height: 2),
+                    const Text(
+                      '受限网络 / 代理环境可调大档位，播放与搜索即时生效',
+                      style: TextStyle(fontSize: 12),
+                    ),
+                    const SizedBox(height: 10),
+                    SizedBox(
+                      width: double.infinity,
+                      child: SegmentedButton<int>(
+                        segments: const [
+                          ButtonSegment(value: 8, label: Text('标准 8s')),
+                          ButtonSegment(value: 14, label: Text('宽松 14s')),
+                          ButtonSegment(value: 20, label: Text('弱网 20s')),
+                        ],
+                        selected: {timeoutSeconds},
+                        onSelectionChanged:
+                            (selection) => ref
+                                .read(networkTimeoutSecondsProvider.notifier)
+                                .set(selection.first),
+                      ),
+                    ),
+                  ],
+                ),
               ),
-              value: ref.watch(autoResumeOnLaunchProvider),
-              onChanged:
-                  (value) =>
-                      ref.read(autoResumeOnLaunchProvider.notifier).set(value),
             ),
-          ),
+            const SizedBox(height: 12),
+            // ---------- 玻璃效果 ----------
+            Card(
+              child: SwitchListTile(
+                title: const Text('播放页封面模糊背景'),
+                subtitle: const Text(
+                  '开启：封面低分辨率上采样模糊；关闭：取色渐变',
+                  style: TextStyle(fontSize: 12),
+                ),
+                value: glass,
+                activeThumbColor: AppTokens.accent,
+                onChanged:
+                    (value) =>
+                        ref.read(enableGlassProvider.notifier).set(value),
+              ),
+            ),
+            const SizedBox(height: 12),
+            // ---------- 启动自动恢复 ----------
+            Card(
+              child: SwitchListTile(
+                title: const Text('启动时自动恢复上次播放'),
+                subtitle: const Text(
+                  '打开应用后自动续播断点曲目（默认关闭）',
+                  style: TextStyle(fontSize: 12),
+                ),
+                value: ref.watch(autoResumeOnLaunchProvider),
+                onChanged:
+                    (value) => ref
+                        .read(autoResumeOnLaunchProvider.notifier)
+                        .set(value),
+              ),
+            ),
 
-          // ---------- 交叉淡入 ----------
-          const SizedBox(height: 12),
-          _CrossfadeCard(),
-        ],
+            // ---------- 交叉淡入 ----------
+            const SizedBox(height: 12),
+            _CrossfadeCard(),
+          ],
+        ),
       ),
     );
   }
@@ -444,152 +456,154 @@ class DataPage extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     return Scaffold(
       appBar: AppBar(title: const Text('数据管理')),
-      body: ListView(
-        padding: const EdgeInsets.all(16),
-        children: [
-          // ---------- 备份：导出 / 导入 ----------
-          Card(
-            child: Column(
-              children: [
-                ListTile(
-                  leading: const Icon(Icons.file_download_outlined),
-                  title: const Text('导出资料库（JSON）'),
-                  subtitle: const Text(
-                    '收藏 / 歌单 / 最近播放 → 备份文件（不含任何渠道凭据）',
-                    style: TextStyle(fontSize: 12),
+      body: ReadableWidth(
+        child: ListView(
+          padding: const EdgeInsets.all(16),
+          children: [
+            // ---------- 备份：导出 / 导入 ----------
+            Card(
+              child: Column(
+                children: [
+                  ListTile(
+                    leading: const Icon(Icons.file_download_outlined),
+                    title: const Text('导出资料库（JSON）'),
+                    subtitle: const Text(
+                      '收藏 / 歌单 / 最近播放 → 备份文件（不含任何渠道凭据）',
+                      style: TextStyle(fontSize: 12),
+                    ),
+                    onTap: () => _exportBackup(context, ref),
                   ),
-                  onTap: () => _exportBackup(context, ref),
-                ),
-                const Divider(height: 1, indent: 56),
-                ListTile(
-                  leading: const Icon(Icons.file_upload_outlined),
-                  title: const Text('导入资料库（JSON）'),
-                  subtitle: const Text(
-                    '合并式导入：按曲目去重，不删除本地已有数据',
-                    style: TextStyle(fontSize: 12),
-                  ),
-                  onTap: () => _importBackup(context, ref),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 12),
-          Card(
-            child: Column(
-              children: [
-                ListTile(
-                  leading: const Icon(Icons.history_rounded),
-                  title: const Text('清除搜索历史'),
-                  onTap: () async {
-                    // 不可恢复：先确认再执行（用户层交互计划 2.1）
-                    final confirmed = await confirmDestructiveAction(
-                      context,
-                      title: '清除搜索历史？',
-                      message: '将删除全部历史搜索记录，该操作不可恢复。',
-                    );
-                    if (!confirmed || !context.mounted) return;
-                    final repo = ref.read(searchHistoryRepositoryProvider);
-                    await repo.clear();
-                    if (!context.mounted) return;
-                    _toast(context, '搜索历史已清除');
-                  },
-                ),
-                const Divider(height: 1, indent: 56),
-                ListTile(
-                  leading: const Icon(Icons.playlist_remove_rounded),
-                  title: const Text('清除播放历史'),
-                  onTap: () async {
-                    // 不可恢复：先确认再执行（用户层交互计划 2.1）
-                    final confirmed = await confirmDestructiveAction(
-                      context,
-                      title: '清除播放历史？',
-                      message: '将删除「最近播放」的全部记录，该操作不可恢复。',
-                    );
-                    if (!confirmed || !context.mounted) return;
-                    final repo = ref.read(libraryRepositoryProvider);
-                    await repo.clearHistory();
-                    if (!context.mounted) return;
-                    _toast(context, '播放历史已清除');
-                  },
-                ),
-                const Divider(height: 1, indent: 56),
-                FutureBuilder<int>(
-                  future: coverCacheBytes(),
-                  builder: (context, snapshot) {
-                    final bytes = snapshot.data;
-                    final sizeText =
-                        bytes == null
-                            ? '正在统计…'
-                            : bytes == 0
-                            ? '暂无缓存'
-                            : '当前占用 ${formatBytes(bytes)}';
-                    return ListTile(
-                      leading: const Icon(Icons.image_outlined),
-                      title: const Text('清除封面缓存'),
-                      subtitle: Text(
-                        '本地扫描生成的内嵌封面；$sizeText',
-                        style: const TextStyle(fontSize: 12),
-                      ),
-                      onTap: () async {
-                        // 缓存可重建，但重扫代价高：同样先确认（计划 2.1）
-                        final confirmed = await confirmDestructiveAction(
-                          context,
-                          title: '清除封面缓存？',
-                          message:
-                              '将删除本地扫描生成的封面缓存；'
-                              '下次浏览时需重新生成，不影响曲库与歌单。',
-                          confirmLabel: '清除',
-                        );
-                        if (!confirmed || !context.mounted) return;
-                        final cleared = await clearCoverCache();
-                        if (!context.mounted) return;
-                        _toast(context, cleared ? '封面缓存已清除' : '暂无需要清理的缓存');
-                      },
-                    );
-                  },
-                ),
-                if (ref.watch(lyricsCacheRepositoryProvider)
-                    case final lyricsCache?) ...[
                   const Divider(height: 1, indent: 56),
-                  _LyricsCacheTile(
-                    cache: lyricsCache,
-                    onCleared: () => _toast(context, '歌词缓存已清除'),
+                  ListTile(
+                    leading: const Icon(Icons.file_upload_outlined),
+                    title: const Text('导入资料库（JSON）'),
+                    subtitle: const Text(
+                      '合并式导入：按曲目去重，不删除本地已有数据',
+                      style: TextStyle(fontSize: 12),
+                    ),
+                    onTap: () => _importBackup(context, ref),
                   ),
                 ],
-                const Divider(height: 1, indent: 56),
-                ListTile(
-                  leading: const Icon(Icons.bug_report_outlined),
-                  title: const Text('导出诊断日志'),
-                  subtitle: const Text(
-                    '最近 500 条运行日志（已脱敏，不含凭据）',
-                    style: TextStyle(fontSize: 12),
-                  ),
-                  onTap: () => _exportDiagnostics(context),
-                ),
-                const Divider(height: 1, indent: 56),
-                ListTile(
-                  leading: const Icon(Icons.favorite_border_rounded),
-                  title: const Text('清空喜欢的音乐'),
-                  onTap: () async {
-                    // 收藏是用户手工积累的数据，误清空无法恢复（计划 2.1）
-                    final confirmed = await confirmDestructiveAction(
-                      context,
-                      title: '清空喜欢的音乐？',
-                      message: '将移除全部已收藏曲目，该操作不可恢复。',
-                    );
-                    if (!confirmed || !context.mounted) return;
-                    final repo = ref.read(libraryRepositoryProvider);
-                    // 仓库级批量清空：一次 Hive clear()，替代逐条 toggleFavorite
-                    // 的 N 次往返（P2）。
-                    await repo.clearFavorites();
-                    if (!context.mounted) return;
-                    _toast(context, '已清空喜欢的音乐');
-                  },
-                ),
-              ],
+              ),
             ),
-          ),
-        ],
+            const SizedBox(height: 12),
+            Card(
+              child: Column(
+                children: [
+                  ListTile(
+                    leading: const Icon(Icons.history_rounded),
+                    title: const Text('清除搜索历史'),
+                    onTap: () async {
+                      // 不可恢复：先确认再执行（用户层交互计划 2.1）
+                      final confirmed = await confirmDestructiveAction(
+                        context,
+                        title: '清除搜索历史？',
+                        message: '将删除全部历史搜索记录，该操作不可恢复。',
+                      );
+                      if (!confirmed || !context.mounted) return;
+                      final repo = ref.read(searchHistoryRepositoryProvider);
+                      await repo.clear();
+                      if (!context.mounted) return;
+                      _toast(context, '搜索历史已清除');
+                    },
+                  ),
+                  const Divider(height: 1, indent: 56),
+                  ListTile(
+                    leading: const Icon(Icons.playlist_remove_rounded),
+                    title: const Text('清除播放历史'),
+                    onTap: () async {
+                      // 不可恢复：先确认再执行（用户层交互计划 2.1）
+                      final confirmed = await confirmDestructiveAction(
+                        context,
+                        title: '清除播放历史？',
+                        message: '将删除「最近播放」的全部记录，该操作不可恢复。',
+                      );
+                      if (!confirmed || !context.mounted) return;
+                      final repo = ref.read(libraryRepositoryProvider);
+                      await repo.clearHistory();
+                      if (!context.mounted) return;
+                      _toast(context, '播放历史已清除');
+                    },
+                  ),
+                  const Divider(height: 1, indent: 56),
+                  FutureBuilder<int>(
+                    future: coverCacheBytes(),
+                    builder: (context, snapshot) {
+                      final bytes = snapshot.data;
+                      final sizeText =
+                          bytes == null
+                              ? '正在统计…'
+                              : bytes == 0
+                              ? '暂无缓存'
+                              : '当前占用 ${formatBytes(bytes)}';
+                      return ListTile(
+                        leading: const Icon(Icons.image_outlined),
+                        title: const Text('清除封面缓存'),
+                        subtitle: Text(
+                          '本地扫描生成的内嵌封面；$sizeText',
+                          style: const TextStyle(fontSize: 12),
+                        ),
+                        onTap: () async {
+                          // 缓存可重建，但重扫代价高：同样先确认（计划 2.1）
+                          final confirmed = await confirmDestructiveAction(
+                            context,
+                            title: '清除封面缓存？',
+                            message:
+                                '将删除本地扫描生成的封面缓存；'
+                                '下次浏览时需重新生成，不影响曲库与歌单。',
+                            confirmLabel: '清除',
+                          );
+                          if (!confirmed || !context.mounted) return;
+                          final cleared = await clearCoverCache();
+                          if (!context.mounted) return;
+                          _toast(context, cleared ? '封面缓存已清除' : '暂无需要清理的缓存');
+                        },
+                      );
+                    },
+                  ),
+                  if (ref.watch(lyricsCacheRepositoryProvider)
+                      case final lyricsCache?) ...[
+                    const Divider(height: 1, indent: 56),
+                    _LyricsCacheTile(
+                      cache: lyricsCache,
+                      onCleared: () => _toast(context, '歌词缓存已清除'),
+                    ),
+                  ],
+                  const Divider(height: 1, indent: 56),
+                  ListTile(
+                    leading: const Icon(Icons.bug_report_outlined),
+                    title: const Text('导出诊断日志'),
+                    subtitle: const Text(
+                      '最近 500 条运行日志（已脱敏，不含凭据）',
+                      style: TextStyle(fontSize: 12),
+                    ),
+                    onTap: () => _exportDiagnostics(context),
+                  ),
+                  const Divider(height: 1, indent: 56),
+                  ListTile(
+                    leading: const Icon(Icons.favorite_border_rounded),
+                    title: const Text('清空喜欢的音乐'),
+                    onTap: () async {
+                      // 收藏是用户手工积累的数据，误清空无法恢复（计划 2.1）
+                      final confirmed = await confirmDestructiveAction(
+                        context,
+                        title: '清空喜欢的音乐？',
+                        message: '将移除全部已收藏曲目，该操作不可恢复。',
+                      );
+                      if (!confirmed || !context.mounted) return;
+                      final repo = ref.read(libraryRepositoryProvider);
+                      // 仓库级批量清空：一次 Hive clear()，替代逐条 toggleFavorite
+                      // 的 N 次往返（P2）。
+                      await repo.clearFavorites();
+                      if (!context.mounted) return;
+                      _toast(context, '已清空喜欢的音乐');
+                    },
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -778,46 +792,48 @@ class AboutPage extends StatelessWidget {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: const Text('关于')),
-      body: ListView(
-        padding: const EdgeInsets.all(16),
-        children: [
-          Card(
-            child: Column(
-              children: [
-                const ListTile(
-                  leading: Icon(Icons.info_outline_rounded),
-                  title: Text(AppInfo.appName),
-                  subtitle: Text('版本 ${AppInfo.version} · 多渠道聚合播放器'),
-                ),
-                const Divider(height: 1, indent: 56),
-                ListTile(
-                  leading: const Icon(Icons.code_rounded),
-                  title: const Text('开源仓库'),
-                  subtitle: const Text(
-                    'github.com/YoisakiKnd/Musaic',
-                    style: TextStyle(fontSize: 12),
+      body: ReadableWidth(
+        child: ListView(
+          padding: const EdgeInsets.all(16),
+          children: [
+            Card(
+              child: Column(
+                children: [
+                  const ListTile(
+                    leading: Icon(Icons.info_outline_rounded),
+                    title: Text(AppInfo.appName),
+                    subtitle: Text('版本 ${AppInfo.version} · 多渠道聚合播放器'),
                   ),
-                  trailing: const Icon(Icons.copy_rounded, size: 18),
-                  onTap: () {
-                    Clipboard.setData(
-                      const ClipboardData(text: AppInfo.repositoryUrl),
-                    );
-                    _toast(context, '仓库地址已复制');
-                  },
-                ),
-                const Divider(height: 1, indent: 56),
-                const ListTile(
-                  leading: Icon(Icons.gavel_rounded),
-                  title: Text('免责声明'),
-                  subtitle: Text(
-                    '仅调用各渠道公开接口，不破解不缓存受限内容；请支持正版',
-                    style: TextStyle(fontSize: 12),
+                  const Divider(height: 1, indent: 56),
+                  ListTile(
+                    leading: const Icon(Icons.code_rounded),
+                    title: const Text('开源仓库'),
+                    subtitle: const Text(
+                      'github.com/YoisakiKnd/Musaic',
+                      style: TextStyle(fontSize: 12),
+                    ),
+                    trailing: const Icon(Icons.copy_rounded, size: 18),
+                    onTap: () {
+                      Clipboard.setData(
+                        const ClipboardData(text: AppInfo.repositoryUrl),
+                      );
+                      _toast(context, '仓库地址已复制');
+                    },
                   ),
-                ),
-              ],
+                  const Divider(height: 1, indent: 56),
+                  const ListTile(
+                    leading: Icon(Icons.gavel_rounded),
+                    title: Text('免责声明'),
+                    subtitle: Text(
+                      '仅调用各渠道公开接口，不破解不缓存受限内容；请支持正版',
+                      style: TextStyle(fontSize: 12),
+                    ),
+                  ),
+                ],
+              ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }

@@ -9,6 +9,7 @@ import '../../../../core/theme/app_tokens.dart';
 import '../../../../core/utils/cover_network.dart';
 import '../../application/account_notifier.dart';
 import '../login_launcher.dart';
+import '../../../shared/widgets/readable_width.dart';
 
 /// 渠道是否有值得在账号列表展示的登录能力（本地文件等免登录渠道不展示）。
 bool _hasAccountUi(MusicSource source) =>
@@ -25,6 +26,12 @@ bool _hasAccountUi(MusicSource source) =>
 class AccountManagePage extends ConsumerWidget {
   const AccountManagePage({super.key});
 
+  /// 从任意页面直达账号管理（「去登录」引导用），盖在底部导航之上。
+  static Future<void> open(BuildContext context) => Navigator.of(
+    context,
+    rootNavigator: true,
+  ).push(MaterialPageRoute<void>(builder: (_) => const AccountManagePage()));
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     // 免登录且无账号 UI 的渠道（如本地文件，已独立到「设置 → 本地音乐」）
@@ -37,57 +44,59 @@ class AccountManagePage extends ConsumerWidget {
 
     return Scaffold(
       appBar: AppBar(title: const Text('账号管理')),
-      body: ListView(
-        padding: const EdgeInsets.fromLTRB(16, 8, 16, 40),
-        children: [
-          for (final source in sources)
-            _ChannelEntry(
-              key: ValueKey('manage-${source.sourceId}'),
-              sourceId: source.sourceId,
-            ),
-          const SizedBox(height: 16),
-          Center(
-            child: TextButton.icon(
-              style: TextButton.styleFrom(foregroundColor: Colors.redAccent),
-              onPressed: () async {
-                final confirmed = await showDialog<bool>(
-                  context: context,
-                  builder:
-                      (dialogContext) => AlertDialog(
-                        title: const Text('清除所有账号数据？'),
-                        content: const Text('将删除全部渠道的登录凭据与本地资料记录。'),
-                        actions: [
-                          TextButton(
-                            onPressed:
-                                () => Navigator.of(dialogContext).pop(false),
-                            child: const Text('取消'),
-                          ),
-                          FilledButton(
-                            style: FilledButton.styleFrom(
-                              backgroundColor: Colors.redAccent,
+      body: ReadableWidth(
+        child: ListView(
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 40),
+          children: [
+            for (final source in sources)
+              _ChannelEntry(
+                key: ValueKey('manage-${source.sourceId}'),
+                sourceId: source.sourceId,
+              ),
+            const SizedBox(height: 16),
+            Center(
+              child: TextButton.icon(
+                style: TextButton.styleFrom(foregroundColor: Colors.redAccent),
+                onPressed: () async {
+                  final confirmed = await showDialog<bool>(
+                    context: context,
+                    builder:
+                        (dialogContext) => AlertDialog(
+                          title: const Text('清除所有账号数据？'),
+                          content: const Text('将删除全部渠道的登录凭据与本地资料记录。'),
+                          actions: [
+                            TextButton(
+                              onPressed:
+                                  () => Navigator.of(dialogContext).pop(false),
+                              child: const Text('取消'),
                             ),
-                            onPressed:
-                                () => Navigator.of(dialogContext).pop(true),
-                            child: const Text('清除'),
-                          ),
-                        ],
-                      ),
-                );
-                if (confirmed == true) {
-                  await ref
-                      .read(accountsProvider.notifier)
-                      .clearAllAccountsData();
-                  if (!context.mounted) return;
-                  ScaffoldMessenger.of(
-                    context,
-                  ).showSnackBar(const SnackBar(content: Text('账号数据已清除')));
-                }
-              },
-              icon: const Icon(Icons.delete_sweep_rounded, size: 20),
-              label: const Text('一键清除所有账号数据'),
+                            FilledButton(
+                              style: FilledButton.styleFrom(
+                                backgroundColor: Colors.redAccent,
+                              ),
+                              onPressed:
+                                  () => Navigator.of(dialogContext).pop(true),
+                              child: const Text('清除'),
+                            ),
+                          ],
+                        ),
+                  );
+                  if (confirmed == true) {
+                    await ref
+                        .read(accountsProvider.notifier)
+                        .clearAllAccountsData();
+                    if (!context.mounted) return;
+                    ScaffoldMessenger.of(
+                      context,
+                    ).showSnackBar(const SnackBar(content: Text('账号数据已清除')));
+                  }
+                },
+                icon: const Icon(Icons.delete_sweep_rounded, size: 20),
+                label: const Text('一键清除所有账号数据'),
+              ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }

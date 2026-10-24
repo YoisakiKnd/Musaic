@@ -8,10 +8,12 @@ import '../../../core/di/app_providers.dart';
 import '../../../core/logging/app_logger.dart';
 import '../../../core/model/track.dart';
 import '../../../core/theme/app_tokens.dart';
+import '../../../core/utils/nav_intent.dart';
 import '../../library/data/library_providers.dart';
 import '../../library/widgets/add_to_playlist_sheet.dart';
 import '../../player/player_notifier.dart';
 import 'track_cover.dart';
+import '../../player/open_player.dart';
 
 /// 统一曲目行：封面 + 标题/歌手 + 渠道徽章 + 收藏心。
 /// 点击即以 [queue] 为队列从本曲播放；[keepQueue] 时只插播本曲。
@@ -27,6 +29,7 @@ class TrackTile extends ConsumerWidget {
     this.dense = false,
     this.leadingCheckbox,
     this.keepQueue = false,
+    this.showSource = true,
   });
 
   final Track track;
@@ -61,18 +64,25 @@ class TrackTile extends ConsumerWidget {
   /// 播完一首后接着播同名的其它版本，并且冲掉用户原来的队列。
   final bool keepQueue;
 
+  /// 是否显示渠道徽章。按渠道分组的列表里每行都写同一个渠道名纯属噪音。
+  final bool showSource;
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final registry = ref.watch(sourceRegistryProvider);
     final source = registry.resolve(track.sourceId);
     final isFavorite = ref.watch(isFavoriteProvider(track));
-    final current = ref.watch(playerNotifierProvider.select((s) => s.current));
-    final isCurrent = current?.key == track.key;
+    // 只订阅「是否是我」：切歌时只有前后两行重建，而不是整张列表
+    final isCurrent = ref.watch(
+      playerNotifierProvider.select((s) => s.current?.key == track.key),
+    );
+    final wide = MediaQuery.sizeOf(context).width >= AppTokens.mediumBreakpoint;
+    final duration = track.duration;
     final scheme = Theme.of(context).colorScheme;
 
     // 曲目行可能位于带背景色的容器内：显式透明 tileColor，
     // 避免「ink splashes may be invisible」诊断在每次重建时刷屏
-    return ListTile(
+    final tile = ListTile(
       dense: dense,
       tileColor: Colors.transparent,
       onTap:
@@ -89,7 +99,7 @@ class TrackTile extends ConsumerWidget {
                     .clamp(0, queue.isEmpty ? 0 : queue.length - 1),
               );
             }
-            context.push('/player');
+            openPlayerAfterPlay(context);
           },
       onLongPress:
           onLongPress ?? (onRemove ?? () => _quickPlayNext(context, ref)),
@@ -125,22 +135,28 @@ class TrackTile extends ConsumerWidget {
       ),
       subtitle: Row(
         children: [
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
-            decoration: BoxDecoration(
-              color: AppTokens.accent.withValues(alpha: 0.12),
-              borderRadius: BorderRadius.circular(AppTokens.radiusChip / 2),
-            ),
-            child: Text(
-              source?.displayName ?? track.sourceId,
-              style: const TextStyle(
-                fontSize: 10,
-                color: AppTokens.accent,
-                fontWeight: FontWeight.w600,
+          // 徽章用中性描边而非品牌粉底：列表每行都有，粉色铺满一屏太抢眼
+          if (showSource) ...[
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 5),
+              decoration: BoxDecoration(
+                border: Border.all(
+                  color: scheme.onSurface.withValues(alpha: 0.25),
+                  width: 0.8,
+                ),
+                borderRadius: BorderRadius.circular(4),
+              ),
+              child: Text(
+                source?.displayName ?? track.sourceId,
+                style: TextStyle(
+                  fontSize: 10,
+                  height: 1.4,
+                  color: scheme.onSurface.withValues(alpha: 0.6),
+                ),
               ),
             ),
-          ),
-          const SizedBox(width: 6),
+            const SizedBox(width: 6),
+          ],
           Expanded(
             child: Text(
               track.artist,
@@ -157,6 +173,19 @@ class TrackTile extends ConsumerWidget {
       trailing: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
+          // 宽屏有空间就显示时长（手机上省掉，给标题留宽度）
+          if (wide && duration != null)
+            Padding(
+              padding: const EdgeInsets.only(right: 8),
+              child: Text(
+                '${duration.inMinutes}:${duration.inSeconds.remainder(60).toString().padLeft(2, '0')}',
+                style: TextStyle(
+                  fontSize: 12,
+                  fontFeatures: const [FontFeature.tabularFigures()],
+                  color: scheme.onSurface.withValues(alpha: 0.5),
+                ),
+              ),
+            ),
           if (onRemove != null)
             IconButton(
               visualDensity: VisualDensity.compact,
@@ -167,16 +196,6 @@ class TrackTile extends ConsumerWidget {
               ),
               onPressed: onRemove,
             ),
-          IconButton(
-            visualDensity: VisualDensity.compact,
-            tooltip: '更多',
-            onPressed: () => _openActions(context, ref),
-            icon: Icon(
-              Icons.more_vert_rounded,
-              size: 20,
-              color: scheme.onSurface.withValues(alpha: 0.45),
-            ),
-          ),
           IconButton(
             visualDensity: VisualDensity.compact,
             tooltip: isFavorite ? '取消喜欢' : '喜欢',
@@ -192,8 +211,24 @@ class TrackTile extends ConsumerWidget {
                       : scheme.onSurface.withValues(alpha: 0.45),
             ),
           ),
+          IconButton(
+            visualDensity: VisualDensity.compact,
+            tooltip: '更多',
+            onPressed: () => _openActions(context, ref),
+            icon: Icon(
+              Icons.more_vert_rounded,
+              size: 20,
+              color: scheme.onSurface.withValues(alpha: 0.45),
+            ),
+          ),
         ],
       ),
+    );
+    // 桌面右键 = 「更多」菜单（多选模式下不弹，避免与勾选冲突）
+    return GestureDetector(
+      onSecondaryTap:
+          leadingCheckbox == null ? () => _openActions(context, ref) : null,
+      child: tile,
     );
   }
 
@@ -263,6 +298,8 @@ Future<void> showTrackActions(
       ref.read(libraryRepositoryProvider).isFavoriteTrack(track);
   final action = await showModalBottomSheet<String>(
     context: context,
+    // 盖在底部导航之上：开在分支 Navigator 里会被导航栏遮住下半截
+    useRootNavigator: true,
     showDragHandle: true,
     builder:
         (sheetContext) => SafeArea(
@@ -303,6 +340,16 @@ Future<void> showTrackActions(
                 title: const Text('添加到队列末尾'),
                 onTap: () => Navigator.of(sheetContext).pop('queue'),
               ),
+              if (_searchableArtist(track) != null)
+                ListTile(
+                  leading: const Icon(Icons.person_search_rounded),
+                  title: Text(
+                    '搜索歌手：${_searchableArtist(track)}',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  onTap: () => Navigator.of(sheetContext).pop('artist'),
+                ),
               if (onRemove != null)
                 ListTile(
                   leading: const Icon(Icons.remove_circle_outline_rounded),
@@ -331,6 +378,12 @@ Future<void> showTrackActions(
       }
     case 'playlist':
       await AddToPlaylistSheet.show(context, [track]);
+    case 'artist':
+      // 多歌手只取第一位：「周杰伦/方文山」整串去搜命中率很低
+      context.go(
+        '/search',
+        extra: NavIntent<String>(_searchableArtist(track)!),
+      );
     case 'next':
       await _playNext(context, ref, track);
     case 'queue':
@@ -342,4 +395,11 @@ Future<void> showTrackActions(
     case 'remove':
       onRemove?.call();
   }
+}
+
+/// 菜单「搜索歌手」用的关键词；占位歌手名（未知歌手等）不提供该入口。
+String? _searchableArtist(Track track) {
+  final first = track.artist.split(RegExp(r'\s*[/、,&]\s*')).first.trim();
+  if (first.isEmpty || first == '未知歌手' || first == '群星') return null;
+  return first;
 }

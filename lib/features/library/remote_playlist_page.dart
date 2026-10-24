@@ -1,12 +1,14 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:go_router/go_router.dart';
 
+import '../../core/di/app_providers.dart' show sourceRegistryProvider;
 import '../../core/model/remote_playlist.dart';
 import '../../core/theme/app_tokens.dart';
 import '../player/player_notifier.dart';
+import '../shared/widgets/track_cover.dart';
 import '../shared/widgets/track_tile.dart';
 import 'data/remote_playlists_provider.dart';
+import '../player/open_player.dart';
 
 /// 渠道账号歌单详情（只读 + 播放全部/单曲播放）。
 ///
@@ -25,7 +27,7 @@ class RemotePlaylistPage extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final scheme = Theme.of(context).colorScheme;
     return Scaffold(
-      appBar: AppBar(title: Text(playlist.name)),
+      appBar: AppBar(),
       body: ref
           .watch(remotePlaylistTracksProvider(playlist))
           .when(
@@ -42,19 +44,58 @@ class RemotePlaylistPage extends ConsumerWidget {
               if (tracks.isEmpty) {
                 return const Center(child: Text('歌单是空的'));
               }
+              final sourceName =
+                  ref
+                      .watch(sourceRegistryProvider)
+                      .resolve(playlist.sourceId)
+                      ?.displayName ??
+                  playlist.sourceId;
               return Column(
                 children: [
+                  // 封面头：此前进来就是一串编号列表，看不出是哪个歌单
                   Padding(
-                    padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+                    padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
                     child: Row(
                       children: [
-                        Text(
-                          '${tracks.length} 首',
-                          style: TextStyle(
-                            fontSize: 13,
-                            color: scheme.onSurface.withValues(alpha: 0.6),
+                        TrackCover(
+                          coverUrl: playlist.coverUrl,
+                          size: 96,
+                          radius: 16,
+                        ),
+                        const SizedBox(width: 16),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                playlist.name,
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                  fontSize: 18,
+                                  fontWeight: FontWeight.w800,
+                                ),
+                              ),
+                              const SizedBox(height: 6),
+                              Text(
+                                '$sourceName · ${tracks.length} 首',
+                                style: TextStyle(
+                                  fontSize: 13,
+                                  color: scheme.onSurface.withValues(
+                                    alpha: 0.6,
+                                  ),
+                                ),
+                              ),
+                            ],
                           ),
                         ),
+                      ],
+                    ),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
+                    child: Row(
+                      children: [
                         const Spacer(),
                         IconButton(
                           tooltip: '随机播放',
@@ -62,7 +103,7 @@ class RemotePlaylistPage extends ConsumerWidget {
                             ref
                                 .read(playerNotifierProvider.notifier)
                                 .shufflePlay(tracks);
-                            context.push('/player');
+                            openPlayerAfterPlay(context);
                           },
                           icon: const Icon(Icons.shuffle_rounded),
                         ),
@@ -75,7 +116,7 @@ class RemotePlaylistPage extends ConsumerWidget {
                             ref
                                 .read(playerNotifierProvider.notifier)
                                 .playQueue(tracks);
-                            context.push('/player');
+                            openPlayerAfterPlay(context);
                           },
                           icon: const Icon(Icons.play_arrow_rounded),
                           label: const Text('播放全部'),
@@ -149,7 +190,7 @@ class RemotePlaylistPage extends ConsumerWidget {
                             ref
                                 .read(playerNotifierProvider.notifier)
                                 .playQueue(tracks, startIndex: index);
-                            context.push('/player');
+                            openPlayerAfterPlay(context);
                           },
                         );
                       },

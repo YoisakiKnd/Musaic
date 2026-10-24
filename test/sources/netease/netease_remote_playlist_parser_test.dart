@@ -261,4 +261,28 @@ void main() {
       expect(error, isA<NetworkSourceException>());
     });
   });
+
+  group('账号 uid（真机反馈：扫码登录后账号歌单为空）', () {
+    test('扫码凭据写入 uid，供账号歌单接口按 uid 查询', () {
+      // 扫码流水线必须声明 uid 的凭据键，否则登录后 SourceAccount.userId
+      // 恒为空，账号歌单请求带空 uid → 空列表 → 整块分区被静默隐藏
+      final source = NeteaseSource(
+        credentialReader: () async => const <String, String>{},
+      );
+      expect(
+        source.qrLoginFlows.single.userIdCredentialKey,
+        NeteaseSource.uidCredentialKey,
+      );
+    });
+
+    test('无凭据且无 uid：明确报「需要登录」，不再静默返回空列表', () async {
+      final source = NeteaseSource(
+        credentialReader: () async => const <String, String>{},
+      );
+      await expectLater(
+        source.fetchRemotePlaylists(''),
+        throwsA(isA<AuthRequiredException>()),
+      );
+    });
+  });
 }

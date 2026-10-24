@@ -49,8 +49,8 @@ final routerProvider = Provider<GoRouter>((ref) {
             routes: [
               GoRoute(
                 path: '/library',
-                // 首页快捷入口可指定初始 Tab（0 喜欢 / 1 最近播放 / 2 歌单）；
-                // 底部 Tab 直接进入时为 null → 落在默认的「喜欢」
+                // 首页快捷入口可指定初始 Tab（见 LibraryTab）；
+                // 底部 Tab 直接进入时为 null → 落在默认的「歌单」
                 builder:
                     (_, state) => LibraryPage(
                       initialTabIntent: navIntentOf<int>(state.extra),

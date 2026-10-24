@@ -29,6 +29,7 @@ class AddToPlaylistSheet extends ConsumerStatefulWidget {
     if (tracks.isEmpty) return false;
     final added = await showModalBottomSheet<bool>(
       context: context,
+      useRootNavigator: true,
       showDragHandle: true,
       isScrollControlled: true,
       builder: (_) => AddToPlaylistSheet(tracks: tracks),

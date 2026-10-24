@@ -128,6 +128,9 @@ abstract final class SchemaMigrator {
 
   static String backupKey(String boxName) => '$_reservedPrefix backup $boxName';
 
+  /// 保留键前缀（不经迁移的 Box 读数据时也需跳过这些键）。
+  static const String reservedPrefix = _reservedPrefix;
+
   /// 读取 Box 当前 schema 版本（缺失视为 [initialVersion]）。
   static int readVersion(Box<String> box) {
     final raw = box.get(versionKey(box.name));

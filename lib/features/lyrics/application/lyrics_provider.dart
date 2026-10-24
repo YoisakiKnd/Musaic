@@ -20,7 +20,7 @@ final lyricsProvider = FutureProvider.autoDispose.family<LyricBundle?, Track>((
   final cache = ref.watch(lyricsCacheRepositoryProvider);
   final cacheable = cache != null && LyricsCacheRepository.isCacheable(track);
   if (cacheable) {
-    final hit = cache.read(track.key);
+    final hit = await cache.read(track.key);
     if (hit != null) return hit;
   }
 

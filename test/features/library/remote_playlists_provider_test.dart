@@ -26,6 +26,9 @@ import 'package:musaic/features/library/library_page.dart';
 /// 本测试把「失败必须可见且可重试」固化为契约，含 UI 层断言——
 /// 只测 Provider 的话，旧代码同样能通过（它确实会 error，是 UI 吃掉了）。
 class _FakeSource extends MusicSource implements RemotePlaylistCapable {
+  @override
+  bool get remotePlaylistsArePersonal => true;
+
   _FakeSource({this.failList = false, this.failTracks = false})
     : super(credentialReader: () async => const <String, String>{});
 

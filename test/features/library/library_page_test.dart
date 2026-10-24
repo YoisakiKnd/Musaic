@@ -155,8 +155,7 @@ void main() {
       repository.seedFavorite(song('f1'));
 
       await tester.pumpWidget(host());
-      await tester.pumpAndSettle();
-      // 默认落在「喜欢」tab
+      await openTab(tester, '喜欢');
       expect(find.text('歌f1'), findsOneWidget);
 
       await selectFirst(tester);

@@ -1,29 +1,22 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:go_router/go_router.dart';
 
-import '../../core/di/app_providers.dart'
-    show libraryRepositoryProvider, sourceRegistryProvider;
+import '../../core/di/app_providers.dart' show libraryRepositoryProvider;
 import '../../core/logging/app_logger.dart';
-import '../../core/model/remote_playlist.dart';
 import '../../core/model/track.dart';
-import '../../core/source/capabilities.dart';
-import '../../core/source/music_source.dart';
 import '../../core/theme/app_tokens.dart';
 import '../../core/utils/nav_intent.dart';
-import 'data/library_repository.dart';
-import 'data/remote_playlists_provider.dart';
-import 'remote_playlist_page.dart';
+import 'playlists_tab.dart';
 import '../player/player_notifier.dart';
 import '../shared/error_text.dart';
-import '../shared/widgets/text_input_dialog.dart';
 import '../shared/widgets/track_tile.dart';
 import 'data/library_providers.dart';
+import '../player/open_player.dart';
 
-/// 资料库：喜欢 / 最近播放 / 自建歌单（Master Plan P6）。
+/// 资料库：歌单 / 喜欢 / 最近播放（Master Plan P6）。
 ///
 /// [initialTabIntent] 是首页快捷入口发起的一次「打开指定 Tab」请求
-/// （日常可用性计划 D6）；为 null 即用户点底部 Tab 进入，落在默认的「喜欢」。
+/// （日常可用性计划 D6）；为 null 即用户点底部 Tab 进入，落在默认的「歌单」。
 class LibraryPage extends ConsumerStatefulWidget {
   const LibraryPage({super.key, this.initialTabIntent});
 
@@ -35,7 +28,10 @@ class LibraryPage extends ConsumerStatefulWidget {
 
 class _LibraryPageState extends ConsumerState<LibraryPage>
     with SingleTickerProviderStateMixin {
-  /// Tab 顺序与 TabBar 一致：0 喜欢 / 1 最近播放 / 2 歌单。
+  /// Tab 顺序与 TabBar 一致：0 歌单 / 1 喜欢 / 2 最近播放。
+  ///
+  /// 歌单放第一位：登录后的账号歌单是用户最常找的内容，
+  /// 此前排在第三个 Tab，真机上被反馈「登录后看不到歌单」。
   static const int _tabCount = 3;
 
   late final TabController _tabController;
@@ -82,13 +78,16 @@ class _LibraryPageState extends ConsumerState<LibraryPage>
       appBar: AppBar(
         title: const Text('资料库'),
         bottom: TabBar(
+          // 靠左排列（音乐软件惯例）；Flutter 只允许可滚动的 TabBar 靠左
+          isScrollable: true,
+          tabAlignment: TabAlignment.start,
           controller: _tabController,
-          tabs: const [Tab(text: '喜欢'), Tab(text: '最近播放'), Tab(text: '歌单')],
+          tabs: const [Tab(text: '歌单'), Tab(text: '喜欢'), Tab(text: '最近播放')],
         ),
       ),
       body: TabBarView(
         controller: _tabController,
-        children: const [_FavoritesTab(), _HistoryTab(), _PlaylistsTab()],
+        children: const [PlaylistsTab(), _FavoritesTab(), _HistoryTab()],
       ),
     );
   }
@@ -160,94 +159,6 @@ class _HistoryTab extends ConsumerWidget {
           removedLabel: '已从最近播放移除',
         );
       },
-    );
-  }
-}
-
-class _PlaylistsTab extends ConsumerWidget {
-  const _PlaylistsTab();
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final playlistsAsync = ref.watch(playlistsProvider);
-    final repository = ref.watch(libraryRepositoryProvider);
-
-    return Stack(
-      children: [
-        playlistsAsync.when(
-          loading: () => const Center(child: CircularProgressIndicator()),
-          error:
-              (e, _) =>
-                  Center(child: Text(loadFailureText(e, tag: 'MusaicLibrary'))),
-          data: (names) {
-            // 所有实现 RemotePlaylistCapable 的渠道各渲染一个账号歌单区
-            final remoteSources = <MusicSource>[
-              for (final s in ref.watch(sourceRegistryProvider).all)
-                if (s is RemotePlaylistCapable) s,
-            ];
-            // 注意：不能用「有没有支持云端歌单的渠道」判断空态——网易云/QQ/
-            // 酷狗总是注册着，而未登录时它们的分区都是零尺寸，此前整页空白。
-            return ListView(
-              padding: AppTokens.pagePadding,
-              children: [
-                for (final source in remoteSources)
-                  _RemotePlaylistSection(
-                    key: ValueKey('remote-playlists-${source.sourceId}'),
-                    sourceId: source.sourceId,
-                    displayName: source.displayName,
-                  ),
-                if (names.isNotEmpty) ...[
-                  const _SectionTitle('本地歌单'),
-                  for (final name in names) _LocalPlaylistCard(name: name),
-                ] else
-                  const _NoLocalPlaylistsHint(),
-              ],
-            );
-          },
-        ),
-        Positioned(
-          right: 24,
-          bottom: 24,
-          child: FloatingActionButton.extended(
-            backgroundColor: AppTokens.accent,
-            foregroundColor: Colors.white,
-            onPressed: () async {
-              final name = await showTextInputDialog(
-                context,
-                title: '新建歌单',
-                confirmLabel: '创建',
-              );
-              if (name == null || name.trim().isEmpty || !context.mounted) {
-                return;
-              }
-              final messenger = ScaffoldMessenger.of(context);
-              // 重名时 createPlaylist 静默不建，此前用户点了「创建」毫无反馈
-              if (repository.playlistNames.contains(name.trim())) {
-                messenger.showSnackBar(
-                  SnackBar(content: Text('已有名为「${name.trim()}」的歌单')),
-                );
-                return;
-              }
-              try {
-                await repository.createPlaylist(name);
-                messenger.showSnackBar(
-                  SnackBar(content: Text('已创建「${name.trim()}」')),
-                );
-              } on ArgumentError catch (e) {
-                // 名称过长等校验失败：给出原因，而不是让异常冒到全局
-                messenger.showSnackBar(SnackBar(content: Text('${e.message}')));
-              } catch (e) {
-                AppLog.error('新建歌单失败：$e', tag: 'MusaicLibrary');
-                messenger.showSnackBar(
-                  const SnackBar(content: Text('创建失败，请重试')),
-                );
-              }
-            },
-            icon: const Icon(Icons.add_rounded),
-            label: const Text('新建歌单'),
-          ),
-        ),
-      ],
     );
   }
 }
@@ -388,7 +299,7 @@ class _TrackListWithActionsState extends ConsumerState<_TrackListWithActions> {
                 ),
                 onPressed: () {
                   ref.read(playerNotifierProvider.notifier).playQueue(tracks);
-                  context.push('/player');
+                  openPlayerAfterPlay(context);
                 },
                 icon: const Icon(Icons.play_arrow_rounded, size: 18),
                 label: Text('播放全部（${tracks.length}）'),
@@ -397,7 +308,7 @@ class _TrackListWithActionsState extends ConsumerState<_TrackListWithActions> {
                 tooltip: '随机播放',
                 onPressed: () {
                   ref.read(playerNotifierProvider.notifier).shufflePlay(tracks);
-                  context.push('/player');
+                  openPlayerAfterPlay(context);
                 },
                 icon: const Icon(Icons.shuffle_rounded, size: 20),
               ),
@@ -482,327 +393,5 @@ class _EmptyHint extends StatelessWidget {
         ],
       ),
     );
-  }
-}
-
-/// 分区标题。
-class _SectionTitle extends StatelessWidget {
-  const _SectionTitle(this.text);
-
-  final String text;
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.only(top: 8, bottom: 8),
-      child: Text(
-        text,
-        style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700),
-      ),
-    );
-  }
-}
-
-/// 单个渠道的账号歌单分区。
-///
-/// 三态渲染（B6）：加载中出骨架行，失败出「错误 + 重试」，成功才渲染歌单；
-/// 空列表（未登录 / 无歌单 / 渠道不支持）整节隐藏，不占版面。
-class _RemotePlaylistSection extends ConsumerWidget {
-  const _RemotePlaylistSection({
-    super.key,
-    required this.sourceId,
-    required this.displayName,
-  });
-
-  final String sourceId;
-  final String displayName;
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    // 未登录 / 渠道不支持：连标题都不出现，避免留下永远不会填上的空节
-    if (ref.watch(remotePlaylistCapableProvider(sourceId)) == null) {
-      return const SizedBox.shrink();
-    }
-
-    final playlistsAsync = ref.watch(remotePlaylistsProvider(sourceId));
-    return playlistsAsync.when(
-      loading: () => const _RemotePlaylistLoading(),
-      error:
-          (error, _) => _RemotePlaylistError(
-            displayName: displayName,
-            message: remotePlaylistsErrorMessage(error),
-            onRetry: () => ref.invalidate(remotePlaylistsProvider(sourceId)),
-          ),
-      data: (playlists) {
-        if (playlists.isEmpty) return const SizedBox.shrink();
-        return Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            _SectionTitle('账号歌单 · $displayName'),
-            for (final pl in playlists) _RemotePlaylistCard(playlist: pl),
-            const SizedBox(height: 12),
-          ],
-        );
-      },
-    );
-  }
-}
-
-/// 账号歌单加载态。
-///
-/// 用一行文字 + 小圈而不是整块骨架屏：账号歌单只是资料库里的一个分区，
-/// 大骨架会把本地歌单挤下去，数据到达时整页跳动。
-class _RemotePlaylistLoading extends StatelessWidget {
-  const _RemotePlaylistLoading();
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 12),
-      child: Row(
-        children: [
-          const SizedBox(
-            width: 16,
-            height: 16,
-            child: CircularProgressIndicator(strokeWidth: 2),
-          ),
-          const SizedBox(width: 10),
-          Text(
-            '正在加载账号歌单…',
-            style: TextStyle(
-              fontSize: 13,
-              color: scheme.onSurface.withValues(alpha: 0.6),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-/// 账号歌单加载失败行：错误原因 + 重试入口（B6）。
-class _RemotePlaylistError extends StatelessWidget {
-  const _RemotePlaylistError({
-    required this.displayName,
-    required this.message,
-    required this.onRetry,
-  });
-
-  final String displayName;
-  final String message;
-  final VoidCallback onRetry;
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 4),
-      child: Row(
-        children: [
-          Icon(
-            Icons.error_outline_rounded,
-            size: 16,
-            color: scheme.error.withValues(alpha: 0.7),
-          ),
-          const SizedBox(width: 6),
-          Expanded(
-            child: Text(
-              '账号歌单 · $displayName：$message',
-              style: TextStyle(
-                fontSize: 12,
-                color: scheme.onSurface.withValues(alpha: 0.6),
-              ),
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-            ),
-          ),
-          const SizedBox(width: 4),
-          TextButton.icon(
-            onPressed: onRetry,
-            icon: const Icon(Icons.refresh_rounded, size: 18),
-            label: const Text('重试'),
-            style: TextButton.styleFrom(
-              visualDensity: VisualDensity.compact,
-              foregroundColor: AppTokens.accent,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-/// 渠道账号歌单卡片。
-class _RemotePlaylistCard extends ConsumerWidget {
-  const _RemotePlaylistCard({required this.playlist});
-
-  final RemotePlaylist playlist;
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final scheme = Theme.of(context).colorScheme;
-    return Card(
-      margin: const EdgeInsets.only(bottom: 10),
-      child: ListTile(
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(AppTokens.radiusCard - 4),
-        ),
-        leading: Container(
-          width: 44,
-          height: 44,
-          decoration: BoxDecoration(
-            gradient: LinearGradient(
-              colors: [
-                AppTokens.accentDeep.withValues(alpha: 0.3),
-                AppTokens.accent.withValues(alpha: 0.3),
-              ],
-            ),
-            borderRadius: BorderRadius.circular(12),
-          ),
-          child: const Icon(Icons.cloud_queue_rounded, color: Colors.white70),
-        ),
-        title: Text(
-          playlist.name,
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-        ),
-        subtitle: Text(
-          playlist.playCount == null
-              ? '${playlist.trackCount} 首'
-              : '${playlist.trackCount} 首 · ${playlist.playCount} 次播放',
-          style: const TextStyle(fontSize: 12),
-        ),
-        trailing: Icon(
-          Icons.chevron_right_rounded,
-          color: scheme.onSurface.withValues(alpha: 0.4),
-        ),
-        onTap:
-            () => Navigator.of(context).push(
-              MaterialPageRoute<void>(
-                builder: (_) => RemotePlaylistPage(playlist: playlist),
-              ),
-            ),
-      ),
-    );
-  }
-}
-
-/// 还没有本地歌单时的引导（不居中占满：上方可能还有云端歌单分区）。
-class _NoLocalPlaylistsHint extends StatelessWidget {
-  const _NoLocalPlaylistsHint();
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 48, horizontal: 16),
-      child: Column(
-        children: [
-          Icon(
-            Icons.queue_music_rounded,
-            size: 48,
-            color: AppTokens.accent.withValues(alpha: 0.8),
-          ),
-          const SizedBox(height: 12),
-          const Text(
-            '还没有歌单',
-            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
-          ),
-          const SizedBox(height: 6),
-          Text(
-            '点右下角「新建歌单」，或在任意歌曲的「⋮」菜单里选择「加入歌单」。\n'
-            '登录渠道账号后，这里还会显示你的云端歌单。',
-            textAlign: TextAlign.center,
-            style: TextStyle(
-              fontSize: 13,
-              height: 1.5,
-              color: scheme.onSurface.withValues(alpha: 0.55),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-/// 本地歌单卡片。
-class _LocalPlaylistCard extends ConsumerWidget {
-  const _LocalPlaylistCard({required this.name});
-
-  final String name;
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final repository = ref.watch(libraryRepositoryProvider);
-    final count = repository.playlistTracks(name).length;
-    return Card(
-      margin: const EdgeInsets.only(bottom: 10),
-      child: ListTile(
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(AppTokens.radiusCard - 4),
-        ),
-        leading: Container(
-          width: 44,
-          height: 44,
-          decoration: BoxDecoration(
-            gradient: LinearGradient(
-              colors: [
-                AppTokens.accentDeep.withValues(alpha: 0.3),
-                AppTokens.accent.withValues(alpha: 0.3),
-              ],
-            ),
-            borderRadius: BorderRadius.circular(12),
-          ),
-          child: const Icon(Icons.queue_music_rounded, color: Colors.white70),
-        ),
-        title: Text(name),
-        subtitle: Text('$count 首', style: const TextStyle(fontSize: 12)),
-        trailing: IconButton(
-          icon: Icon(
-            Icons.delete_outline_rounded,
-            size: 20,
-            color: Theme.of(
-              context,
-            ).colorScheme.onSurface.withValues(alpha: 0.5),
-          ),
-          onPressed: () => _confirmDelete(context, repository),
-        ),
-        onTap: () => context.push('/playlist/${Uri.encodeComponent(name)}'),
-      ),
-    );
-  }
-
-  /// 删除歌单是不可恢复操作：先二次确认再落库（P2）。
-  ///
-  /// 文案必须带上歌单名——列表里每张卡片都有删除按钮，
-  /// 只写「确认删除？」在误触时无法判断删的是哪一个。
-  Future<void> _confirmDelete(
-    BuildContext context,
-    LibraryRepository repository,
-  ) async {
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder:
-          (dialogContext) => AlertDialog(
-            title: const Text('删除歌单'),
-            content: Text('确定删除歌单「$name」吗？该操作不可恢复。'),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.of(dialogContext).pop(false),
-                child: const Text('取消'),
-              ),
-              FilledButton(
-                style: FilledButton.styleFrom(
-                  backgroundColor: Theme.of(dialogContext).colorScheme.error,
-                ),
-                onPressed: () => Navigator.of(dialogContext).pop(true),
-                child: const Text('删除'),
-              ),
-            ],
-          ),
-    );
-    if (confirmed != true) return;
-    await repository.deletePlaylist(name);
   }
 }

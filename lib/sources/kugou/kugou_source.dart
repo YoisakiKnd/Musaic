@@ -279,7 +279,7 @@ class KugouSource extends MusicSource
       poll: (session) => pollQrLogin(session.pollKey),
       userIdCredentialKey: 'userid',
       fallbackNickname: '酷狗用户',
-      footerHint: '扫码登录后可同步会员权益与账号歌单',
+      footerHint: '扫码登录后可同步会员权益',
     ),
   ];
 
@@ -465,6 +465,11 @@ class KugouSource extends MusicSource
   //   计数  POST /v3/get_list_info                      → 批量取曲目数（≤10 id/次）
   //   曲目  GET  /pubsongs/v2/get_other_list_file_nofilt → 曲目分页
   // 三个端点都走 **Android 签名**（与类内已有的 web 签名不是同一套盐）。
+  //
+  // 因此这里给出的是**推荐歌单**而非账号本人的歌单，界面按此区分展示。
+
+  @override
+  bool get remotePlaylistsArePersonal => false;
 
   @override
   Future<List<RemotePlaylist>> fetchRemotePlaylists(String userId) async {

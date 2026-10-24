@@ -1,8 +1,11 @@
+import 'package:flutter/foundation.dart'
+    show TargetPlatform, defaultTargetPlatform;
+import 'package:flutter/cupertino.dart' show CupertinoPageTransitionsBuilder;
 import 'package:flutter/material.dart';
 
 /// Musaic 设计令牌（Master Plan §8）。
 ///
-/// Apple Music 红渐变、24/28 圆角、受控模糊、动效曲线；深色优先。
+/// 石墨灰中性色 + 品牌粉点缀、16/20 圆角、自适应断点与密度；深色优先。
 /// 所有 UI 组件只允许引用此处令牌，禁止散落魔法数。
 abstract final class AppTokens {
   // ---------- 品牌色 ----------
@@ -20,27 +23,40 @@ abstract final class AppTokens {
   );
 
   // ---------- 中性色（深色优先） ----------
-  static const Color darkBackground = Color(0xFF151013);
-  static const Color darkSurface = Color(0xFF1F181D);
-  static const Color darkSurfaceHigh = Color(0xFF2B2127);
-  static const Color darkOutline = Color(0xFF3B2F37);
-  static const Color darkTextPrimary = Color(0xFFF2F2F7);
-  static const Color darkTextSecondary = Color(0xFFA0A0AC);
+  // 石墨灰而非偏粉的暗紫：品牌粉只出现在重点与选中态，
+  // 此前底色、卡片、徽章全带粉调，整屏发闷且抢不出重点。
+  static const Color darkBackground = Color(0xFF0F0F12);
+  static const Color darkSurface = Color(0xFF18181C);
+  static const Color darkSurfaceHigh = Color(0xFF232328);
+  static const Color darkOutline = Color(0xFF2E2E35);
+  static const Color darkTextPrimary = Color(0xFFF2F2F5);
+  static const Color darkTextSecondary = Color(0xFF9B9BA4);
 
-  static const Color lightBackground = Color(0xFFF6F6F9);
+  static const Color lightBackground = Color(0xFFF7F7F8);
   static const Color lightSurface = Color(0xFFFFFFFF);
-  static const Color lightSurfaceHigh = Color(0xFFEFEFF4);
-  static const Color lightOutline = Color(0xFFDCDCE4);
-  static const Color lightTextPrimary = Color(0xFF1B1B1F);
-  static const Color lightTextSecondary = Color(0xFF66666F);
+  static const Color lightSurfaceHigh = Color(0xFFEEEEF1);
+  static const Color lightOutline = Color(0xFFE0E0E6);
+  static const Color lightTextPrimary = Color(0xFF17171A);
+  static const Color lightTextSecondary = Color(0xFF6B6B73);
 
   // ---------- 几何 ----------
-  static const double radiusCard = 24;
-  static const double radiusSheet = 28;
-  static const double radiusChip = 12;
+  static const double radiusCard = 16;
+  static const double radiusSheet = 20;
+  static const double radiusChip = 8;
 
-  /// 自适应骨架断点：< 840 使用底部导航，>= 840 使用 NavigationRail。
-  static const double compactBreakpoint = 840;
+  /// 封面圆角（列表缩略图 / 歌单卡 / 播放页大封面统一）。
+  static const double radiusCover = 10;
+
+  // ---------- 自适应断点（Material 3 窗口尺寸类） ----------
+  /// < 600：手机竖屏——底部导航 + 悬浮迷你播放条。
+  static const double mediumBreakpoint = 600;
+
+  /// >= 1024：桌面 / 大平板——侧边栏 + 底部完整播放控制条。
+  /// 600–1024 之间用导航栏轨（NavigationRail）。
+  static const double expandedBreakpoint = 1024;
+
+  /// 正文最大宽度：设置、表单类页面在宽屏上不拉满（行太长难读）。
+  static const double readableMaxWidth = 760;
 
   static const EdgeInsets pagePadding = EdgeInsets.symmetric(
     horizontal: 20,
@@ -57,9 +73,6 @@ abstract final class AppTokens {
   // ---------- 性能预算（Master Plan §10.2） ----------
   /// 进度条刷新节流周期。
   static const Duration positionThrottle = Duration(milliseconds: 100);
-
-  /// 每屏最多一个实时模糊区；其余场景使用静态模糊图。
-  static const bool enableLiveBlurByDefault = true;
 
   // ---------- 主题 ----------
   static ThemeData get darkTheme => _buildTheme(Brightness.dark);
@@ -95,41 +108,186 @@ abstract final class AppTokens {
     );
     final textSecondary = isDark ? darkTextSecondary : lightTextSecondary;
 
+    final isDesktop = switch (defaultTargetPlatform) {
+      TargetPlatform.windows ||
+      TargetPlatform.linux ||
+      TargetPlatform.macOS => true,
+      _ => false,
+    };
+    final base = ThemeData(brightness: brightness, useMaterial3: true);
+    final textTheme = base.textTheme
+        .copyWith(
+          headlineMedium: const TextStyle(
+            fontSize: 28,
+            fontWeight: FontWeight.w800,
+            letterSpacing: -0.4,
+          ),
+          headlineSmall: const TextStyle(
+            fontSize: 24,
+            fontWeight: FontWeight.w800,
+            letterSpacing: -0.2,
+          ),
+          titleLarge: const TextStyle(
+            fontSize: 20,
+            fontWeight: FontWeight.w700,
+          ),
+          titleMedium: const TextStyle(
+            fontSize: 16,
+            fontWeight: FontWeight.w600,
+          ),
+          titleSmall: const TextStyle(
+            fontSize: 14,
+            fontWeight: FontWeight.w600,
+          ),
+          bodyLarge: const TextStyle(fontSize: 15),
+          bodyMedium: const TextStyle(fontSize: 14),
+          bodySmall: TextStyle(fontSize: 12, color: textSecondary),
+          labelSmall: TextStyle(fontSize: 11, color: textSecondary),
+        )
+        .apply(bodyColor: scheme.onSurface, displayColor: scheme.onSurface);
+
     return ThemeData(
       useMaterial3: true,
       colorScheme: scheme,
+      textTheme: textTheme,
       scaffoldBackgroundColor: background,
-      splashFactory: InkRipple.splashFactory,
+      canvasColor: background,
+      // 桌面端用紧凑密度：鼠标精度高，触屏尺寸的行高在桌面上显得松垮
+      visualDensity: isDesktop ? VisualDensity.compact : VisualDensity.standard,
+      // 水波纹在桌面上显得廉价，桌面只保留高亮
+      splashFactory:
+          isDesktop ? NoSplash.splashFactory : InkRipple.splashFactory,
+      hoverColor: scheme.onSurface.withValues(alpha: 0.05),
+      highlightColor: scheme.onSurface.withValues(alpha: 0.06),
+      pageTransitionsTheme: const PageTransitionsTheme(
+        builders: <TargetPlatform, PageTransitionsBuilder>{
+          TargetPlatform.android: FadeForwardsPageTransitionsBuilder(),
+          TargetPlatform.iOS: CupertinoPageTransitionsBuilder(),
+          TargetPlatform.macOS: CupertinoPageTransitionsBuilder(),
+          TargetPlatform.windows: FadeForwardsPageTransitionsBuilder(),
+          TargetPlatform.linux: FadeForwardsPageTransitionsBuilder(),
+        },
+      ),
       appBarTheme: AppBarTheme(
-        backgroundColor: Colors.transparent,
+        backgroundColor: background,
+        surfaceTintColor: Colors.transparent,
         scrolledUnderElevation: 0,
         centerTitle: false,
         foregroundColor: scheme.onSurface,
-        titleTextStyle: TextStyle(
-          fontSize: 22,
-          fontWeight: FontWeight.w700,
+        titleTextStyle: textTheme.titleLarge?.copyWith(
+          fontWeight: FontWeight.w800,
           color: scheme.onSurface,
         ),
       ),
       cardTheme: CardThemeData(
-        color: scheme.surface,
+        color: surface,
         elevation: 0,
+        margin: EdgeInsets.zero,
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(radiusCard),
-          side: BorderSide(color: scheme.outlineVariant.withValues(alpha: 0.6)),
         ),
         clipBehavior: Clip.antiAlias,
       ),
-      navigationBarTheme: NavigationBarThemeData(
-        height: 68,
-        backgroundColor: (isDark ? darkBackground : lightBackground).withValues(
-          alpha: 0.92,
+      listTileTheme: ListTileThemeData(
+        iconColor: textSecondary,
+        subtitleTextStyle: TextStyle(fontSize: 12, color: textSecondary),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(radiusChip),
         ),
-        indicatorColor: accent.withValues(alpha: 0.16),
+      ),
+      filledButtonTheme: FilledButtonThemeData(
+        style: FilledButton.styleFrom(
+          backgroundColor: accent,
+          foregroundColor: Colors.white,
+          textStyle: const TextStyle(fontWeight: FontWeight.w600),
+          shape: const StadiumBorder(),
+        ),
+      ),
+      outlinedButtonTheme: OutlinedButtonThemeData(
+        style: OutlinedButton.styleFrom(
+          foregroundColor: scheme.onSurface,
+          side: BorderSide(color: scheme.outlineVariant),
+          shape: const StadiumBorder(),
+        ),
+      ),
+      textButtonTheme: TextButtonThemeData(
+        style: TextButton.styleFrom(foregroundColor: accent),
+      ),
+      chipTheme: ChipThemeData(
+        backgroundColor: surfaceHigh,
+        selectedColor: accent.withValues(alpha: 0.18),
+        side: BorderSide.none,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(radiusChip),
+        ),
+        labelStyle: TextStyle(fontSize: 13, color: scheme.onSurface),
+      ),
+      inputDecorationTheme: InputDecorationTheme(
+        filled: true,
+        fillColor: surfaceHigh,
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(radiusChip + 4),
+          borderSide: BorderSide.none,
+        ),
+        hintStyle: TextStyle(color: textSecondary),
+      ),
+      bottomSheetTheme: BottomSheetThemeData(
+        backgroundColor: surface,
+        surfaceTintColor: Colors.transparent,
+        showDragHandle: true,
+        // 桌面宽屏上底部面板不拉满整个窗口
+        constraints: const BoxConstraints(maxWidth: 640),
+        shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(
+            top: Radius.circular(radiusSheet),
+          ),
+        ),
+      ),
+      dialogTheme: DialogThemeData(
+        backgroundColor: surface,
+        surfaceTintColor: Colors.transparent,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(radiusSheet),
+        ),
+      ),
+      popupMenuTheme: PopupMenuThemeData(
+        color: surfaceHigh,
+        surfaceTintColor: Colors.transparent,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(radiusChip + 2),
+        ),
+      ),
+      tooltipTheme: TooltipThemeData(
+        waitDuration: const Duration(milliseconds: 500),
+        decoration: BoxDecoration(
+          color: isDark ? surfaceHigh : darkSurfaceHigh,
+          borderRadius: BorderRadius.circular(6),
+        ),
+        textStyle: const TextStyle(fontSize: 12, color: darkTextPrimary),
+      ),
+      tabBarTheme: TabBarThemeData(
+        labelColor: scheme.onSurface,
+        unselectedLabelColor: textSecondary,
+        indicatorColor: accent,
+        indicatorSize: TabBarIndicatorSize.label,
+        dividerColor: Colors.transparent,
+        labelStyle: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700),
+        unselectedLabelStyle: const TextStyle(fontSize: 15),
+      ),
+      navigationBarTheme: NavigationBarThemeData(
+        height: 64,
+        elevation: 0,
+        backgroundColor: background,
+        surfaceTintColor: Colors.transparent,
+        indicatorColor: Colors.transparent,
+        labelBehavior: NavigationDestinationLabelBehavior.alwaysShow,
         iconTheme: WidgetStateProperty.resolveWith(
           (states) => IconThemeData(
+            size: 24,
             color:
-                states.contains(WidgetState.selected) ? accent : textSecondary,
+                states.contains(WidgetState.selected)
+                    ? scheme.onSurface
+                    : textSecondary,
           ),
         ),
         labelTextStyle: WidgetStateProperty.resolveWith(
@@ -137,33 +295,43 @@ abstract final class AppTokens {
             fontSize: 11,
             fontWeight:
                 states.contains(WidgetState.selected)
-                    ? FontWeight.w600
+                    ? FontWeight.w700
                     : FontWeight.w400,
             color:
-                states.contains(WidgetState.selected) ? accent : textSecondary,
+                states.contains(WidgetState.selected)
+                    ? scheme.onSurface
+                    : textSecondary,
           ),
         ),
       ),
       navigationRailTheme: NavigationRailThemeData(
-        backgroundColor: (isDark ? darkBackground : lightBackground).withValues(
-          alpha: 0.92,
-        ),
-        indicatorColor: accent.withValues(alpha: 0.16),
-        selectedIconTheme: const IconThemeData(color: accent),
-        selectedLabelTextStyle: const TextStyle(
+        backgroundColor: background,
+        indicatorColor: surfaceHigh,
+        selectedIconTheme: IconThemeData(color: scheme.onSurface),
+        selectedLabelTextStyle: TextStyle(
           fontSize: 12,
-          fontWeight: FontWeight.w600,
-          color: accent,
+          fontWeight: FontWeight.w700,
+          color: scheme.onSurface,
         ),
         unselectedIconTheme: IconThemeData(color: textSecondary),
         unselectedLabelTextStyle: TextStyle(fontSize: 12, color: textSecondary),
       ),
       sliderTheme: SliderThemeData(
-        activeTrackColor: accent,
-        inactiveTrackColor: scheme.outlineVariant.withValues(alpha: 0.5),
+        activeTrackColor: scheme.onSurface,
+        inactiveTrackColor: scheme.onSurface.withValues(alpha: 0.15),
         thumbColor: scheme.onSurface,
-        overlayColor: accent.withValues(alpha: 0.12),
+        overlayColor: scheme.onSurface.withValues(alpha: 0.08),
         trackHeight: 3,
+        thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 6),
+        overlayShape: const RoundSliderOverlayShape(overlayRadius: 14),
+      ),
+      progressIndicatorTheme: const ProgressIndicatorThemeData(color: accent),
+      scrollbarTheme: ScrollbarThemeData(
+        thickness: WidgetStateProperty.all(isDesktop ? 8 : 4),
+        radius: const Radius.circular(8),
+        thumbColor: WidgetStateProperty.all(
+          scheme.onSurface.withValues(alpha: 0.25),
+        ),
       ),
       snackBarTheme: SnackBarThemeData(
         behavior: SnackBarBehavior.floating,
@@ -171,13 +339,17 @@ abstract final class AppTokens {
         contentTextStyle: TextStyle(
           color: isDark ? darkTextPrimary : darkBackground,
         ),
+        // 缺省取 inversePrimary，在这套配色下是发灰的暗粉，「重试」看着像禁用
+        actionTextColor: accent,
+        width: isDesktop ? 480 : null,
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(radiusChip),
         ),
       ),
       dividerTheme: DividerThemeData(
-        color: scheme.outlineVariant.withValues(alpha: 0.5),
+        color: scheme.outlineVariant.withValues(alpha: 0.6),
         thickness: 0.5,
+        space: 1,
       ),
     );
   }

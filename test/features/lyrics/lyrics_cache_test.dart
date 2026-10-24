@@ -22,7 +22,7 @@ import 'package:musaic/features/lyrics/data/lyrics_cache_repository.dart';
 /// 4. 过期 / 损坏视为未命中，超容量淘汰最旧。
 void main() {
   late Directory tempDir;
-  late Box<String> box;
+  late LazyBox<String> box;
   var now = DateTime(2026, 10, 1);
 
   LyricsCacheRepository makeRepo({int capacity = 10}) =>
@@ -35,7 +35,7 @@ void main() {
   setUpAll(() async {
     tempDir = await Directory.systemTemp.createTemp('musaic_lyrics_cache');
     Hive.init(tempDir.path);
-    box = await Hive.openBox<String>('test_lyrics_cache');
+    box = await Hive.openLazyBox<String>('test_lyrics_cache');
   });
 
   tearDownAll(() async {
@@ -52,8 +52,16 @@ void main() {
     test('写入后可读回', () async {
       final repo = makeRepo();
       await repo.write('netease:1', bundle('晴天'));
-      expect(repo.read('netease:1')!.lines.single.text, '晴天');
+      expect((await repo.read('netease:1'))!.lines.single.text, '晴天');
       expect(repo.count, 1);
+    });
+
+    test('写入尚未落盘时也能读到（懒加载 Box 的读后写一致性）', () async {
+      final repo = makeRepo();
+      final pending = repo.write('netease:2', bundle('稻香'));
+      expect((await repo.read('netease:2'))!.lines.single.text, '稻香');
+      await pending;
+      expect((await repo.read('netease:2'))!.lines.single.text, '稻香');
     });
 
     test('空歌词不写入', () async {
@@ -68,15 +76,15 @@ void main() {
       now = now.add(
         LyricsCacheRepository.defaultMaxAge + const Duration(hours: 1),
       );
-      expect(repo.read('netease:1'), isNull);
+      expect(await repo.read('netease:1'), isNull);
     });
 
     test('损坏条目视为未命中而不是抛异常', () async {
       final repo = makeRepo();
       await box.put('netease:bad1', 'not-a-timestamp');
       await box.put('netease:bad2', '${now.millisecondsSinceEpoch}\n{oops');
-      expect(repo.read('netease:bad1'), isNull);
-      expect(repo.read('netease:bad2'), isNull);
+      expect(await repo.read('netease:bad1'), isNull);
+      expect(await repo.read('netease:bad2'), isNull);
     });
 
     test('超容量时淘汰最旧条目，保留最新', () async {
@@ -87,9 +95,9 @@ void main() {
       }
       // 一次淘汰到 90%（9 条），最旧的 0、1 被删
       expect(repo.count, 9);
-      expect(repo.read('netease:0'), isNull);
-      expect(repo.read('netease:1'), isNull);
-      expect(repo.read('netease:10'), isNotNull);
+      expect(await repo.read('netease:0'), isNull);
+      expect(await repo.read('netease:1'), isNull);
+      expect(await repo.read('netease:10'), isNotNull);
     });
 
     test('本地文件不走缓存', () {
