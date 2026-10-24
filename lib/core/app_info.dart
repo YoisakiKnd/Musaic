@@ -8,10 +8,10 @@ library;
 
 abstract final class AppInfo {
   /// 语义化版本（不含 build number）。
-  static const String version = '1.1.0';
+  static const String version = '1.2.0';
 
   /// 构建号（对应 pubspec 的 `+N`）。
-  static const String buildNumber = '2';
+  static const String buildNumber = '3';
 
   /// 展示用完整版本串。
   static const String versionLabel = '$version+$buildNumber';
